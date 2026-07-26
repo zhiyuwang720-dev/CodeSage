@@ -14,12 +14,6 @@ class LLMProvider(str, Enum):
     QWEN = "qwen"
     DEEPSEEK = "deepseek"
     ZHIPU = "zhipu"
-    MOONSHOT = "moonshot"
-    BAIDU = "baidu"
-    MINIMAX = "minimax"
-    DOUBAO = "doubao"
-    MIMO = "mimo"
-    OLLAMA = "ollama"
 
 
 @dataclass
@@ -135,12 +129,7 @@ DEFAULT_MODELS: Dict[LLMProvider, str] = {
     LLMProvider.QWEN: "qwen3.7-max",
     LLMProvider.DEEPSEEK: "deepseek-v4-pro",
     LLMProvider.ZHIPU: "glm-5.2",
-    LLMProvider.MOONSHOT: "kimi-k2.6",
-    LLMProvider.BAIDU: "ernie-4.5",
-    LLMProvider.MINIMAX: "minimax-m2.7",
-    LLMProvider.DOUBAO: "doubao-1.6-pro",
-    LLMProvider.MIMO: "mimo-v2.5-pro",
-    LLMProvider.OLLAMA: "llama3.3-70b",
+
 }
 
 
@@ -149,12 +138,4 @@ DEFAULT_BASE_URLS: Dict[LLMProvider, str] = {
     LLMProvider.QWEN: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     LLMProvider.DEEPSEEK: "https://api.deepseek.com",
     LLMProvider.ZHIPU: "https://open.bigmodel.cn/api/paas/v4",
-    LLMProvider.MOONSHOT: "https://api.moonshot.cn/v1",
-    LLMProvider.BAIDU: "https://aip.baidubce.com/rpc/2.0/ai_custom/v1",
-    LLMProvider.MINIMAX: "https://api.minimax.chat/v1",
-    LLMProvider.DOUBAO: "https://ark.cn-beijing.volces.com/api/v3",
-    LLMProvider.MIMO: "https://api.xiaomimimo.com/v1",
-    LLMProvider.OLLAMA: "http://localhost:11434/v1",
-    LLMProvider.GEMINI: "https://generativelanguage.googleapis.com/v1beta",
-    LLMProvider.CLAUDE: "https://api.anthropic.com/v1",
 }
