@@ -69,7 +69,7 @@ class AgentError(Exception):
     """
     error_code: str = "AGENT_ERROR"
     recoverable: bool = False
-    recovery_strategy: RecoveryStrategy = RecoveryStrategy.ABORT
+    recovery_strategy: RecoveryStrategy = RecoveryStrategy.ABORT  # 中止操作
     retry_after: Optional[int] = None
     severity: ErrorSeverity = ErrorSeverity.HIGH
 
@@ -145,7 +145,7 @@ class LLMRateLimitError(LLMError):
     """
     error_code = "LLM_RATE_LIMIT"
     recoverable = True
-    recovery_strategy = RecoveryStrategy.RETRY_WITH_BACKOFF
+    recovery_strategy = RecoveryStrategy.RETRY_WITH_BACKOFF  #指数退避重试
     retry_after = 60  # Default wait 60 seconds
     severity = ErrorSeverity.MEDIUM
 
@@ -158,7 +158,7 @@ class LLMTimeoutError(LLMError):
     """
     error_code = "LLM_TIMEOUT"
     recoverable = True
-    recovery_strategy = RecoveryStrategy.RETRY_WITH_BACKOFF
+    recovery_strategy = RecoveryStrategy.RETRY_WITH_BACKOFF #指数退避重试
     retry_after = 5
     severity = ErrorSeverity.MEDIUM
 

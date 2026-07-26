@@ -28,9 +28,9 @@ T = TypeVar("T")
 
 class BackoffStrategy(str, Enum):
     """Backoff strategies"""
-    CONSTANT = "constant"
-    LINEAR = "linear"
-    EXPONENTIAL = "exponential"
+    CONSTANT = "constant"         # 恒定延迟
+    LINEAR = "linear"             # 线性增长
+    EXPONENTIAL = "exponential"   # 指数增长
 
 
 @dataclass
@@ -39,9 +39,9 @@ class RetryConfig:
     max_attempts: int = 3
     base_delay: float = 1.0
     max_delay: float = 60.0
-    exponential_base: float = 2.0
-    jitter: bool = True
-    jitter_factor: float = 0.5
+    exponential_base: float = 2.0      # 指数基数
+    jitter: bool = True                     # 是否启用抖动
+    jitter_factor: float = 0.5         # 抖动因子
     backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
     retryable_exceptions: Tuple[Type[Exception], ...] = (
         LLMRateLimitError, LLMTimeoutError, LLMConnectionError,
@@ -57,7 +57,9 @@ class RetryConfig:
         return False
 
     def calculate_delay(self, attempt: int, error: Optional[Exception] = None) -> float:
+        """优先级: 错误指定的 retry_after > 退避策略计算 > 默认"""
         if error:
+            # 如果错误指定了 retry_after，优先使用
             retry_after = get_retry_after(error)
             if retry_after:
                 return min(float(retry_after), self.max_delay)
@@ -72,6 +74,7 @@ class RetryConfig:
         delay = min(delay, self.max_delay)
 
         if self.jitter:
+            # 添加抖动
             jitter_range = delay * self.jitter_factor
             delay = delay + random.uniform(-jitter_range, jitter_range)
             delay = max(0.1, delay)
@@ -80,8 +83,11 @@ class RetryConfig:
 
 
 # Predefined configs
+# LLM 调用：3次尝试，1s起步，最大60s
 LLM_RETRY_CONFIG = RetryConfig(max_attempts=3, base_delay=1.0, max_delay=60.0)
+# 工具调用：2次尝试，2s起步，最大30s
 TOOL_RETRY_CONFIG = RetryConfig(max_attempts=2, base_delay=2.0, max_delay=30.0)
+# 不重试：1次尝试，延迟为0
 NO_RETRY_CONFIG = RetryConfig(max_attempts=1, base_delay=0, max_delay=0)
 
 
@@ -134,7 +140,7 @@ async def retry_with_result(
     func: Callable[[], Awaitable[T]],
     config: RetryConfig = RetryConfig(),
 ) -> RetryResult[T]:
-    """Execute with retry, return result instead of raising."""
+    """安全版本, 返回 RetryResult, 需要优雅处理失败"""
     total_delay = 0.0
     last_exception: Optional[Exception] = None
 
@@ -215,3 +221,24 @@ class RetryContext:
             attempts=self.attempt,
             total_delay=self.total_delay,
         )
+
+"""
+RetryContext 使用示例:
+async def fetch_data_with_retry():
+    config = RetryConfig(max_attempts=3, base_delay=1.0)
+    
+    async with RetryContext(config) as ctx:
+        while ctx.should_continue():
+            try:
+                # 尝试执行危险操作
+                data = await fetch_from_api()
+                ctx.record_success(data)  # 成功，记录结果
+            except Exception as e:
+                # 失败，记录错误，决定是否重试
+                should_retry = await ctx.record_failure(e)
+                if not should_retry:
+                    break  # 无法重试，退出循环
+    
+    result = ctx.get_result()
+    return result
+"""
