@@ -159,3 +159,99 @@ class AgentResult:
             "metadata": self.metadata,
             "handoff": self.handoff.to_dict() if self.handoff else None,
         }
+
+
+class BaseAgent(ABC):
+
+    def __init__(
+            self,
+            config: AgentConfig,
+            llm_service,
+            tools: Dict[str, Any],
+            event_emitter=None,
+            parent_id: Optional[str] = None,
+            knowledge_modules: Optional[List[str]] = None,
+    ):
+        self.config = config
+        self.llm_service = llm_service
+        self.tools = tools
+        self.event_emitter = event_emitter
+        self.parent_id = parent_id
+        self.knowledge_modules = knowledge_modules or []
+        self._agent_id = f"agent_{uuid.uuid4().hex[:8]}"
+        self._state = AgentState(
+            agent_id=self._agent_id,
+            agent_name=config.name,
+            agent_type=config.agent_type.value,
+            parent_id=parent_id,
+            max_iterations=config.max_iterations,
+            knowledge_modules=self.knowledge_modules,
+        )
+        self._iteration = 0
+        self._total_tokens = 0
+        self._tool_calls = 0
+        self._cancelled = False
+        self._cancel_callback = None
+        self._registered = False
+        self._runtime_session_checkpoint_store = None
+        self._incoming_handoff: Optional[TaskHandoff] = None
+        self._insights: List[str] = []
+        self._work_completed: List[str] = []
+        self._timeout_config = self._get_timeout_config()
+
+    @abstractmethod
+    async def run(self, input_data: Dict[str, Any]) -> AgentResult:
+        # 子类必须实现具体的执行逻辑
+        raise NotImplementedError
+
+
+    @property
+    def name(self) -> str:
+        return self.config.name
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    @property
+    def state(self) -> AgentState:
+        return self._state
+
+    @property
+    def agent_type(self) -> AgentType:
+        return self.config.agent_type
+
+    def _get_timeout_config(self) -> Dict[str, int]:
+        from core.config import settings
+        timeout_getter = getattr(self.llm_service, "get_agent_timeout_config", None)
+        if callable(timeout_getter):
+            resolved = timeout_getter()
+            if isinstance(resolved, dict):
+                return resolved
+        return {
+            "llm_first_token_timeout": getattr(settings, "LLM_FIRST_TOKEN_TIMEOUT", 30),
+            "llm_stream_timeout": getattr(settings, "LLM_STREAM_TIMEOUT", 60),
+            "agent_timeout": getattr(settings, "AGENT_TIMEOUT_SECONDS", 1800),
+            "sub_agent_timeout": getattr(settings, "SUB_AGENT_TIMEOUT_SECONDS", 600),
+            "tool_timeout": getattr(settings, "TOOL_TIMEOUT_SECONDS", 60),
+        }
+
+    """ Agent 注册与消息队列 """
+    def _register_to_registry(self, task: Optional[str] = None) -> None:
+        if self._registered:
+            return
+        agent_registry.register_agent(
+            agent_id=self._agent_id,
+            agent_name=self.config.name,
+            agent_type=self.config.agent_type.value,
+            task=task or self._state.task or "Initializing",
+            parent_id=self.parent_id,
+            agent_instance=self,
+            state=self._state,
+            knowledge_modules=self.knowledge_modules,
+        )
+        try:
+            message_bus.create_queue(self._agent_id)
+        except Exception:
+            pass
+        self._registered = True
