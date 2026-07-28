@@ -37,7 +37,7 @@ class AgentState(BaseModel):
     Agent 状态模型
 
     包含Agent执行所需的所有状态信息，支持：
-    - 完整的生命周期管理
+    - 完整的生命周期管理    CREATED → RUNNING → WAITING ↔ PAUSED → COMPLETED/FAILED/STOPPED
     - 状态序列化和持久化
     - 暂停和恢复
     - 动态Agent树结构
