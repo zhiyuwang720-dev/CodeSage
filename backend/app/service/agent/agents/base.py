@@ -258,3 +258,115 @@ class BaseAgent(ABC):
         except Exception:
             pass
         self._registered = True
+
+
+    def compress_messages_if_needed(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        max_messages = 40
+        if len(messages) <= max_messages:
+            return messages
+        return [messages[0]] + messages[-(max_messages - 1):]
+
+
+    async def stream_llm_call(
+            self,
+            messages: List[Dict[str, str]],
+            temperature: Optional[float] = None,
+            max_tokens: Optional[int] = None,
+            auto_compress: bool = True,
+    ) -> Tuple[str, int]:
+        if auto_compress:
+            messages = self.compress_messages_if_needed(messages)
+        if self.is_cancelled:
+            return "", 0
+
+        accumulated = ""
+        total_tokens = 0
+        token_buffer: List[str] = []
+        token_buffer_count = 0
+        from core.config import settings
+        token_chunk_size = max(1, int(getattr(settings, "AGENT_TOKEN_EVENT_CHUNK_SIZE", 20)))
+        flush_interval = max(0.0, float(getattr(settings, "AGENT_TOKEN_EVENT_FLUSH_INTERVAL_MS", 100)) / 1000.0)
+        last_flush_at = time.monotonic()
+
+        async def flush_token_buffer(force: bool = False) -> None:
+            nonlocal token_buffer, token_buffer_count, last_flush_at
+            if not token_buffer:
+                return
+            now = time.monotonic()
+            if (
+                    force
+                    or token_buffer_count >= token_chunk_size
+                    or (flush_interval > 0 and now - last_flush_at >= flush_interval)
+            ):
+                token_text = "".join(token_buffer)
+                token_buffer = []
+                token_buffer_count = 0
+                last_flush_at = now
+                await self.emit_thinking_token(token_text)
+
+        await self.emit_thinking_start()
+        try:
+            stream = self.llm_service.chat_completion_stream(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            iterator = stream.__aiter__()
+            first_timeout = float(self._timeout_config.get("llm_first_token_timeout", 30))
+            stream_timeout = float(self._timeout_config.get("llm_stream_timeout", 60))
+            first_token = False
+            while True:
+                if self.is_cancelled:
+                    break
+                try:
+                    timeout = first_timeout if not first_token else stream_timeout
+                    chunk = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    accumulated = accumulated or "[LLM timeout]"
+                    break
+
+                if chunk.get("type") == "token":
+                    first_token = True
+                    token = chunk.get("content", "")
+                    accumulated = chunk.get("accumulated", accumulated + token)
+                    if token:
+                        token_buffer.append(token)
+                        token_buffer_count += 1
+                        await flush_token_buffer()
+                    await asyncio.sleep(0)
+                elif chunk.get("type") == "done":
+                    await flush_token_buffer(force=True)
+                    accumulated = chunk.get("content", accumulated)
+                    usage = chunk.get("usage") or {}
+                    total_tokens = usage.get("total_tokens", 0)
+                    if total_tokens:
+                        await self.emit_event(
+                            "llm_usage",
+                            "LLM token usage recorded",
+                            metadata={"tokens_used": total_tokens, "usage": usage},
+                        )
+                    break
+                elif chunk.get("type") == "error":
+                    await flush_token_buffer(force=True)
+                    accumulated = chunk.get("accumulated", accumulated)
+                    error_message = chunk.get("user_message") or chunk.get("error") or "Unknown error"
+                    accumulated = accumulated or f"[API_ERROR:{chunk.get('error_type', 'unknown')}] {error_message}"
+                    usage = chunk.get("usage") or {}
+                    total_tokens = usage.get("total_tokens", 0)
+                    if total_tokens:
+                        await self.emit_event(
+                            "llm_usage",
+                            "LLM token usage recorded",
+                            metadata={"tokens_used": total_tokens, "usage": usage},
+                        )
+                    break
+        except Exception as exc:
+            logger.error("[%s] Unexpected error in stream_llm_call: %s", self.name, exc, exc_info=True)
+            await self.emit_event("error", f"LLM call error: {exc}")
+            accumulated = f"[LLM调用错误: {str(exc)}] 请重试。"
+        finally:
+            await flush_token_buffer(force=True)
+            await self.emit_thinking_end(accumulated)
+        return accumulated, total_tokens
