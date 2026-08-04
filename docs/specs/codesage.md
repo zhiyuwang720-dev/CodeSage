@@ -68,11 +68,17 @@ codesage/                      # 项目根(现有 backend/ 不并入)
   pyproject.toml               # 项目名 codesage
   codesage/
     config/      # 01 配置系统:settings 三层 + 全局配置
-    ai/          # 02 LLM 客户端:adapter/流式/重试/成本/模型指针
+    ai/          # 02 LLM 客户端:types/retry/cost/vcr/client + adapters/
     tools/       # 03 工具契约 + 注册 + 内置工具
+      base.py    #   契约层(Tool/ToolResult/...)
+      registry.py
+      builtin/   #   内置工具按类别子包,每工具一文件
+        filesystem/{ls,read,write,edit}.py + _common.py
+        search/{glob,grep}.py + _common.py
+        shell/bash.py
     core/        # 04 消息与会话;10 压缩;11 任务;12 会话生命周期;18 记忆
     permissions/ # 05 权限引擎
-    engine/      # 06 主循环
+    engine/      # 06 主循环(Agent Runtime)
     cli/         # 07 REPL
     context/     # 08 上下文管理(AGENTS.md)
     hooks/       # 09 钩子系统
@@ -80,10 +86,22 @@ codesage/                      # 项目根(现有 backend/ 不并入)
     skills/      # 15 技能与斜杠命令
     mcp/         # 16 MCP 客户端
     safety/      # 17 Bash 安全纵深(LLM 闸门 + 沙箱计划)
-  tests/
+  tests/                     # 镜像源码:每个模块一个子目录
+    config/  ai/  tools/  ...
   docs/
     intent/  ideas/  specs/  modules/     # modules/ = 每阶段理解文档
 ```
+
+### 目录规划规范(生产级,所有阶段遵守)
+
+1. **每模块一个包**(`codesage/<module>/`),包内按职责分层:
+   - 契约层(`base.py` / `types.py` / `contract.py`)—— 类型与接口,不依赖实现
+   - 实现层 —— 按类别子包(`builtin/`、`adapters/`),**每工具/每适配器一个文件**,文件名即工具名(`ls.py`、`read.py`、`openai_compatible.py`)
+   - 类别共享辅助放 `_common.py`(下划线前缀,不导出)
+   - 入口层(`registry.py` / `client.py` / `factory.py`)—— 装配与对外 API
+2. **包级 `__init__.py` 显式导出**公共 API,深路径导入只允许在模块内部和测试里
+3. **tests 镜像源码**:`tests/<module>/test_<file>.py`,一个源码文件对应一个测试文件(每工具一个测试文件)
+4. **命名**:文件/模块小写下划线;类 PascalCase;测试函数 `test_<行为>`
 
 ## Code Style
 

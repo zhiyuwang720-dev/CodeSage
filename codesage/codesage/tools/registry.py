@@ -6,18 +6,7 @@ from typing import Iterable
 
 from ..ai import ToolSpec
 from .base import Tool
-from . import fs, search, shell
-
-#: Canonical builtin tool set; phase 15 (MCP) extends the registry dynamically.
-BUILTIN_TOOLS: list[Tool] = [
-    fs.LSTool(),
-    fs.ReadTool(),
-    fs.WriteTool(),
-    fs.EditTool(),
-    search.GlobTool(),
-    search.GrepTool(),
-    shell.BashTool(),
-]
+from .builtin import BUILTIN_TOOLS
 
 
 class ToolRegistry:
@@ -43,4 +32,4 @@ class ToolRegistry:
 
 
 def get_builtin_tools() -> list[Tool]:
-    return BUILTIN_TOOLS
+    return list(BUILTIN_TOOLS)

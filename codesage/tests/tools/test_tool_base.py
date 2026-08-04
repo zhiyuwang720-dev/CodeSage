@@ -29,7 +29,7 @@ async def test_base_call_wraps_run():
 
 
 def test_validate_input_raises_tool_error():
-    from codesage.tools.shell import BashTool
+    from codesage.tools.builtin.shell.bash import BashTool
 
     tool = BashTool()
     with pytest.raises(ToolError):

@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .base import Tool, ToolError, ToolResult, ToolUseContext
+from ...base import Tool, ToolError, ToolResult, ToolUseContext
 
 MAX_TIMEOUT_MS = 600_000
 DEFAULT_TIMEOUT_MS = 120_000
@@ -50,7 +50,7 @@ class BashTool(Tool):
         timeout_ms = int(input.get("timeout_ms") or DEFAULT_TIMEOUT_MS)
         timeout = timeout_ms / 1000
         try:
-            stdout, stderr, code = await _run_shell(command, cwd=ctx.cwd, timeout=timeout, env=ctx.env)
+            stdout, stderr, code = await run_shell(command, cwd=ctx.cwd, timeout=timeout, env=ctx.env)
         except ToolError as exc:
             return ToolResult(str(exc), is_error=True)
 
@@ -62,7 +62,7 @@ class BashTool(Tool):
         return ToolResult(out if out else "(no output)")
 
 
-async def _run_shell(
+async def run_shell(
     command: str, *, cwd: Path, timeout: float, env: dict[str, str] | None
 ) -> tuple[str, str, int]:
     """Run a command with a hard timeout; kills the whole process tree on expiry."""
@@ -85,11 +85,11 @@ async def _run_shell(
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        _kill_tree(proc)
+        kill_tree(proc)
         await proc.wait()
         raise ToolError(f"Command timed out after {timeout:.1f}s")
     except asyncio.CancelledError:
-        _kill_tree(proc)
+        kill_tree(proc)
         await proc.wait()
         raise
     stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
@@ -97,7 +97,7 @@ async def _run_shell(
     return stdout, stderr, proc.returncode or 0
 
 
-def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+def kill_tree(proc: asyncio.subprocess.Process) -> None:
     """Kill the process and its whole tree (taskkill /T on Windows, killpg on POSIX)."""
     if sys.platform == "win32":
         try:

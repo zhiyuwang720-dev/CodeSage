@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from codesage.tools import ToolUseContext
-from codesage.tools.shell import BashTool, _run_shell
+from codesage.tools.builtin.shell.bash import BashTool, run_shell
 
 
 def _ctx(tmp_path) -> ToolUseContext:
@@ -51,7 +51,7 @@ async def test_timeout_kills_children(tmp_path):
         pytest.skip("child-tree assertion is POSIX-oriented; Windows covered by taskkill /T in _kill_tree")
     # spawn a child that writes a marker after the parent would be killed
     child = "sh -c 'sleep 2 && echo done > marker.txt'"
-    await _run_shell(f"sh -c '{child} & wait'", cwd=tmp_path, timeout=0.5, env=None)
+    await run_shell(f"sh -c '{child} & wait'", cwd=tmp_path, timeout=0.5, env=None)
     # give any leaked process a chance to write the marker; it must NOT appear
     import time
 
