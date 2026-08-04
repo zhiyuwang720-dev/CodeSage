@@ -15,6 +15,9 @@ class LSTool(Tool):
     }
     is_concurrency_safe = True
 
+    def needs_permissions(self, input: dict) -> bool:
+        return False  # read-only; permission engine handles sensitive paths
+
     async def _run(self, input: dict, ctx: ToolUseContext) -> ToolResult:
         path = resolve_path(ctx, str(input.get("path") or "."))
         if not path.is_dir():

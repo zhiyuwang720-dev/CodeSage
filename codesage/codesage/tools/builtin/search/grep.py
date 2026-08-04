@@ -25,6 +25,9 @@ class GrepTool(Tool):
     }
     is_concurrency_safe = True
 
+    def needs_permissions(self, input: dict) -> bool:
+        return False  # read-only
+
     async def _run(self, input: dict, ctx: ToolUseContext) -> ToolResult:
         root = resolve_root(ctx, input.get("path"))
         try:

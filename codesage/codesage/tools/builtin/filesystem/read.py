@@ -23,6 +23,9 @@ class ReadTool(Tool):
     }
     is_concurrency_safe = True
 
+    def needs_permissions(self, input: dict) -> bool:
+        return False  # read-only; permission engine handles sensitive paths
+
     async def _run(self, input: dict, ctx: ToolUseContext) -> ToolResult:
         path = resolve_path(ctx, str(input["file_path"]))
         if not path.is_file():
