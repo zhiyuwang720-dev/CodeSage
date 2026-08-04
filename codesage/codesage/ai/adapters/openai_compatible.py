@@ -185,10 +185,11 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 if chunk.get("error"):
                     yield StreamEvent(type="error", error=json.dumps(chunk["error"]))
                     continue
+                # usage may ride on a chunk with or without choices (providers differ)
+                if chunk.get("usage"):
+                    yield StreamEvent(type="usage", usage=_usage_from_openai(chunk["usage"]))
                 choices = chunk.get("choices") or []
                 if not choices:
-                    if chunk.get("usage"):
-                        yield StreamEvent(type="usage", usage=_usage_from_openai(chunk["usage"]))
                     continue
                 choice = choices[0]
                 delta = choice.get("delta") or {}

@@ -159,6 +159,20 @@ async def test_streaming_events():
     assert events[7].usage.input_tokens == 5
 
 
+async def test_usage_on_chunk_with_choices():
+    """DeepSeek may attach usage to a chunk that still carries choices."""
+    chunks = [
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+    ]
+    adapter = _adapter(lambda req: httpx.Response(200, text=_sse(iter(chunks))))
+    events = [ev async for ev in adapter.astream(LLMRequest(messages=[], stream=True))]
+    usage_events = [e for e in events if e.type == "usage"]
+    assert len(usage_events) == 2  # captured both, caller takes the last
+    assert usage_events[0].usage.input_tokens == 5
+
+
 async def test_collect_assembles_tool_use():
     from codesage.ai import LLMClient
 

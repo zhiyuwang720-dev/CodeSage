@@ -26,7 +26,7 @@ def _ok_response(text="ok"):
         json={
             "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-flash",
         },
     )
 
@@ -131,6 +131,6 @@ async def test_cost_accumulates(tmp_path, monkeypatch):
     )
     assert client.total_cost[0] == 0.0
     await client.complete(LLMRequest(messages=[Message(role="user", content="hi")]))
-    # deepseek-chat: 10 * 0.27 + 5 * 1.10 per million
-    assert client.total_cost[0] == pytest.approx((10 * 0.27 + 5 * 1.10) / 1_000_000)
+    # deepseek-v4-flash: 10 * 0.14 + 5 * 0.28 per million
+    assert client.total_cost[0] == pytest.approx((10 * 0.14 + 5 * 0.28) / 1_000_000)
     await client.aclose()
