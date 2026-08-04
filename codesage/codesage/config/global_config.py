@@ -44,7 +44,8 @@ class GlobalConfig(BaseModel):
     @classmethod
     def load(cls) -> "GlobalConfig":
         """Load from disk; corrupt/missing files degrade to defaults."""
-        data = read_json_lossy(paths.global_config_path(), {})
+        data = (
+            read_json_lossy(paths.global_config_path(), {}))
         try:
             return cls(**data)
         except Exception:  # pydantic ValidationError; degrade, never crash startup
