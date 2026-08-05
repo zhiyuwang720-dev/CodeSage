@@ -136,6 +136,7 @@ class LLMClient:
                 lambda: with_cancel(self._adapter(main_profile).acomplete(request), self._cancel_event),
                 cancel_event=self._cancel_event,
             )
+        response = _drop_truncated_tool_uses(response)
         if response.usage:
             self.total_cost[0] += estimate_cost(response.model or profile.model, response.usage)
         return response
@@ -233,10 +234,34 @@ class LLMClient:
             return LLMResponse(
                 content=blocks, stop_reason="error", usage=usage, is_error=True, error_message=error
             )
-        return LLMResponse(content=blocks, stop_reason=stop_reason, usage=usage)
+        return _drop_truncated_tool_uses(LLMResponse(content=blocks, stop_reason=stop_reason, usage=usage))
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+def _drop_truncated_tool_uses(response: LLMResponse) -> LLMResponse:
+    """PI-03: a length-truncated response may carry partial tool arguments.
+
+    Drop the tool_use blocks and surface the error so the model re-issues
+    them instead of executing possibly-broken calls. Shared by the streaming
+    (collect) and non-streaming (complete) paths.
+    """
+    if (
+        response.stop_reason == "length"
+        and response.content
+        and any(b.type == "tool_use" for b in response.content)
+    ):
+        kept = [b for b in response.content if b.type != "tool_use"]
+        return LLMResponse(
+            content=kept,
+            stop_reason="length",
+            usage=response.usage,
+            model=response.model,
+            is_error=True,
+            error_message="response truncated before tool calls completed; re-issue the tool calls",
+        )
+    return response
 
 
 def _is_fallback_eligible(exc: LLMError) -> bool:

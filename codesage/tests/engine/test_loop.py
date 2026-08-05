@@ -330,3 +330,111 @@ async def test_history_used_as_context():
     assert llm.calls == 1
     assert seen_messages["count"] == 3  # history(2) + new user(1)
     assert messages[-1].content[0].text == "resumed"
+
+
+# ---- PI-04: terminate semantics (all siblings must agree) ----
+
+class TerminateTool(Tool):
+    name = "Terminate"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult("done", terminate=True)
+
+
+async def test_all_tools_terminate_stops_turn():
+    # EVERY tool must request termination for the batch to stop (PI-04)
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Terminate", "t1", "{}") + tool_use_event("Terminate", "t2", "{}"),
+            lambda i: text_event("should not run"),
+        ]
+    )
+    messages = await _collect(_loop(llm, tools=[TerminateTool(), TerminateTool()]))
+    assert llm.calls == 1  # no second LLM call
+    assert "tools requested termination" in messages[-1].content
+
+
+async def test_single_terminate_does_not_stop():
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Terminate", "t1", "{}") + tool_use_event("Echo", "t2", '{"text": "x"}'),
+            lambda i: text_event("continues"),
+        ]
+    )
+    # Echo doesn't terminate -> batch doesn't stop
+    messages = await _collect(_loop(llm, tools=[EchoTool(), TerminateTool()]))
+    assert llm.calls == 2
+    assert messages[-1].content[0].text == "continues"
+
+
+# ---- PI-06: steer queue injects mid-run inputs ----
+
+async def test_steer_queue_injected_into_conversation():
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("after steer"),
+        ]
+    )
+    import asyncio
+
+    steer = asyncio.Queue()
+    steer.put_nowait("stop what you are doing")
+    loop = _loop(llm, steer_queue=steer)
+    messages = await _collect(loop, user_input="do something")
+    # steer message appears in the conversation (yielded as a user message)
+    assert any("stop what you are doing" in str(m.content) for m in messages)
+    assert messages[-1].content[0].text == "after steer"
+
+
+# ---- PI-01: tool lifecycle events ----
+
+async def test_tool_lifecycle_events():
+    events = []
+
+    def on_event(event, name, payload):
+        events.append((event, name))
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("done"),
+        ]
+    )
+    loop = _loop(llm, on_tool_event=on_event)
+    await _collect(loop)
+    assert ("start", "Echo") in events
+    assert ("end", "Echo") in events
+    assert events.index(("start", "Echo")) < events.index(("end", "Echo"))
+
+
+# ---- PI-12: ToolError code surfaces in result metadata ----
+
+class CodedErrorTool(Tool):
+    name = "CodedErr"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        from codesage.tools import ToolError
+
+        raise ToolError("bad input", code="invalid_input")
+
+
+async def test_tool_error_code_in_metadata():
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("CodedErr", "t1", "{}"),
+            lambda i: text_event("ok"),
+        ]
+    )
+    messages = await _collect(_loop(llm, tools=[CodedErrorTool()]))
+    tool_round = messages[2]
+    assert tool_round.content[0].is_error
+    assert tool_round.content[0].content == "bad input"

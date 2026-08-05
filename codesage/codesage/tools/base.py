@@ -18,7 +18,15 @@ from ..ai import ContentBlock, Message, ToolSpec
 
 
 class ToolError(Exception):
-    """Tool execution failure; message is shown to the model as-is."""
+    """Tool execution failure; message is shown to the model as-is.
+
+    *code* is a stable programmatic error code (PI-12) — callers can branch
+    on it instead of parsing the message; None means "no specific code".
+    """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(slots=True)
@@ -49,12 +57,17 @@ class ToolProgress:
 
 @dataclass(slots=True)
 class ToolResult:
-    """Final tool output. content is what the model sees."""
+    """Final tool output. content is what the model sees.
+
+    terminate (PI-04): a tool can request that the turn stops after this
+    batch — the engine stops only when EVERY tool in the batch agrees.
+    """
 
     content: str | list[ContentBlock]
     is_error: bool = False
     new_messages: list[Message] | None = None  # injected into the conversation (phase 06)
     metadata: dict[str, Any] = field(default_factory=dict)
+    terminate: bool = False  # request turn stop; all siblings must agree
 
 
 class Tool:

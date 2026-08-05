@@ -129,12 +129,19 @@ class OpenAICompatibleAdapter(BaseAdapter):
             blocks.append(ContentBlock(type="text", text=content))
         for tc in message.get("tool_calls") or []:
             fn = tc.get("function") or {}
+            try:
+                parsed_input = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                # provider returned broken arguments — keep the raw text so
+                # the caller can decide (length truncation surfaces via
+                # finish_reason; PI-03 drops these at the collect layer)
+                parsed_input = {"$partial_json": fn.get("arguments") or ""}
             blocks.append(
                 ContentBlock(
                     type="tool_use",
                     id=tc.get("id"),
                     name=fn.get("name"),
-                    input=json.loads(fn.get("arguments") or "{}"),
+                    input=parsed_input,
                 )
             )
         return LLMResponse(

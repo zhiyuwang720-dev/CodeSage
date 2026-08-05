@@ -130,7 +130,12 @@ async def repl_loop(
     _install_signal_handlers(loop)
     # /show-thinking toggles the flag; /mode writes loop.mode via "loop";
     # transcript toggles Ctrl+O expanded rendering for subsequent messages.
-    state = {"show_thinking": show_thinking, "loop": loop, "transcript": False}
+    # pending_input collects keystrokes typed while a turn is running (PI-06).
+    state = {"show_thinking": show_thinking, "loop": loop, "transcript": False, "pending_input": []}
+    # steer queue: inputs typed mid-run are drained into the next LLM call
+    loop.steer_queue = asyncio.Queue()
+
+    _install_mid_run_input_capture(loop, state)
 
     while True:
         try:
@@ -148,11 +153,93 @@ async def repl_loop(
                 return
             continue
         loop.abort.clear()
-        await run_single_turn(
+        summary = await run_single_turn(
             loop, line,
             show_thinking=state["show_thinking"],
             transcript=state["transcript"],
         )
+        # PI-06 followUp: inputs typed while the turn was running become the
+        # next prompt automatically instead of being lost
+        pending = _drain_pending_input(state)
+        while pending:
+            loop.abort.clear()
+            summary = await run_single_turn(
+                loop, pending,
+                show_thinking=state["show_thinking"],
+                transcript=state["transcript"],
+            )
+            pending = _drain_pending_input(state)
+
+
+def _install_mid_run_input_capture(loop: AgentLoop, state: dict) -> None:
+    """PI-06: while a turn runs, keystrokes accumulate instead of being lost.
+
+    The capture thread watches stdin non-blockingly; complete lines go to the
+    steer queue (engine injects them mid-run) and to pending_input (REPL
+    followUp). On POSIX this is best-effort (select); on Windows msvcrt.
+    """
+    import threading
+
+    def _capture():
+        if sys.platform == "win32":
+            import msvcrt
+
+            buf: list[str] = []
+            while True:
+                if not msvcrt.kbhit():
+                    import time
+
+                    time.sleep(0.05)
+                    continue
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    if buf:
+                        text = "".join(buf).strip()
+                        if text and loop.steer_queue is not None:
+                            loop.steer_queue.put_nowait(text)
+                        if text:
+                            state.setdefault("pending_input", []).append(text)
+                        buf = []
+                elif ch == "\x08":
+                    if buf:
+                        buf.pop()
+                elif ch not in ("\x1b", "\x0f", "\x03"):
+                    buf.append(ch)
+        else:
+            # POSIX best-effort: select on stdin, read one line at a time
+            import select
+
+            while True:
+                import time
+
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    text = line.strip()
+                    if text and loop.steer_queue is not None:
+                        loop.steer_queue.put_nowait(text)
+                    if text:
+                        state.setdefault("pending_input", []).append(text)
+
+    thread = threading.Thread(target=_capture, daemon=True)
+    thread.start()
+
+
+def _drain_pending_input(state: dict) -> str | None:
+    """PI-06 followUp: take the first pending input collected mid-run."""
+    pending = state.setdefault("pending_input", [])
+    if not pending:
+        return None
+    text = pending.pop(0)
+    # also clear it from the steer queue if it was queued but not yet consumed
+    q = state.get("loop")
+    if q is not None and getattr(q, "steer_queue", None) is not None:
+        try:
+            q.steer_queue.get_nowait()
+        except Exception:
+            pass
+    return text
 
 
 def _read_line(state: dict) -> str | None:

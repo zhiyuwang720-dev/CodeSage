@@ -387,3 +387,33 @@ async def test_profile_api_key_falls_back_to_env(tmp_path, monkeypatch):
     assert ModelProfile(model="m").get_api_key() is None
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
     assert ModelProfile(model="m").get_api_key() == "env-key"
+
+
+# ---- PI-03: truncated response drops tool calls ----
+
+async def test_length_truncation_drops_tool_uses(tmp_path, monkeypatch):
+    """stop_reason=length with tool_use blocks: blocks dropped, is_error set
+    (partial args must never be executed)."""
+    _cfg(tmp_path, monkeypatch)
+
+    def handler(req):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "message": {
+                        "content": "thinking out loud",
+                        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": '{"command": "rm -'}}],
+                    },
+                    "finish_reason": "length",
+                }],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 100, "total_tokens": 105},
+            },
+        )
+
+    client = LLMClient(project_dir=str(tmp_path), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    resp = await client.complete(LLMRequest(messages=[Message(role="user", content="hi")]))
+    assert resp.is_error
+    assert not any(b.type == "tool_use" for b in resp.content)
+    assert "truncated" in (resp.error_message or "")
+    await client.aclose()

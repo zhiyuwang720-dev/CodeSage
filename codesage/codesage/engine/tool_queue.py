@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..tools import ToolResult, ToolUseContext
+from ..tools import ToolError, ToolResult, ToolUseContext
 
 SIBLING_ERROR_TEXT = "<tool_use_error>Sibling tool call errored</tool_use_error>"
 #: str results larger than this are spilled to a temp file; the model sees a pointer.
@@ -50,6 +50,7 @@ def _spill_large_result(result: ToolResult, tool_use_id: str = "") -> ToolResult
         is_error=result.is_error,
         new_messages=result.new_messages,
         metadata=result.metadata,
+        terminate=result.terminate,
     )
 
 
@@ -75,11 +76,15 @@ class ToolUseQueue:
         permission_check: Any | None = None,  # async (ScheduledTool) -> ToolResult | None
         pre_hook: Any | None = None,  # async (ScheduledTool) -> None (phase 09)
         post_hook: Any | None = None,  # async (ScheduledTool, ToolResult) -> None (phase 09)
+        finalize: Any | None = None,  # async (ScheduledTool, ToolResult) -> ToolResult (PI-02)
+        on_tool_event: Any | None = None,  # (event, tool_name, payload) lifecycle (PI-01)
     ):
         self._tools = tools
         self._permission_check = permission_check
         self._pre_hook = pre_hook
         self._post_hook = post_hook
+        self._finalize = finalize
+        self._on_tool_event = on_tool_event
 
     async def run(self) -> list[ScheduledTool]:
         """Execute all scheduled tools; returns them with results attached."""
@@ -124,6 +129,7 @@ class ToolUseQueue:
         return self._tools
 
     async def _execute(self, item: ScheduledTool) -> ToolResult:
+        # ---- prepare: abort / permission gate (PI-02 first phase) ----
         if item.context.abort_event is not None and item.context.abort_event.is_set():
             return ToolResult("(interrupted by user)", is_error=True)
         item.status = "executing"
@@ -132,24 +138,40 @@ class ToolUseQueue:
         if self._permission_check is not None:
             denied = await self._permission_check(item)
             if denied is not None:
+                denied.metadata.setdefault("error_code", "permission_blocked")
                 if self._post_hook is not None:
                     await self._post_hook(item, denied)
                 return denied
-        result = None
-        async for partial in item.tool.call(item.input, item.context):
-            result = partial  # last yielded value is the ToolResult
+
+        # ---- execute (PI-01: lifecycle events) ----
+        if self._on_tool_event is not None:
+            self._on_tool_event("start", item.tool.name, {"tool_use_id": item.tool_use_id})
+        try:
+            result = None
+            async for partial in item.tool.call(item.input, item.context):
+                result = partial  # last yielded value is the ToolResult
+                if self._on_tool_event is not None and hasattr(partial, "content"):
+                    self._on_tool_event("update", item.tool.name, {"tool_use_id": item.tool_use_id})
+        except ToolError as exc:
+            result = ToolResult(str(exc), is_error=True, metadata={"error_code": exc.code} if exc.code else {})
+        finally:
+            if self._on_tool_event is not None:
+                self._on_tool_event("end", item.tool.name, {"tool_use_id": item.tool_use_id})
         if result is None:
             result = ToolResult("(no result)", is_error=True)
-        # empty tool_result risks the model reading "no output" as a stop signal;
-        # give it an explicit no-output marker instead (CC-03)
+
+        # ---- finalize: no-output marker, spill, rewrite hook (PI-02 last phase) ----
         if not result.is_error and result.content in ("", []):
             result = ToolResult(
                 content=f"({item.tool.name} completed with no output)",
                 is_error=result.is_error,
                 new_messages=result.new_messages,
                 metadata=result.metadata,
+                terminate=result.terminate,
             )
         result = _spill_large_result(result, item.tool_use_id)
+        if self._finalize is not None:
+            result = await self._finalize(item, result)
         if self._post_hook is not None:
             await self._post_hook(item, result)
         return result
