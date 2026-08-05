@@ -1,0 +1,61 @@
+"""Render tests: message → terminal text."""
+
+import io
+
+from codesage.ai import ContentBlock
+from codesage.core import assistant_message, user_message
+from codesage.cli.render import render_message
+
+
+def _render(msg, **kw):
+    buf = io.StringIO()
+    render_message(msg, out=buf, **kw)
+    return buf.getvalue()
+
+
+def test_user_text():
+    out = _render(user_message("hello"))
+    assert "hello" in out
+
+
+def test_tool_result_round():
+    msg = user_message([ContentBlock(type="tool_result", tool_use_id="t123456", content="result text")])
+    out = _render(msg)
+    assert "✓" in out
+    assert "result text" in out
+
+
+def test_tool_result_error():
+    msg = user_message([ContentBlock(type="tool_result", tool_use_id="t1", content="boom", is_error=True)])
+    assert "✗" in _render(msg)
+
+
+def test_assistant_text_and_thinking():
+    msg = assistant_message([ContentBlock(type="thinking", text="secret reasoning"), ContentBlock(type="text", text="answer")])
+    out = _render(msg, show_thinking=False)
+    assert "answer" in out
+    assert "secret reasoning" not in out  # thinking hidden by default
+    assert "thinking" in out  # but its length is shown
+
+
+def test_assistant_show_thinking():
+    msg = assistant_message([ContentBlock(type="thinking", text="visible"), ContentBlock(type="text", text="answer")])
+    out = _render(msg, show_thinking=True)
+    assert "visible" in out
+
+
+def test_tool_use_call_line():
+    msg = assistant_message([ContentBlock(type="tool_use", id="t1", name="Read", input={"file_path": "/x"})])
+    out = _render(msg)
+    assert "Read" in out and "file_path" in out
+
+
+def test_meta_message():
+    msg = assistant_message("(interrupted)", is_meta=True)
+    assert "(interrupted)" in _render(msg)
+
+
+def test_result_preview_truncated():
+    msg = user_message([ContentBlock(type="tool_result", tool_use_id="t1", content="x" * 1000)])
+    out = _render(msg)
+    assert "…" in out

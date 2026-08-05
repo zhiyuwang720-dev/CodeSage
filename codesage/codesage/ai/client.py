@@ -85,7 +85,13 @@ class LLMClient:
             provider, model_name = name.split(":", 1)
             if provider in ("anthropic", "openai_compatible"):
                 return ModelProfile(provider=provider, model=model_name)
-        return ModelProfile(model=name)
+        # literal fallback: env vars configure the default endpoint
+        # (CODESAGE_MODEL / CODESAGE_BASE_URL / CODESAGE_API_KEY_ENV)
+        return ModelProfile(
+            model=os.getenv("CODESAGE_MODEL") or name,
+            base_url=os.getenv("CODESAGE_BASE_URL"),
+            api_key_env=os.getenv("CODESAGE_API_KEY_ENV"),
+        )
 
     # ---- adapters ----
 

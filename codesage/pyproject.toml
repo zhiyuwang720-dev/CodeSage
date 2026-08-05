@@ -17,3 +17,6 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[project.scripts]
+codesage = "codesage.cli:main"
