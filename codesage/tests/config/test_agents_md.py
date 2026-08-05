@@ -19,7 +19,13 @@ def test_find_git_root_none(tmp_path):
     assert find_git_root(tmp_path) is None
 
 
-def test_empty_without_git(tmp_path):
+def test_without_git_reads_cwd_level(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("cwd-only")
+    files = get_project_instruction_files(cwd=tmp_path)
+    assert files == [tmp_path.resolve() / "AGENTS.md"]
+
+
+def test_without_git_and_no_agents_is_empty(tmp_path):
     assert get_project_instruction_files(cwd=tmp_path) == []
 
 

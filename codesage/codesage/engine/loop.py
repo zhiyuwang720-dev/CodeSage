@@ -63,6 +63,9 @@ class AgentLoop:
         self.session = session
         self.settings = settings
         self.abort = asyncio.Event()
+        #: One ToolUseContext per loop: carries read-freshness state and the
+        #: abort channel across tool calls (phase 03 read-first guard).
+        self._tool_ctx: ToolUseContext | None = None
 
     # ---- public entry ----
 
@@ -148,9 +151,11 @@ class AgentLoop:
 
     async def _execute_tools(self, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
         scheduled: list[ScheduledTool] = []
+        if self._tool_ctx is None:
+            self._tool_ctx = ToolUseContext(cwd=self.cwd, abort_event=self.abort)
+        ctx = self._tool_ctx
         for block in tool_uses:
             tool = self.tools.get(block.name or "")
-            ctx = ToolUseContext(cwd=self.cwd)
             if tool is None:
                 scheduled.append(
                     ScheduledTool(

@@ -88,16 +88,19 @@ async def test_streaming_events():
 
     adapter, http = _adapter(lambda req: httpx.Response(200, text=sse))
     got = [ev async for ev in adapter.astream(LLMRequest(messages=[], stream=True))]
+    # message_start carries usage → usage event precedes the deltas
     assert [e.type for e in got] == [
+        "usage",
         "text_delta",
         "text_delta",
         "tool_use_start",
         "tool_use_delta",
         "done",
     ]
-    assert got[2].tool_name == "Grep"
-    assert got[3].input_json_delta == '{"q": "x"}'
-    assert got[4].stop_reason == "tool_use"
+    assert got[0].usage.input_tokens == 4
+    assert got[3].tool_name == "Grep"
+    assert got[4].input_json_delta == '{"q": "x"}'
+    assert got[5].stop_reason == "tool_use"
     await http.aclose()
 
 

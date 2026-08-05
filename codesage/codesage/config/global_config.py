@@ -7,12 +7,16 @@ settings tiers, which hold hooks/permission rules.
 
 from __future__ import annotations
 
+import errno
+import logging
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import paths
 from .atomic import atomic_write, read_json_lossy
+
+logger = logging.getLogger("codesage.config")
 
 
 class ProjectConfig(BaseModel):
@@ -52,4 +56,12 @@ class GlobalConfig(BaseModel):
             return cls()
 
     def save(self) -> None:
-        atomic_write(paths.global_config_path(), self.model_dump_json(indent=2) + "\n")
+        """Persist atomically; on permission/read-only errors, warn and skip
+        (e.g. read-only $HOME — never crash the CLI on a config write)."""
+        try:
+            atomic_write(paths.global_config_path(), self.model_dump_json(indent=2) + "\n")
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                logger.warning("cannot save config %s: %s", paths.global_config_path(), exc)
+            else:
+                raise

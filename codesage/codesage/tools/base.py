@@ -8,6 +8,7 @@ permission engine (phase 05); tools never enforce permissions themselves.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,12 @@ class ToolUseContext:
     timeout: int = 60
     env: dict[str, str] | None = None
     command_source: str = "agent_call"  # user_bash_mode | agent_call
+    #: path -> mtime_ns / sha256 recorded by ReadTool; Edit/Write verify
+    #: against these so external changes are never silently overwritten.
+    read_file_timestamps: dict[str, float] = field(default_factory=dict)
+    read_file_hashes: dict[str, str] = field(default_factory=dict)
+    #: set by the engine to abort a running tool (Bash kills its process tree).
+    abort_event: asyncio.Event | None = None
 
 
 @dataclass(slots=True)

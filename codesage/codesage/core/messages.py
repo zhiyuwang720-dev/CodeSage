@@ -27,6 +27,7 @@ class SessionMessage:
     # assistant-only metadata
     usage: Usage | None = None
     model: str | None = None
+    message_id: str | None = None  # assistant streaming chunk anchor (Kode message.id)
     is_error: bool = False  # provider error surfaced as a message; dropped before API
     is_meta: bool = False  # synthesized messages (e.g. interruption notices)
 
@@ -43,12 +44,15 @@ class SessionMessage:
             "timestamp": self.timestamp,
             "usage": None if self.usage is None else self.usage.model_dump(),
             "model": self.model,
+            "message_id": self.message_id,
             "is_error": self.is_error,
             "is_meta": self.is_meta,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SessionMessage":
+    def from_dict(cls, data: dict[str, Any]) -> "SessionMessage | None":
+        if data.get("role") not in ("user", "assistant"):
+            return None  # unknown role: skip (load() tolerates it)
         content = data["content"]
         if isinstance(content, list):
             content = [ContentBlock(**b) for b in content]
@@ -60,6 +64,7 @@ class SessionMessage:
             timestamp=data.get("timestamp", ""),
             usage=Usage(**usage) if usage else None,
             model=data.get("model"),
+            message_id=data.get("message_id"),
             is_error=bool(data.get("is_error", False)),
             is_meta=bool(data.get("is_meta", False)),
         )

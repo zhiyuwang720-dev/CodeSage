@@ -55,3 +55,44 @@ def test_blocks_roundtrip_through_storage(tmp_path):
     restored = session.load()[0]
     assert restored.content[0].name == "Read"
     assert restored.content[0].input == {"path": "/x"}
+
+
+def test_message_id_roundtrip(tmp_path):
+    session = _session(tmp_path)
+    session.append(assistant_message("chunk1", message_id="mid-1"))
+    restored = session.load()[0]
+    assert restored.message_id == "mid-1"
+    assert restored.uuid != "mid-1"  # distinct field
+
+
+# ---- project scope ----
+
+def test_project_key_scopes_storage_path(tmp_path):
+    session = Session("s1", tmp_path, project_key="my-project")
+    assert session.path == tmp_path / "my-project" / "s1.jsonl"
+
+
+def test_project_key_sanitized(tmp_path):
+    assert Session("s1", tmp_path, project_key="/e/Mac/CodeSage").path == tmp_path / "e-Mac-CodeSage" / "s1.jsonl"
+    assert Session("s2", tmp_path, project_key="a b/c").path == tmp_path / "a-b-c" / "s2.jsonl"
+
+
+def test_project_key_none_keeps_old_path(tmp_path):
+    assert Session("s1", tmp_path).path == tmp_path / "s1.jsonl"
+    assert Session("s1", tmp_path, project_key=None).path == tmp_path / "s1.jsonl"
+
+
+def test_project_scoped_roundtrip(tmp_path):
+    session = Session("s1", tmp_path, project_key="proj")
+    session.append(user_message("hi"))
+    assert session.path == tmp_path / "proj" / "s1.jsonl"
+    assert [m.content for m in session.load()] == ["hi"]
+    assert not (tmp_path / "s1.jsonl").exists()  # stays out of the unscoped path
+
+
+def test_unknown_role_line_skipped(tmp_path):
+    session = _session(tmp_path)
+    session.append(user_message("good"))
+    with open(session.path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"role": "system", "content": "bogus"}) + "\n")
+    assert [m.content for m in session.load()] == ["good"]

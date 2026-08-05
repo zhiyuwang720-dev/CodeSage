@@ -8,6 +8,7 @@ from .filesystem.write import WriteTool
 from .search.glob import GlobTool
 from .search.grep import GrepTool
 from .shell.bash import BashTool
+from .system.task import TaskOutputTool, TaskStopTool
 
 #: Canonical builtin tool set; phase 15 (MCP) extends the registry dynamically.
 BUILTIN_TOOLS: list[Tool] = [
@@ -18,6 +19,8 @@ BUILTIN_TOOLS: list[Tool] = [
     GlobTool(),
     GrepTool(),
     BashTool(),
+    TaskOutputTool(),
+    TaskStopTool(),
 ]
 
 __all__ = ["BUILTIN_TOOLS"]

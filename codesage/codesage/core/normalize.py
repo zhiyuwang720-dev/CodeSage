@@ -2,11 +2,13 @@
 
 Rules (mirroring Kode's message-utils/api.ts):
 1. Drop is_error / is_meta messages (provider errors, synthesized notices).
-2. tool_result blocks are split into their own user message (Anthropic
-   semantics); any sibling text becomes a separate user message.
-3. Adjacent same-role messages merge (their content concatenates).
-   tool_result-carrying messages never merge with plain text (provider
-   wire formats distinguish them).
+2. Whitespace-only text blocks are dropped; a message left empty gets the
+   "(no content)" sentinel (Kode NO_CONTENT_MESSAGE).
+3. Adjacent same-role messages merge into one. Merged user content is
+   reordered toolResultsFirst — all tool_result blocks precede text — so one
+   user message may carry [tool_result..., text...] blocks (Anthropic-valid
+   inline format). Kode anchors assistant merges on message.id; here adjacent
+   assistants simply concatenate.
 """
 
 from __future__ import annotations
@@ -15,6 +17,9 @@ from typing import Any
 
 from ..ai import ContentBlock, Message
 
+#: Sentinel for messages whose content normalized away (Kode NO_CONTENT_MESSAGE).
+NO_CONTENT_MESSAGE = "(no content)"
+
 
 def _blocks(content: str | list[ContentBlock]) -> list[ContentBlock]:
     if isinstance(content, str):
@@ -22,8 +27,18 @@ def _blocks(content: str | list[ContentBlock]) -> list[ContentBlock]:
     return content
 
 
-def _carries_tool_result(content: str | list[ContentBlock]) -> bool:
-    return isinstance(content, list) and any(b.type == "tool_result" for b in content)
+def _clean_content(content: str | list[ContentBlock]) -> str | list[ContentBlock]:
+    """Drop whitespace-only text blocks; empty content becomes the sentinel."""
+    if isinstance(content, str):
+        return content if content.strip() else NO_CONTENT_MESSAGE
+    blocks = [b for b in content if b.type != "text" or (b.text or "").strip()]
+    return blocks if blocks else NO_CONTENT_MESSAGE
+
+
+def _tool_results_first(blocks: list[ContentBlock]) -> list[ContentBlock]:
+    tool_results = [b for b in blocks if b.type == "tool_result"]
+    rest = [b for b in blocks if b.type != "tool_result"]
+    return tool_results + rest
 
 
 def _merge_content(prev: str | list[ContentBlock], cur: str | list[ContentBlock]) -> str | list[ContentBlock]:
@@ -42,22 +57,18 @@ def normalize_for_api(messages: list[Any]) -> list[Message]:
     out: list[Message] = []
     for msg in messages:
         role = getattr(msg, "role")
-        content = getattr(msg, "content")
         if getattr(msg, "is_error", False) or getattr(msg, "is_meta", False):
             continue
-
-        if _carries_tool_result(content):
-            blocks = _blocks(content)
-            text_blocks = [b for b in blocks if b.type != "tool_result"]
-            tool_blocks = [b for b in blocks if b.type == "tool_result"]
-            if text_blocks:
-                out.append(Message(role="user", content=text_blocks))
-            out.append(Message(role="user", content=tool_blocks))
-            continue
+        content = _clean_content(getattr(msg, "content"))
 
         prev = out[-1] if out else None
-        if prev is not None and prev.role == role and not _carries_tool_result(prev.content):
-            prev.content = _merge_content(prev.content, content)
+        if prev is not None and prev.role == role:
+            merged = _merge_content(prev.content, content)
+            if role == "user":
+                blocks = _blocks(merged)
+                if any(b.type == "tool_result" for b in blocks):
+                    merged = _tool_results_first(blocks)  # reorder only, never convert
+            prev.content = merged
         else:
             out.append(Message(role=role, content=content))
     return out

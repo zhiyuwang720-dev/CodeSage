@@ -1,6 +1,9 @@
 """Global config read/write tests."""
 
+import errno
 import json
+
+import pytest
 
 from codesage.config import GlobalConfig, paths
 
@@ -46,3 +49,27 @@ def test_saved_file_is_valid_json(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
     GlobalConfig(theme="x").save()
     assert json.loads((tmp_path / "config.json").read_text())["theme"] == "x"
+
+
+@pytest.mark.parametrize("err", [errno.EACCES, errno.EPERM, errno.EROFS])
+def test_save_degrades_on_denied_write(tmp_path, monkeypatch, err):
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
+    from codesage.config import global_config
+
+    def denied(path, content):
+        raise PermissionError(err, "denied", str(path))
+
+    monkeypatch.setattr(global_config, "atomic_write", denied)
+    GlobalConfig(theme="dark").save()  # must not raise
+
+
+def test_save_still_raises_other_os_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path)
+    from codesage.config import global_config
+
+    def broken(path, content):
+        raise OSError(errno.EISDIR, "is a directory", str(path))
+
+    monkeypatch.setattr(global_config, "atomic_write", broken)
+    with pytest.raises(OSError):
+        GlobalConfig().save()

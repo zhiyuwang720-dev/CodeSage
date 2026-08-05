@@ -59,6 +59,14 @@ def test_missing_files_are_empty(store):
     assert s.load() == s.load()  # no error, no content
 
 
+def test_settings_file_with_bom(store):
+    # Notepad/PowerShell write a UTF-8 BOM by default; must not silently fail.
+    s, project = store
+    path = write_tier(s._project_dir.parent, project, "user", {"permissions": {"allow": ["Read"]}})
+    path.write_text("﻿" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    assert s.load().permissions["allow"] == ["Read"]
+
+
 def test_corrupt_file_degrades(store):
     s, project = store
     write_tier(s._project_dir.parent, project, "user", "{not json")

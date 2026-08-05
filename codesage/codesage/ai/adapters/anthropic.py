@@ -86,9 +86,12 @@ class AnthropicAdapter(BaseAdapter):
         return {"role": msg.role, "content": blocks}
 
     async def acomplete(self, request: LLMRequest) -> LLMResponse:
-        response = await self.http.post(
-            self._url(), headers=self._headers(), json=self._build_payload(request, stream=False)
-        )
+        try:
+            response = await self.http.post(
+                self._url(), headers=self._headers(), json=self._build_payload(request, stream=False)
+            )
+        except httpx.HTTPError as exc:
+            raise _transport_error(self.profile, exc) from exc
         if response.status_code >= 400:
             raise _http_error(self.profile, response)
         data = response.json()
@@ -101,45 +104,55 @@ class AnthropicAdapter(BaseAdapter):
         )
 
     async def astream(self, request: LLMRequest) -> AsyncIterator[StreamEvent]:
-        async with self.http.stream(
-            "POST", self._url(), headers=self._headers(), json=self._build_payload(request, stream=True)
-        ) as response:
-            if response.status_code >= 400:
-                yield StreamEvent(type="error", error=f"HTTP {response.status_code}")
-                return
-            # content block state: tool_use blocks stream input_json_delta
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                etype = event.get("type")
-                if etype == "content_block_start":
-                    block = event.get("content_block") or {}
-                    if block.get("type") == "tool_use":
-                        yield StreamEvent(
-                            type="tool_use_start",
-                            tool_use_id=block.get("id"),
-                            tool_name=block.get("name"),
-                        )
-                elif etype == "content_block_delta":
-                    delta = event.get("delta") or {}
-                    if delta.get("type") == "text_delta":
-                        yield StreamEvent(type="text_delta", text=delta.get("text"))
-                    elif delta.get("type") == "thinking_delta":
-                        yield StreamEvent(type="thinking_delta", thinking=delta.get("thinking"))
-                    elif delta.get("type") == "input_json_delta":
-                        yield StreamEvent(type="tool_use_delta", input_json_delta=delta.get("partial_json"))
-                elif etype == "message_delta":
-                    stop = (event.get("delta") or {}).get("stop_reason")
-                    yield StreamEvent(type="done", stop_reason=stop)
-            else:
-                yield StreamEvent(type="done")
+        try:
+            async with self.http.stream(
+                "POST", self._url(), headers=self._headers(), json=self._build_payload(request, stream=True)
+            ) as response:
+                if response.status_code >= 400:
+                    yield StreamEvent(type="error", error=f"HTTP {response.status_code}: {response.text[:200]}")
+                    return
+                # content block state: tool_use blocks stream input_json_delta
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    etype = event.get("type")
+                    if etype == "message_start":
+                        usage = _usage_from_anthropic((event.get("message") or {}).get("usage"))
+                        if usage:
+                            yield StreamEvent(type="usage", usage=usage)
+                    elif etype == "content_block_start":
+                        block = event.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            yield StreamEvent(
+                                type="tool_use_start",
+                                tool_use_id=block.get("id"),
+                                tool_name=block.get("name"),
+                            )
+                    elif etype == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            yield StreamEvent(type="text_delta", text=delta.get("text"))
+                        elif delta.get("type") == "thinking_delta":
+                            yield StreamEvent(type="thinking_delta", thinking=delta.get("thinking"))
+                        elif delta.get("type") == "input_json_delta":
+                            yield StreamEvent(type="tool_use_delta", input_json_delta=delta.get("partial_json"))
+                    elif etype == "message_delta":
+                        stop = (event.get("delta") or {}).get("stop_reason")
+                        usage = _usage_from_anthropic(event.get("usage"))
+                        if usage:
+                            yield StreamEvent(type="usage", usage=usage)
+                        yield StreamEvent(type="done", stop_reason=stop)
+                else:
+                    yield StreamEvent(type="done")
+        except httpx.HTTPError as exc:
+            yield StreamEvent(type="error", error=f"transport error: {exc}")
 
 
 def _usage_from_anthropic(usage: dict[str, Any] | None) -> Usage | None:
@@ -156,9 +169,24 @@ def _usage_from_anthropic(usage: dict[str, Any] | None) -> Usage | None:
 
 def _http_error(profile: Any, response: httpx.Response) -> LLMError:
     status = response.status_code
+    try:
+        retry_after = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        retry_after = None
     return LLMError(
         f"{profile.model}: HTTP {status}: {response.text[:500]}",
         provider=profile.provider,
         status_code=status,
         retryable=LLMError.classify(status),
+        retry_after_seconds=retry_after,
+    )
+
+
+def _transport_error(profile: Any, exc: httpx.HTTPError) -> LLMError:
+    """Wrap httpx transport failures (timeout/connect/read) as retryable errors."""
+    return LLMError(
+        f"{profile.model}: transport error: {exc}",
+        provider=profile.provider,
+        retryable=True,
+        original_error=exc,
     )

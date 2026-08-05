@@ -10,15 +10,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from .messages import SessionMessage
 
+_SANITIZE_PROJECT = re.compile(r"[^A-Za-z0-9]+")
+
 
 class Session:
-    def __init__(self, session_id: str, root: Path):
+    def __init__(self, session_id: str, root: Path, project_key: str | None = None):
         self.session_id = session_id
-        self.path = root / f"{session_id}.jsonl"
+        base = root
+        if project_key is not None:
+            sanitized = _SANITIZE_PROJECT.sub("-", project_key).strip("-")
+            if sanitized:
+                base = root / sanitized
+        self.path = base / f"{session_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, message: SessionMessage) -> None:
@@ -39,7 +47,9 @@ class Session:
                 if not line:
                     continue
                 try:
-                    messages.append(SessionMessage.from_dict(json.loads(line)))
+                    message = SessionMessage.from_dict(json.loads(line))
+                    if message is not None:
+                        messages.append(message)
                 except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                     continue  # torn/corrupt line: skip, keep the rest
         return messages

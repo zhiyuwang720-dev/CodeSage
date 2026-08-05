@@ -125,13 +125,37 @@ class LLMClient:
     # ---- streaming ----
 
     def stream(self, request: LLMRequest, *, model: str = "main") -> AsyncIterator[StreamEvent]:
-        """Stream events; no automatic fallback (retry semantics differ mid-stream).
+        """Stream events; cost is accumulated from the usage event.
 
-        ponytail: no fallback for streams — a mid-stream switch is a different
-        feature; errors surface as StreamEvent(type="error") and callers decide.
+        A stream that fails before its first event (connection error or an
+        immediate error event) is retried once — the common network-blip case
+        must not kill a whole turn (design note #11).
         """
         profile = self.resolve_profile(model)
-        return self._adapter(profile).astream(request)
+        return self._costing_stream(profile, request)
+
+    async def _costing_stream(
+        self, profile: ModelProfile, request: LLMRequest
+    ) -> AsyncIterator[StreamEvent]:
+        stream = self._adapter(profile).astream(request)
+        first = await _anext_or_none(stream)
+        if first is None:
+            return
+        if first.type == "error":
+            # nothing produced yet: one retry for transient failures
+            stream = self._adapter(profile).astream(request)
+            first = await _anext_or_none(stream)
+            if first is None:
+                return
+        yield first
+
+        usage = first.usage if first.type == "usage" else None
+        async for ev in stream:
+            if ev.type == "usage":
+                usage = ev.usage
+            yield ev
+        if usage is not None:
+            self.total_cost[0] += estimate_cost(profile.model, usage)
 
     @staticmethod
     async def collect(stream: AsyncIterator[StreamEvent]) -> LLMResponse:
@@ -193,3 +217,11 @@ def _is_fallback_eligible(exc: LLMError) -> bool:
         or (exc.status_code is not None and exc.status_code >= 500)
         or exc.status_code is None
     )
+
+
+async def _anext_or_none(stream: AsyncIterator[StreamEvent]) -> StreamEvent | None:
+    """Peek the first stream event; None when the stream is empty."""
+    try:
+        return await anext(stream)
+    except StopAsyncIteration:
+        return None

@@ -134,3 +134,69 @@ async def test_cost_accumulates(tmp_path, monkeypatch):
     # deepseek-v4-flash: 10 * 0.14 + 5 * 0.28 per million
     assert client.total_cost[0] == pytest.approx((10 * 0.14 + 5 * 0.28) / 1_000_000)
     await client.aclose()
+
+
+# ---- production-gap fixes (2026-08-05) ----
+
+async def test_transport_error_wrapped_retryable(tmp_path, monkeypatch):
+    """httpx connect failures must become retryable LLMError (network blip)."""
+    _cfg(tmp_path, monkeypatch)
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("connection refused", request=req)
+        return _ok_response()
+
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    resp = await client.complete(LLMRequest(messages=[Message(role="user", content="hi")]))
+    assert resp.text == "ok"
+    assert calls["n"] == 2  # retried after transport error
+    await client.aclose()
+
+
+async def test_stream_cost_accumulates(tmp_path, monkeypatch):
+    """The engine runs on stream(); cost must accumulate there (was always 0)."""
+    _cfg(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODESAGE_MODEL", "deepseek-v4-flash")
+
+    def handler(req):
+        return httpx.Response(
+            200,
+            text="data: " + json.dumps({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}) + "\ndata: [DONE]\n",
+        )
+
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    stream = client.stream(LLMRequest(messages=[Message(role="user", content="hi")]))
+    resp = await LLMClient.collect(stream)
+    assert resp.text == "hi"
+    assert client.total_cost[0] == pytest.approx((10 * 0.14 + 5 * 0.28) / 1_000_000)
+    await client.aclose()
+
+
+async def test_stream_retries_once_on_immediate_error(tmp_path, monkeypatch):
+    """A stream failing before its first event is retried once."""
+    _cfg(tmp_path, monkeypatch)
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(503, text="unavailable")
+        return httpx.Response(200, text="data: " + json.dumps({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}) + "\ndata: [DONE]\n")
+
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    resp = await LLMClient.collect(client.stream(LLMRequest(messages=[Message(role="user", content="hi")])))
+    assert resp.text == "ok"
+    assert calls["n"] == 2
+    await client.aclose()

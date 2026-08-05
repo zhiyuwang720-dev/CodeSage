@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from ...base import Tool, ToolResult, ToolUseContext
-from ._common import decode_text, is_binary, resolve_path
+from ._common import decode_text, is_binary, record_read, resolve_path
 
 DEFAULT_READ_LINES = 2000
 MAX_READ_LINES = 20000
+MAX_OUTPUT_CHARS = 250_000
 
 
 class ReadTool(Tool):
@@ -39,6 +40,7 @@ class ReadTool(Tool):
             data = path.read_bytes()
         except OSError as exc:
             return ToolResult(f"Error reading {path}: {exc}", is_error=True)
+        record_read(ctx, path, data)  # Edit/Write stale-guard baseline
         text = decode_text(data)
         lines = text.splitlines()
         if offset >= len(lines):
@@ -47,4 +49,7 @@ class ReadTool(Tool):
         numbered = "\n".join(f"{i + offset + 1}\t{line}" for i, line in enumerate(window))
         truncated = len(lines) > offset + limit
         suffix = f"\n(truncated: showing lines {offset + 1}-{offset + len(window)} of {len(lines)})" if truncated else ""
-        return ToolResult(numbered + suffix)
+        out = numbered + suffix
+        if len(out) > MAX_OUTPUT_CHARS:
+            out = out[:MAX_OUTPUT_CHARS] + "\n...(output exceeds 250KB; use offset/limit to page through)"
+        return ToolResult(out)

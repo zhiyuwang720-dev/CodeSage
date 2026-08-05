@@ -14,9 +14,19 @@ from pathlib import Path
 
 
 def atomic_write(path: Path | str, content: str | bytes) -> None:
-    """Write *content* to *path* atomically (tmp+rename, fsync)."""
-    path = Path(path)
+    """Write *content* to *path* atomically (tmp+rename, fsync).
+
+    Symlinks are resolved first so a linked dotfile (chezmoi/stow) keeps its
+    link — the target is replaced, never the link. An existing file's mode is
+    preserved (mkstemp tmp files default to 0600). Raises on failure; the
+    caller decides whether to degrade.
+    """
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = path.stat().st_mode & 0o7777
+    except OSError:
+        mode = None  # new file: keep mkstemp's 0600 default
     data = content.encode("utf-8") if isinstance(content, str) else content
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -27,6 +37,8 @@ def atomic_write(path: Path | str, content: str | bytes) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_name, path)
+        if mode is not None:
+            os.chmod(path, mode)
     except BaseException:
         # Never leave a stray tmp file behind on failure.
         try:
@@ -41,7 +53,7 @@ def read_json_lossy(path: Path | str, default: dict) -> dict:
     try:
         import json
 
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:  # BOM-tolerant
             data = json.load(f)
         return data if isinstance(data, dict) else default
     except (OSError, ValueError):

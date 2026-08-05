@@ -24,13 +24,12 @@ def find_git_root(start: Path) -> Path | None:
 def get_project_instruction_files(cwd: Path | None = None) -> list[Path]:
     """Ordered instruction files from git root down to cwd (outermost first).
 
-    At each level, AGENTS.override.md replaces AGENTS.md. Levels below the
-    git root are not considered (out-of-repo cwd yields an empty list).
+    At each level, AGENTS.override.md replaces AGENTS.md. Without a git root,
+    falls back to cwd alone (Kode's ``gitRoot ?? resolve(cwd)``): at least
+    the cwd-level AGENTS.md/AGENTS.override.md is still read.
     """
     start = (cwd or Path.cwd()).resolve()
-    git_root = find_git_root(start)
-    if git_root is None:
-        return []
+    git_root = find_git_root(start) or start
 
     # Walk start up to git_root (a guaranteed ancestor), then back down
     # outer→inner. Counting upward first also avoids the Windows quirk where

@@ -27,7 +27,10 @@ async def test_retries_then_succeeds(monkeypatch):
 
     assert await with_retry(op, attempts=4, base_delay=1.0) == "ok"
     assert len(calls) == 3
-    assert sleeps == [1.0, 2.0]  # exponential backoff
+    # exponential backoff + jitter (0..10% of backoff)
+    assert len(sleeps) == 2
+    assert 1.0 <= sleeps[0] <= 1.1
+    assert 2.0 <= sleeps[1] <= 2.2
 
 
 async def test_honors_retry_after(monkeypatch):
@@ -39,7 +42,20 @@ async def test_honors_retry_after(monkeypatch):
 
     with pytest.raises(LLMError):
         await with_retry(op, attempts=2, base_delay=1.0)
-    assert sleeps == [7.0]  # one retry (last attempt propagates without sleeping)
+    assert len(sleeps) == 1  # one retry (last attempt propagates without sleeping)
+    assert 7.0 <= sleeps[0] <= 7.1  # retry-after wins over backoff, + jitter
+
+
+async def test_retry_after_capped(monkeypatch):
+    sleeps = []
+    _fake_sleep(monkeypatch, sleeps)
+
+    async def op():
+        raise LLMError("slow down", status_code=429, retryable=True, retry_after_seconds=3600.0)
+
+    with pytest.raises(LLMError):
+        await with_retry(op, attempts=2, base_delay=1.0)
+    assert sleeps[0] <= 60.1  # capped at MAX_RETRY_AFTER + jitter
 
 
 async def test_non_retryable_propagates_immediately(monkeypatch):

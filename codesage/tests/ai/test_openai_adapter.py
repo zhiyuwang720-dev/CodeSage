@@ -42,6 +42,31 @@ def test_message_conversion_tool_result_becomes_tool_role():
     assert payload["messages"][1] == {"role": "tool", "tool_call_id": "tu1", "content": "result text"}
 
 
+def test_message_conversion_merged_user_tool_result_plus_text():
+    """A merged user message [tool_result, text] keeps the text as a user message."""
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    )
+    adapter = OpenAICompatibleAdapter(ModelProfile(model="m", base_url=BASE), httpx.AsyncClient(transport=transport))
+
+    request = LLMRequest(
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    ContentBlock(type="tool_result", tool_use_id="tu1", content="out"),
+                    ContentBlock(type="text", text="then what?"),
+                ],
+            )
+        ],
+    )
+    messages = adapter._build_payload(request, stream=False)["messages"]
+    assert messages == [
+        {"role": "tool", "tool_call_id": "tu1", "content": "out"},
+        {"role": "user", "content": "then what?"},
+    ]
+
+
 def test_message_conversion_assistant_tool_use():
     transport = httpx.MockTransport(
         lambda req: httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})

@@ -59,7 +59,8 @@ def _dedup_concat(prev: list, new: list) -> list:
 def load_settings_file(path: Path) -> dict:
     """Read one settings file; missing/corrupt files are silently empty."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: strips the BOM that Notepad/PowerShell write by default.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}

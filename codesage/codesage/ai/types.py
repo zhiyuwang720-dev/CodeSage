@@ -123,5 +123,5 @@ class LLMError(Exception):
 
     @classmethod
     def classify(cls, status_code: int) -> bool:
-        """429 and 5xx are retryable; other 4xx are not."""
-        return status_code == 429 or status_code >= 500
+        """408/409/429 and 5xx are retryable; other 4xx are not."""
+        return status_code in (408, 409, 429) or status_code >= 500

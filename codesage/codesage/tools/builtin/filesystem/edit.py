@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ....config import atomic_write
 from ...base import Tool, ToolResult, ToolUseContext
-from ._common import resolve_path
+from ._common import ensure_read_freshness, record_written, resolve_path
 
 
 class EditTool(Tool):
@@ -26,6 +26,11 @@ class EditTool(Tool):
         path = resolve_path(ctx, str(input["file_path"]))
         if not path.is_file():
             return ToolResult(f"Error: {path} does not exist", is_error=True)
+        if path not in ctx.read_file_timestamps:
+            return ToolResult("Read the file first before editing", is_error=True)
+        stale = ensure_read_freshness(ctx, path)
+        if stale:
+            return ToolResult(stale, is_error=True)
         try:
             original = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -43,4 +48,5 @@ class EditTool(Tool):
             )
         updated = original.replace(old, new)
         atomic_write(path, updated)
+        record_written(ctx, path, updated)  # our own write refreshes the baseline
         return ToolResult(f"Edited {path} ({original.count(old)} replacement(s))")

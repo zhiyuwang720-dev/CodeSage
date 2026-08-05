@@ -66,3 +66,62 @@ async def test_validate_timeout_range(tmp_path):
     tool = BashTool()
     with pytest.raises(ToolError):
         tool.validate_input({"command": "ls", "timeout_ms": 600_001})
+
+
+@pytest.mark.asyncio
+async def test_rm_rf_protected_refused(tmp_path):
+    ctx = _ctx(tmp_path)
+    for cmd in ["rm -rf /", "rm -rf ~", "rm -fr /home", f"rm -rf {tmp_path}"]:
+        result = await BashTool().call({"command": cmd}, ctx).__anext__()
+        assert result.is_error, cmd
+        assert "refused" in result.content, cmd
+
+
+@pytest.mark.asyncio
+async def test_rm_rf_inside_cwd_allowed(tmp_path):
+    (tmp_path / "sub").mkdir()
+    result = await BashTool().call({"command": "rm -rf sub"}, _ctx(tmp_path)).__anext__()
+    assert not result.is_error
+    assert not (tmp_path / "sub").exists()
+
+
+@pytest.mark.asyncio
+async def test_data_loss_commands_refused(tmp_path):
+    ctx = _ctx(tmp_path)
+    for cmd in ["mkfs.ext4 /dev/sda", "mkfs /dev/sdb", "shred /etc/passwd", "dd if=/dev/zero of=/dev/sda"]:
+        result = await BashTool().call({"command": cmd}, ctx).__anext__()
+        assert result.is_error, cmd
+        assert "refused" in result.content, cmd
+    result = await BashTool().call({"command": "git reset --hard"}, ctx).__anext__()
+    assert result.is_error and "refused" in result.content
+    if sys.platform == "win32":
+        return  # cmd.exe has no dd; the benign-device exemption is POSIX-covered
+    # benign dd to /dev/null stays allowed
+    result = await BashTool().call({"command": "dd if=/dev/zero of=/dev/null bs=4 count=1 2>/dev/null"}, ctx).__anext__()
+    assert not result.is_error
+
+
+@pytest.mark.asyncio
+async def test_cd_outside_cwd_refused(tmp_path):
+    ctx = _ctx(tmp_path)
+    for cmd in ["cd /tmp && ls", "cd .. && ls", "cd ~", "cd -"]:
+        result = await BashTool().call({"command": cmd}, ctx).__anext__()
+        assert result.is_error, cmd
+        assert "cd outside" in result.content, cmd
+
+
+@pytest.mark.asyncio
+async def test_cd_inside_cwd_allowed(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "marker.txt").write_text("x")
+    ctx = _ctx(tmp_path)
+    result = await BashTool().call({"command": "cd sub && ls marker.txt"}, ctx).__anext__()
+    assert not result.is_error
+
+
+@pytest.mark.asyncio
+async def test_cd_restriction_skipped_in_user_bash_mode(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.command_source = "user_bash_mode"
+    result = await BashTool().call({"command": "cd /tmp && pwd"}, ctx).__anext__()
+    assert not result.is_error

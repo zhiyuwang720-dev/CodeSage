@@ -32,3 +32,13 @@ async def test_read_binary_detected(tmp_path):
     result = await ReadTool().call({"file_path": "bin.dat"}, _ctx(tmp_path)).__anext__()
     assert result.is_error
     assert "binary" in result.content
+
+
+@pytest.mark.asyncio
+async def test_read_output_capped_at_250kb(tmp_path):
+    f = tmp_path / "big.txt"
+    f.write_text("x" * 300_000)
+    result = await ReadTool().call({"file_path": "big.txt"}, _ctx(tmp_path)).__anext__()
+    assert not result.is_error
+    assert len(result.content) < 300_000
+    assert "offset/limit" in result.content

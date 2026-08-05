@@ -1,7 +1,9 @@
-"""Shared filesystem-tool helpers (path resolution, binary sniffing, decoding)."""
+"""Shared filesystem-tool helpers (path resolution, binary sniffing, decoding,
+read-freshness bookkeeping for the Edit/Write stale-file guard)."""
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from ...base import ToolUseContext
@@ -15,6 +17,46 @@ def resolve_path(ctx: ToolUseContext, path: str) -> Path:
     if not p.is_absolute():
         p = ctx.cwd / p
     return p.resolve()
+
+
+def record_read(ctx: ToolUseContext, path: Path, data: bytes) -> None:
+    """Remember path's mtime+hash so Edit/Write can detect off-band changes."""
+    try:
+        ctx.read_file_timestamps[path] = path.stat().st_mtime_ns
+    except OSError:
+        return
+    ctx.read_file_hashes[path] = hashlib.sha256(data).hexdigest()
+
+
+def record_written(ctx: ToolUseContext, path: Path, content: str) -> None:
+    """After our own successful write: update the read-state to what we wrote."""
+    data = content.encode("utf-8")
+    ctx.read_file_timestamps[path] = path.stat().st_mtime_ns
+    ctx.read_file_hashes[path] = hashlib.sha256(data).hexdigest()
+
+
+def ensure_read_freshness(ctx: ToolUseContext, path: Path) -> str | None:
+    """Guard against silent clobbering of externally changed files.
+
+    Only meaningful for paths previously Read (checked by the caller).
+    Returns None when fresh, or the error string for the tool result.
+    A pure mtime move (content identical — e.g. a touch) just refreshes.
+    """
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError as exc:
+        return f"Error reading {path}: {exc}"
+    if mtime_ns == ctx.read_file_timestamps.get(path):
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return f"Error reading {path}: {exc}"
+    digest = hashlib.sha256(data).hexdigest()
+    if digest == ctx.read_file_hashes.get(path):
+        ctx.read_file_timestamps[path] = mtime_ns  # touched, not changed
+        return None
+    return "File changed since Read; re-Read it"
 
 
 def is_binary(path: Path) -> bool:
