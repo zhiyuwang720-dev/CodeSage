@@ -22,3 +22,4 @@ build/
 # os
 .DS_Store
 Thumbs.db
+claude-code-main
