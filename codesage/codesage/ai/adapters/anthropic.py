@@ -37,7 +37,7 @@ class AnthropicAdapter(BaseAdapter):
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
         }
-        api_key = self.profile.api_key()
+        api_key = self.profile.get_api_key()
         if api_key:
             headers["x-api-key"] = api_key
         return headers

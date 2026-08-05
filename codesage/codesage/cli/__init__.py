@@ -155,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=system_prompt,
     )
     apply_tool_filter(loop, args.allowedTools, args.disallowedTools)
+    _warn_if_no_api_key(loop)
 
     if prompt:
         # single-shot: no UI for permission asks — denials go back to the model
@@ -187,6 +188,27 @@ def _print_history_summary(path: Path, root: Path, limit: int = 10) -> None:
     print(f"[resuming {path.stem}: {len(messages)} message(s), showing last {min(limit, len(messages))}]")
     for message in messages[-limit:]:
         render_message(message)
+
+
+def _warn_if_no_api_key(loop) -> None:
+    """Print a one-time setup hint when the main profile has no API key.
+
+    Without a key every call fails with an opaque provider error; the hint
+    points at the two supported configuration paths. Only fires when the key
+    is actually missing — configured setups stay silent.
+    """
+    try:
+        profile = loop.client.resolve_profile("main")
+    except Exception:
+        return
+    if profile.get_api_key():
+        return
+    print(
+        "[hint] 未配置模型 API key — 所有调用将失败。两种配置方式:\n"
+        "  1) 环境变量: CODESAGE_MODEL=... CODESAGE_BASE_URL=... CODESAGE_API_KEY_ENV=...\n"
+        "  2) 全局配置: ~/.codesage/config.json 的 model_profiles.main(api_key 或 api_key_env)",
+        file=sys.stderr,
+    )
 
 
 def _interactive_permission():

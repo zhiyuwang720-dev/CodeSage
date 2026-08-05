@@ -35,7 +35,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        api_key = self.profile.api_key()
+        api_key = self.profile.get_api_key()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers

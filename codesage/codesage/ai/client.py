@@ -32,14 +32,22 @@ DEFAULT_API_KEY_ENV = {"openai_compatible": "OPENAI_API_KEY", "anthropic": "ANTH
 
 
 class ModelProfile(BaseModel):
-    """One model configuration (stored under GlobalConfig.model_profiles)."""
+    """One model configuration (stored under GlobalConfig.model_profiles).
+
+    Prefer api_key_env (the key stays in the environment, never in config
+    files); api_key is a convenience for local single-user setups where the
+    config file is private (0600) and the user asked for it explicitly.
+    """
 
     provider: Literal["openai_compatible", "anthropic"] = "openai_compatible"
     model: str
     base_url: str | None = None
     api_key_env: str | None = None
+    api_key: str | None = None
 
-    def api_key(self) -> str | None:
+    def get_api_key(self) -> str | None:
+        if self.api_key:
+            return self.api_key
         env_name = self.api_key_env or DEFAULT_API_KEY_ENV[self.provider]
         return os.getenv(env_name)
 
