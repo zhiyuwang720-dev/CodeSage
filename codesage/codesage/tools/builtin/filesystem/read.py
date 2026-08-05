@@ -9,6 +9,13 @@ DEFAULT_READ_LINES = 2000
 MAX_READ_LINES = 20000
 MAX_OUTPUT_CHARS = 250_000
 
+#: returned instead of the full content when the same (path, offset, limit)
+#: is Read again with an unchanged mtime (claude-code borrow).
+READ_STUB = (
+    "(File unchanged since last Read; content omitted to save tokens — "
+    "re-Read with different offset/limit if needed)"
+)
+
 
 class ReadTool(Tool):
     name = "Read"
@@ -31,11 +38,19 @@ class ReadTool(Tool):
         path = resolve_path(ctx, str(input["file_path"]))
         if not path.is_file():
             return ToolResult(f"Error: {path} does not exist or is not a file", is_error=True)
-        if is_binary(path):
-            return ToolResult(f"Error: {path} appears to be a binary file; Read only handles text", is_error=True)
         offset = int(input.get("offset") or 0)
         limit = int(input.get("limit") or DEFAULT_READ_LINES)
         limit = min(max(limit, 1), MAX_READ_LINES)
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError as exc:
+            return ToolResult(f"Error reading {path}: {exc}", is_error=True)
+        key = (str(path), offset, limit)
+        cached = ctx.read_cache.get(key)
+        if cached is not None and cached[0] == mtime_ns:
+            return ToolResult(READ_STUB)  # unchanged since last Read; dedupe
+        if is_binary(path):
+            return ToolResult(f"Error: {path} appears to be a binary file; Read only handles text", is_error=True)
         try:
             data = path.read_bytes()
         except OSError as exc:
@@ -52,4 +67,5 @@ class ReadTool(Tool):
         out = numbered + suffix
         if len(out) > MAX_OUTPUT_CHARS:
             out = out[:MAX_OUTPUT_CHARS] + "\n...(output exceeds 250KB; use offset/limit to page through)"
+        ctx.read_cache[key] = (mtime_ns, out)
         return ToolResult(out)

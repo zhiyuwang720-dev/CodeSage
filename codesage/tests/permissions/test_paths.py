@@ -1,8 +1,12 @@
 """Write-protection path tests."""
 
+import os
+
+import pytest
+
 from pathlib import Path
 
-from codesage.permissions.paths import is_sensitive_path, is_write_protected
+from codesage.permissions.paths import is_sensitive_path, is_write_protected, resolve_candidates
 
 
 def test_git_dir_protected():
@@ -99,3 +103,44 @@ def test_ip_unc_share_protected():
 def test_device_prefix_paths_protected():
     assert is_write_protected(Path(r"\\.\C:\repo\x.txt"))
     assert is_write_protected(Path(r"\\?\C:\repo\x.txt"))
+
+
+# ---- CC-05: case-insensitive path comparison ----
+
+def test_case_insensitive_protected_paths():
+    """macOS/Windows are case-insensitive: .GIT / settings.LOCAL.json /
+    .SSH must be protected just like their lowercase spellings."""
+    assert is_write_protected(Path("/repo/.GIT/config"))
+    assert is_write_protected(Path("/repo/.Git/objects/x"))
+    assert is_write_protected(Path("/home/u/.SSH/id_rsa"))
+    assert is_write_protected(Path("/repo/settings.LOCAL.json"))
+    assert is_write_protected(Path("/home/u/.Bashrc"))
+    assert is_write_protected(Path("/repo/.VSCODE/settings.json"))
+    assert is_write_protected(Path("/repo/.Env"))
+    assert not is_write_protected(Path("/repo/GIT_README.md"))
+
+
+def test_case_insensitive_sensitive_reads():
+    assert is_sensitive_path(Path("/repo/.ENV"))
+    assert is_sensitive_path(Path("/repo/SETTINGS.LOCAL.JSON"))
+
+
+# ---- CC-06: symlink dual-path candidates ----
+
+def test_resolve_candidates_lexical_and_real(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks not permitted on this system")
+    target = link / "x.txt"
+    cands = resolve_candidates(target)
+    assert cands == [link / "x.txt", real / "x.txt"]
+
+
+def test_resolve_candidates_dedup_without_symlink(tmp_path):
+    cands = resolve_candidates(tmp_path / "x.txt")
+    assert len(cands) == 1
+    assert cands[0] == (tmp_path / "x.txt").resolve()

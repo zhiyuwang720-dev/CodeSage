@@ -63,6 +63,7 @@ class AgentLoop:
         cwd: Path | None = None,
         session: Session | None = None,
         settings: Any = None,  # phase-01 Settings for permission rules
+        session_permissions: dict | None = None,  # "this session only" rules (CC-07)
     ):
         self.client = client
         self.tools = tools
@@ -77,6 +78,10 @@ class AgentLoop:
         self.cwd = cwd or Path.cwd()
         self.session = session
         self.settings = settings
+        self.session_permissions = session_permissions
+        #: Termination reason of the last run(): "completed" | "max_turns" |
+        #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" (CC-10)
+        self.last_stop_reason: str | None = None
         self.abort = asyncio.Event()
         #: One ToolUseContext per loop: carries read-freshness state and the
         #: abort channel across tool calls (phase 03 read-first guard).
@@ -96,20 +101,20 @@ class AgentLoop:
         try:
             while True:
                 if turn >= self.max_turns:
-                    yield await self._finish(MAX_TURNS_TEXT)
+                    yield await self._stop("max_turns", MAX_TURNS_TEXT)
                     return
                 if self.max_budget_usd is not None and self.client.total_cost[0] >= self.max_budget_usd:
-                    yield await self._finish(MAX_BUDGET_TEXT)
+                    yield await self._stop("max_budget", MAX_BUDGET_TEXT)
                     return
                 if self.abort.is_set():
-                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 turn += 1
 
                 # LLM call (checkpoint 1: abort before and after)
                 assistant = await self._ask_model(messages)
                 if assistant is None:
-                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 yield assistant
                 await self._persist(assistant)
@@ -120,7 +125,7 @@ class AgentLoop:
                     if _is_thinking_only(assistant):
                         thinking_retries += 1
                         if thinking_retries >= THINKING_ONLY_MAX_RETRIES:
-                            yield await self._finish(THINKING_ONLY_GIVE_UP, meta=True)
+                            yield await self._stop("thinking_only_exhausted", THINKING_ONLY_GIVE_UP, meta=True)
                             return
                         # retry with a recovery nudge (counted separately, not as a turn)
                         recovery = user_message(THINKING_ONLY_RECOVERY)
@@ -129,11 +134,12 @@ class AgentLoop:
                         messages.append(recovery)
                         turn -= 1
                         continue
-                    return  # final answer — terminate
+                    self.last_stop_reason = "completed"  # final answer — terminate
+                    return
 
                 # execute tools (checkpoint 2: abort before the batch)
                 if self.abort.is_set():
-                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(tool_uses)
                 # one tool_result user message per tool, in tool_use order
@@ -154,6 +160,7 @@ class AgentLoop:
                     messages.append(tool_round)
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
+            self.last_stop_reason = "error"
             failed = assistant_message(
                 f"(provider error: {exc})",
                 is_error=True,
@@ -236,6 +243,7 @@ class AgentLoop:
             mode=self.mode,
             cwd=self.cwd,
             permissions=load_permission_rules(self.settings) if self.settings is not None else None,
+            session_permissions=self.session_permissions,
         )
         if decision.allowed:
             return None
@@ -243,6 +251,11 @@ class AgentLoop:
             if await self.request_permission(decision, item.tool, item.input):
                 return None
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
+
+    async def _stop(self, reason: str, text: str, *, meta: bool = False) -> SessionMessage:
+        """Termination point: record the stop reason, then emit the final message."""
+        self.last_stop_reason = reason
+        return await self._finish(text, meta=meta)
 
     async def _finish(self, text: str, *, meta: bool = False) -> SessionMessage:
         message = assistant_message(text, is_meta=meta)

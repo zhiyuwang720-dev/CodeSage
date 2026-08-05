@@ -38,6 +38,33 @@ def build_rule_string(tool_name: str, tool_input: dict[str, Any] | None) -> str:
     return tool_name
 
 
+def build_session_rule(tool_name: str, tool_input: dict[str, Any] | None) -> str:
+    """Same rule string as build_rule_string, but marked session-only: the
+    caller puts it in a SessionRuleStore, it is never persisted, and it dies
+    with the session."""
+    return build_rule_string(tool_name, tool_input)
+
+
+class SessionRuleStore:
+    """In-memory session grants (never persisted; dies with the session).
+
+    rules() output is directly usable as session_permissions — the engine
+    merges it after the settings rules, and `!rule` negations revoke them.
+    """
+
+    def __init__(self) -> None:
+        self._rules: dict[str, list[str]] = {"allow": [], "deny": [], "ask": []}
+
+    def allow(self, rule: str) -> None:
+        """Add an allow rule (idempotent)."""
+        if rule not in self._rules["allow"]:
+            self._rules["allow"].append(rule)
+
+    def rules(self) -> dict[str, list[str]]:
+        """{allow: [...], deny: [...], ask: [...]} — session_permissions shape."""
+        return {key: list(values) for key, values in self._rules.items()}
+
+
 def save_approval(local_settings_path: Path, tool_name: str, rule: str | None = None) -> None:
     """Append an allow rule to settings.local.json's permissions.allow.
 

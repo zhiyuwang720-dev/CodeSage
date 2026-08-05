@@ -28,6 +28,26 @@ async def test_base_call_wraps_run():
         assert result.content == "done"
 
 
+def test_undeclared_tool_defaults_to_not_concurrency_safe():
+    # fail-closed: only read-only tools may opt into parallel execution
+    class Dummy(Tool):
+        name = "Dummy"
+
+    assert Dummy().is_concurrency_safe is False
+
+
+def test_readonly_builtins_declare_concurrency_safe():
+    from codesage.tools.builtin.filesystem.ls import LSTool
+    from codesage.tools.builtin.filesystem.read import ReadTool
+    from codesage.tools.builtin.network.webfetch import WebFetchTool
+    from codesage.tools.builtin.search.glob import GlobTool
+    from codesage.tools.builtin.search.grep import GrepTool
+    from codesage.tools.builtin.system.task import TaskOutputTool
+
+    for tool in (LSTool(), ReadTool(), GlobTool(), GrepTool(), WebFetchTool(), TaskOutputTool()):
+        assert tool.is_concurrency_safe, tool.name
+
+
 def test_validate_input_raises_tool_error():
     from codesage.tools.builtin.shell.bash import BashTool
 

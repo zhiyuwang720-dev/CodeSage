@@ -1,8 +1,9 @@
 """CLI (phase 07): interactive REPL + single-shot mode. V1 acceptance entry.
 
-Exit codes: 0 success; 1 LLM error turn / USD budget exceeded / empty
-piped stdin / --print with no input / resume target missing / safe-mode
-root refusal / --system-prompt-file unreadable; 2 argparse usage errors.
+Exit codes: 0 success; 1 LLM error turn / USD budget exceeded / max turns
+exceeded / empty piped stdin / --print with no input / resume target
+missing / safe-mode root refusal / --system-prompt-file unreadable; 2
+argparse usage errors.
 
 单轮/headless 模式(--print/--headless,或 stdout 非 tty 且输入存在)无权限
 UI:ask 决策一律拒绝并回传模型(可用 --mode yolo + --allowedTools 精确放行)。
@@ -27,7 +28,7 @@ from ..core import Session, find_session, most_recent_session
 from .assemble import apply_tool_filter, build_loop, session_root
 from .permission_prompt import request_permission
 from .render import render_message
-from .repl import repl_loop, run_single_turn
+from .repl import _install_single_shot_sigint, repl_loop, run_single_turn
 
 
 def _configure_logging(verbose: bool, debug: bool) -> None:
@@ -157,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if prompt:
         # single-shot: no UI for permission asks — denials go back to the model
+        _install_single_shot_sigint(loop)  # CC-11: Ctrl+C aborts + exits 130
         summary = asyncio.run(
             run_single_turn(
                 loop,
@@ -169,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(summary.to_dict(), ensure_ascii=False))
         if summary.budget_exceeded:
             print("Error: Exceeded USD budget", file=sys.stderr)
+            return 1
+        if summary.max_turns_exceeded:
+            print("Error: Exceeded max turns", file=sys.stderr)
             return 1
         return 1 if summary.is_error else 0
     asyncio.run(repl_loop(loop, cwd=cwd, show_thinking=args.show_thinking))

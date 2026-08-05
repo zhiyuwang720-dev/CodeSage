@@ -9,7 +9,13 @@ from .modes import (
     PermissionMode,
     normalize_mode,
 )
-from .store import build_rule_string, load_permission_rules, save_approval
+from .store import (
+    SessionRuleStore,
+    build_rule_string,
+    build_session_rule,
+    load_permission_rules,
+    save_approval,
+)
 
 __all__ = [
     "JsonlAuditSink",
@@ -20,8 +26,10 @@ __all__ = [
     "READ_ONLY_TOOLS",
     "REQUIRES_EXPLICIT_APPROVAL",
     "SYSTEM_TOOLS",
+    "SessionRuleStore",
     "ToolAuditEvent",
     "build_rule_string",
+    "build_session_rule",
     "load_permission_rules",
     "normalize_mode",
     "save_approval",

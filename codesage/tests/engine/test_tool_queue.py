@@ -140,6 +140,77 @@ async def test_permission_check_allow_passthrough():
     assert not results[0].result.is_error
 
 
+class QuietTool(Tool):
+    name = "Quiet"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult("")
+
+
+class EmptyListTool(Tool):
+    name = "NoBlocks"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult([])
+
+
+async def test_empty_result_marked_for_model():
+    """Empty str content becomes an explicit no-output marker (CC-03)."""
+    results = await ToolUseQueue(_schedule([QuietTool()])).run()
+    assert results[0].result.content == "(Quiet completed with no output)"
+    assert not results[0].result.is_error
+
+
+async def test_empty_list_result_marked_for_model():
+    results = await ToolUseQueue(_schedule([EmptyListTool()])).run()
+    assert results[0].result.content == "(NoBlocks completed with no output)"
+
+
+class BigTextTool(Tool):
+    name = "BigText"
+    is_concurrency_safe = True
+
+    def __init__(self, text):
+        self._text = text
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult(self._text)
+
+
+async def test_spill_same_tool_use_id_reuses_path():
+    """Same tool_use_id: identical content reuses the file, different content
+    overwrites the same path — path stays stable (CC-04)."""
+    ctx = ToolUseContext(cwd=Path("."))
+    content_a = "y" * (MAX_TOOL_RESULT_CHARS + 1)
+    content_b = "z" * (MAX_TOOL_RESULT_CHARS + 1)
+
+    async def spill(tid, text):
+        queue = ToolUseQueue([ScheduledTool(tool_use_id=tid, tool=BigTextTool(text), input={}, context=ctx)])
+        results = await queue.run()
+        path_part = results[0].result.content[len("(result saved to "):].split(": ", 1)[0]
+        return Path(path_part)
+
+    p1 = await spill("cc04-replay", content_a)
+    p2 = await spill("cc04-replay", content_a)
+    assert p2 == p1  # same path for same id + same content
+    assert p2.read_text(encoding="utf-8") == content_a
+
+    p3 = await spill("cc04-replay", content_b)
+    assert p3 == p1  # path stays stable across content changes
+    assert p3.read_text(encoding="utf-8") == content_b  # overwritten
+
+
 async def test_abort_event_skips_unstarted_siblings():
     """Abort set mid-batch: not-yet-started siblings never run, get interrupted."""
     called = []

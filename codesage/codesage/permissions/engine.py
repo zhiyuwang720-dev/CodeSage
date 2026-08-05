@@ -33,7 +33,7 @@ from .modes import (
     PermissionMode,
     normalize_mode,
 )
-from .paths import is_sensitive_path, is_write_protected
+from .paths import is_sensitive_path, is_write_protected, resolve_candidates
 from .rules import FILE_TOOLS, bash_rules_match, extract_rules, match_first
 
 
@@ -74,7 +74,8 @@ class PermissionEngine:
         except OSError:
             working_dirs = [cwd.resolve()]
         merged = self._merge_rules(permissions, session_permissions)
-        target_path = self._target_path(tool_name, tool_input, cwd)
+        candidates = self._target_candidates(tool_name, tool_input, cwd)
+        target_path = candidates[-1] if candidates else None
 
         # 1. system whitelist — internal harness tools always allowed
         if tool_name in SYSTEM_TOOLS:
@@ -98,12 +99,12 @@ class PermissionEngine:
         # any denied subcommand denies the compound, only an all-allowed
         # compound passes, mixed (unruled subcommand) falls through to ask.
         command_text = str(tool_input.get("command") or "")
-        denied = match_first(merged["deny"], tool_name, target_path)
+        denied = self._match_rules(merged["deny"], tool_name, candidates)
         if not denied and tool_name == "Bash":
             denied = bash_rules_match(merged["deny"], command_text, require_all=False)
         if denied:
             return self._decide(False, "deny", denied, f"denied by rule: {denied}", tool_name, tool_input, mode_enum)
-        asked = match_first(merged["ask"], tool_name, target_path)
+        asked = self._match_rules(merged["ask"], tool_name, candidates)
         if not asked and tool_name == "Bash":
             asked = bash_rules_match(merged["ask"], command_text, require_all=False)
         if asked:
@@ -117,7 +118,7 @@ class PermissionEngine:
                 requires_explicit_approval=True,
             )
 
-        allowed = match_first(merged["allow"], tool_name, target_path)
+        allowed = self._match_rules(merged["allow"], tool_name, candidates)
         if not allowed and tool_name == "Bash":
             allowed = bash_rules_match(merged["allow"], command_text, require_all=True)
         if allowed:
@@ -209,16 +210,36 @@ class PermissionEngine:
         return any(target.is_relative_to(wd) for wd in working_dirs)
 
     @staticmethod
-    def _target_path(tool_name: str, tool_input: dict, cwd: Path) -> Path | None:
+    def _target_candidates(tool_name: str, tool_input: dict, cwd: Path) -> list[Path]:
+        """[lexical absolute, symlink-expanded real] path candidates, or []
+        for non-file tools. Deny/ask/allow rules match either candidate, so
+        a deny on /tmp/link/** still holds when /tmp/link → ~/.ssh."""
         if tool_name not in FILE_TOOLS:
-            return None
+            return []
         raw = tool_input.get("file_path") or tool_input.get("path")
         if not raw:
-            return None
+            return []
         p = Path(str(raw))
         if not p.is_absolute():
             p = cwd / p
-        return p.resolve()
+        return resolve_candidates(p)
+
+    @staticmethod
+    def _target_path(tool_name: str, tool_input: dict, cwd: Path) -> Path | None:
+        """Main (symlink-expanded) target path — write protection, working-dir
+        and sensitive checks stay on the real path (never bypassed by links)."""
+        candidates = PermissionEngine._target_candidates(tool_name, tool_input, cwd)
+        return candidates[-1] if candidates else None
+
+    @staticmethod
+    def _match_rules(rules: list[Any], tool_name: str, candidates: list[Path]) -> str | None:
+        """First matching rule across every path candidate (lexical + real);
+        the final None pass keeps bare tool-name rules matching non-file tools."""
+        for cand in (*candidates, None):
+            hit = match_first(rules, tool_name, cand)
+            if hit:
+                return hit
+        return None
 
     @staticmethod
     def _summarize(tool_input: dict) -> dict[str, Any]:

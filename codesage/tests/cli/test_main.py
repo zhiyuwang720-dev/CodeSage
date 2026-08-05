@@ -1,5 +1,6 @@
 """CLI main() tests: piped stdin, resume, --safe/--allowedTools, exit codes (offline)."""
 
+import asyncio
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from codesage.cli import main
+from codesage.cli import repl as repl_module
 from codesage.cli.repl import _handle_slash_command
 from codesage.config import paths
 from codesage.core import Session, assistant_message, user_message
@@ -154,6 +156,38 @@ def test_budget_exceeded_exits_1(tmp_path, monkeypatch, capsys):
     assert "budget" in capsys.readouterr().err.lower()
 
 
+def test_budget_stop_reason_exits_1_no_sniffing(tmp_path, monkeypatch, capsys):
+    """CC-10: structured max_budget stop reason wins over text content."""
+    _patch_config_dir(monkeypatch, tmp_path)
+
+    class ReasonLoop(FakeLoop):
+        last_stop_reason = "max_budget"
+
+        async def run(self, user_input):
+            yield assistant_message("all done")  # no 'budget' in the text
+
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: ReasonLoop())
+
+    assert main(["--max-budget-usd", "0.01", "hi"]) == 1
+    assert "budget" in capsys.readouterr().err.lower()
+
+
+def test_max_turns_stop_reason_exits_1(tmp_path, monkeypatch, capsys):
+    """CC-10: structured max_turns stop reason → stderr note + exit 1."""
+    _patch_config_dir(monkeypatch, tmp_path)
+
+    class TurnsLoop(FakeLoop):
+        last_stop_reason = "max_turns"
+
+        async def run(self, user_input):
+            yield assistant_message("Stopped: maximum turn count reached.")
+
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: TurnsLoop())
+
+    assert main(["--max-turns", "1", "hi"]) == 1
+    assert "turns" in capsys.readouterr().err.lower()
+
+
 # ---- 1d. --output-format json (C3) ----
 
 def test_output_format_json_emits_summary(tmp_path, monkeypatch, capsys):
@@ -172,6 +206,7 @@ def test_output_format_json_emits_summary(tmp_path, monkeypatch, capsys):
         "total_cost_usd",
         "is_error",
         "duration_seconds",
+        "max_turns_exceeded",
     }
     assert data["result"] == "ok"
     assert data["is_error"] is False
@@ -436,3 +471,54 @@ async def test_show_thinking_toggle():
     assert state["show_thinking"] is True
     assert await _handle_slash_command(loop, "/show-thinking", state) is False
     assert state["show_thinking"] is False
+
+
+# ---- 5. graceful shutdown (CC-11) ----
+
+class _AbortLoop:
+    def __init__(self):
+        self.abort = asyncio.Event()
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_aborts_and_exits_with_code(monkeypatch):
+    monkeypatch.setattr(repl_module, "_shutdown_started", False)
+    exited = []
+    monkeypatch.setattr(repl_module.sys, "exit", lambda code: exited.append(code))
+    loop = _AbortLoop()
+
+    await repl_module.graceful_shutdown(loop, 130)
+
+    assert loop.abort.is_set()  # running turn/tools get aborted
+    assert exited == [130]  # exits with the requested code
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_idempotent(monkeypatch, capsys):
+    monkeypatch.setattr(repl_module, "_shutdown_started", False)
+    exited = []
+    monkeypatch.setattr(repl_module.sys, "exit", lambda code: exited.append(code))
+    loop = _AbortLoop()
+
+    await repl_module.graceful_shutdown(loop, 130)
+    await repl_module.graceful_shutdown(loop, 130)  # second call: no-op
+
+    assert exited == [130]  # cleanup ran once
+    assert capsys.readouterr().out.count("bye") == 1
+
+
+@pytest.mark.asyncio
+async def test_signal_first_aborts_second_force_exits(monkeypatch):
+    monkeypatch.setattr(repl_module, "_shutdown_started", False)
+    exited = []
+    monkeypatch.setattr(repl_module.sys, "exit", lambda code: exited.append(code))
+    loop = _AbortLoop()
+
+    handler = repl_module._make_signal_handler(loop)
+    handler(None, None)  # first signal: abort the running turn
+    assert loop.abort.is_set()
+    assert exited == []  # graceful exit scheduled, not forced
+
+    handler(None, None)  # second signal: force exit 130
+    assert exited == [130]
+    await asyncio.sleep(0)  # drain the scheduled graceful_shutdown task

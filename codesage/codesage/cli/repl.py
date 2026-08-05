@@ -7,6 +7,7 @@ ask decisions are denied (safe default).
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import sys
 import time
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..engine import AgentLoop
+from .commands import find_command
 from .render import CYAN, RESET, _c, render_message
 
 
@@ -29,6 +31,7 @@ class RunSummary:
     is_error: bool
     duration_seconds: float
     budget_exceeded: bool = False
+    max_turns_exceeded: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -39,14 +42,8 @@ class RunSummary:
             "total_cost_usd": self.total_cost_usd,
             "is_error": self.is_error,
             "duration_seconds": self.duration_seconds,
+            "max_turns_exceeded": self.max_turns_exceeded,
         }
-
-HELP_TEXT = """Commands:
-  /mode <plan|default|yolo>   switch permission mode
-  /show-thinking              toggle thinking output
-  /help                       this help
-  /quit                       exit
-  (Ctrl+C once: interrupt the running turn; twice: exit)"""
 
 
 async def run_single_turn(
@@ -60,7 +57,8 @@ async def run_single_turn(
     """One user input, rendered (also used by acceptance tests).
 
     Returns a RunSummary: is_error mirrors the old bool (exit code 1),
-    budget_exceeded flags the max-budget stop message (exit code 1).
+    budget_exceeded/max_turns_exceeded flag the engine's structured stop
+    reason (exit code 1).
     """
     target = out or sys.stdout
     started = time.monotonic()
@@ -84,11 +82,18 @@ async def run_single_turn(
             if text:
                 last_text = text
     client = getattr(loop, "client", None)
-    budget_exceeded = "budget" in last_text.lower() or (
-        getattr(loop, "max_budget_usd", None) is not None
-        and getattr(client, "total_cost", None) is not None
-        and client.total_cost[0] >= loop.max_budget_usd
-    )
+    # CC-10: prefer the engine's structured stop reason over text sniffing.
+    stop_reason = getattr(loop, "last_stop_reason", None)
+    budget_exceeded = stop_reason == "max_budget"
+    max_turns_exceeded = stop_reason == "max_turns"
+    if stop_reason is None:
+        # AgentLoop.last_stop_reason not landed yet — legacy fallback: text
+        # sniff + cost check (remove once the engine sets the reason).
+        budget_exceeded = "budget" in last_text.lower() or (
+            getattr(loop, "max_budget_usd", None) is not None
+            and getattr(client, "total_cost", None) is not None
+            and client.total_cost[0] >= loop.max_budget_usd
+        )
     return RunSummary(
         session_id=loop.session.path.stem if getattr(loop, "session", None) is not None else "",
         result=last_text,
@@ -98,6 +103,7 @@ async def run_single_turn(
         is_error=has_error,
         duration_seconds=time.monotonic() - started,
         budget_exceeded=budget_exceeded,
+        max_turns_exceeded=max_turns_exceeded,
     )
 
 
@@ -109,7 +115,8 @@ async def repl_loop(
 ) -> None:
     print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt)", CYAN))
     _install_signal_handlers(loop)
-    state = {"show_thinking": show_thinking}  # /show-thinking toggles this live
+    # /show-thinking toggles the flag; /mode writes loop.mode via "loop".
+    state = {"show_thinking": show_thinking, "loop": loop}
 
     while True:
         try:
@@ -129,25 +136,15 @@ async def repl_loop(
 
 
 async def _handle_slash_command(loop: AgentLoop, line: str, state: dict) -> bool:
-    """Handle one slash command; *state* carries mutable REPL flags. True = exit REPL."""
-    parts = line.split(maxsplit=1)
-    cmd = parts[0].lower()
-    arg = parts[1] if len(parts) > 1 else ""
-    if cmd == "/quit":
-        print("bye")
-        return True
-    if cmd == "/help":
-        print(HELP_TEXT)
-    elif cmd == "/mode":
-        if arg in ("plan", "default", "yolo"):
-            loop.mode = arg
-            print(f"permission mode -> {arg}")
-        else:
-            print("usage: /mode plan|default|yolo")
-    elif cmd == "/show-thinking":
-        state["show_thinking"] = not state["show_thinking"]
-        print(f"show-thinking -> {state['show_thinking']}")
-    return False
+    """Handle one slash command via the CC-09 registry; *state* carries REPL
+    flags ({"show_thinking", "loop"}). True = exit the REPL."""
+    parts = line.strip().split(maxsplit=1)
+    cmd = find_command(parts[0])
+    if cmd is None:
+        print(f"unknown command: {parts[0]} (try /help)")
+        return False
+    args = parts[1].split() if len(parts) > 1 else []
+    return cmd.handler(args, state)
 
 
 def _prompt_mark() -> str:
@@ -160,16 +157,67 @@ def _prompt_mark() -> str:
     return "❯"
 
 
-def _install_signal_handlers(loop: AgentLoop) -> None:
-    """First SIGINT/SIGTERM aborts the running turn; a second exits 130."""
+#: Idempotency guard for graceful_shutdown — one cleanup per process.
+_shutdown_started = False
+
+
+async def graceful_shutdown(loop: AgentLoop, code: int = 130) -> None:
+    """CC-11: abort the running turn and exit *code*. Idempotent; cleanup has
+    a 5s budget — on timeout the process is force-exited (failsafe)."""
+    global _shutdown_started
+    if _shutdown_started:
+        return
+    _shutdown_started = True
+    loop.abort.set()  # running tools observe this at the next checkpoint
+
+    async def _cleanup() -> None:
+        # Session appends are fsync'd per message — nothing left to flush;
+        # aborting in-flight work is done by loop.abort above.
+        print("\nbye")
+
+    try:
+        await asyncio.wait_for(_cleanup(), timeout=5)
+    except asyncio.TimeoutError:
+        os._exit(code)  # failsafe: cleanup budget exhausted — force exit
+    sys.exit(code)
+
+
+def _make_signal_handler(loop: AgentLoop):
+    """First signal: abort the running turn + graceful exit; second: force exit 130."""
 
     def on_signal(signum, frame):
-        if loop.abort.is_set():
-            sys.exit(130)
-        loop.abort.set()
+        if loop.abort.is_set() or _shutdown_started:
+            sys.exit(130)  # second signal (or already shutting down): force exit
+        loop.abort.set()  # first: abort the running turn
+        try:
+            asyncio.get_event_loop().create_task(graceful_shutdown(loop, 130))
+        except RuntimeError:
+            sys.exit(130)  # no running event loop — nothing left to clean
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    return on_signal
+
+
+def _install_signal_handlers(loop: AgentLoop) -> None:
+    """SIGINT/SIGTERM/SIGBREAK(win32): first aborts + graceful exit, second exits 130."""
+    on_signal = _make_signal_handler(loop)
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
+        sigs.append(signal.SIGBREAK)
+    for sig in sigs:
         try:
             signal.signal(sig, on_signal)
         except (ValueError, OSError):
             pass  # not in main thread / unsupported platform — best effort
+
+
+def _install_single_shot_sigint(loop: AgentLoop) -> None:
+    """Single-shot mode: SIGINT aborts the turn and exits 130 directly."""
+
+    def on_sigint(signum, frame):
+        loop.abort.set()
+        sys.exit(130)
+
+    try:
+        signal.signal(signal.SIGINT, on_sigint)
+    except (ValueError, OSError):
+        pass  # not in main thread / unsupported platform — best effort

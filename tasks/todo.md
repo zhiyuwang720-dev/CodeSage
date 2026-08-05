@@ -62,5 +62,41 @@
 
 ## 收尾
 
-- [ ] V1 验收(07 完成时)
+- [x] V1 验收(07 完成时)✅ 2026-08-05 真实 API 通过
 - [ ] 最终回归 + 项目 README(19 完成后)
+
+## claude-code-main 借鉴任务(2026-08-05 对比新增)
+
+> 5 代理对照 claude-code-main(38 万行)输出借鉴清单。原则:「每个错误都有恢复路径、每个恢复路径都有熔断、每个决定都幂等可重放」。
+
+### 立即做(小改动,独立小 PR)
+
+- [ ] **CC-01 工具契约 fail-closed**:`is_concurrency_safe` 默认 False(现默认 True,方向反了——忘了声明的新工具会并行执行);只读工具显式 True
+- [ ] **CC-02 Read 去重 stub**:按 path+offset+limit 缓存已读内容+mtime,重复读返回 stub(官方数据 ~18% Read 是重复,省 token)
+- [ ] **CC-03 空工具结果标记**:空 content 注入 `(toolName completed with no output)`(防 `\n\nHuman:` stop 序列误触发;现只处理 None)
+- [ ] **CC-04 幂等 spill**:工具结果落盘路径按 tool_use_id 确定性生成(现每次 mkdtemp 新路径,打破 prompt cache 前缀)
+- [ ] **CC-05 权限大小写归一化**:路径比较全平台强制小写(`.cLauDe` 绕过写保护,安全补丁级)
+- [ ] **CC-06 symlink 双路径检查**:`resolve_candidates` 补 realpath 候选(现只查最终 resolve 一次,可穿透)
+- [ ] **CC-07 session 规则接线**:loop `_permission_check` 传 `session_permissions`(现死参数,「仅本次会话允许」不可用)+ 内存态
+- [ ] **CC-08 Bash 注入清单补 `=cmd`**:`=curl evil.com` 可绕过 `Bash(curl:*)` 规则
+- [ ] **CC-09 斜杠命令注册表**:命令即数据对象 + 注册表(现 if/elif 链,4 个硬编码命令)
+- [ ] **CC-10 错误语义化**:budget_exceeded 等用结构化结果(现 `"budget" in last_text` 字符串嗅探)
+- [ ] **CC-11 优雅退出 failsafe**:幂等守卫 + failsafe 定时器 + 先 flush 会话再清理(现 13 行裸处理)
+
+### 阶段 08(context)增强
+
+- [ ] **CC-12 context 改 reminder 注入**:context 从 system prompt 挪到请求时 system-reminder 用户消息(system 字节稳定利于 prompt cache,可中途追加;`is_meta` 已备好)
+- [ ] **CC-13 上下文 memoize + 失效**:每会话组装一次,按 AGENTS.md mtime/会话边界失效(现每轮重建,git status 类子进程每轮跑)
+- [ ] **CC-14 git status 快照**(可选层):branch + 最近提交 + status 截断,标注「快照不更新」
+
+### 新阶段(建议插入路线图)
+
+- [ ] **CC-15 错误恢复**(loop 完善):可恢复错误先扣留(413/max_output_tokens)→ 恢复阶梯(compact→升级重试)→ 防死循环闸;显式轮次状态对象 + transition reason(现任何 LLMError 直接终止,零恢复)
+- [ ] **CC-16 会话 UX**:typed-entry JSONL 元数据(标题/标签与消息共存,resume 身份);粘贴引用化(paste-cache,>1KB 哈希外置);首条有意义 prompt 提取标题
+- [ ] **CC-17 记忆系统(memdir 式)**:索引 MEMORY.md 常驻 + 主题文件按需取 + frontmatter 四型(user/feedback/project/reference)+ 新鲜度警示;文件方案而非 DB
+
+### 既有阶段需求补充
+
+- [ ] **compact(10)**:熔断器(连续 3 次失败停止重试)+ 多级阈值(硬阻塞预留手动 /compact 空间)+ boundary 消息模式
+- [ ] **Bash 安全(16)**:denial-tracking(连续 3 次/累计 20 次拒绝回退人工)+ classifier 不可用 iron-gate fail-closed(照抄 CC 整套)
+- [ ] **hooks(09)**:钩子先于权限引擎(deny 优先/allow 短路/updatedInput 透传)+ safetyCheck bypass-免疫位

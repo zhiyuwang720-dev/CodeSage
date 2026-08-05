@@ -94,3 +94,67 @@ async def test_mode_yolo_still_requires_explicit_approval(tmp_path, monkeypatch)
     loop = _mock_loop(tmp_path, script, mode="yolo", monkeypatch=monkeypatch)
     out = await _run(loop, "run echo")
     assert "Permission denied" in out
+
+
+# ---- CC-10: structured stop reason (AgentLoop.last_stop_reason) ----
+
+@pytest.mark.asyncio
+async def test_stop_reason_max_budget_sets_flag(tmp_path, monkeypatch):
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [StreamEvent(type="text_delta", text="all done"), StreamEvent(type="done")]],
+        monkeypatch=monkeypatch,
+    )
+    loop.max_budget_usd = 0.0  # client cost starts at 0.0 → budget hit at loop top
+    s = await run_single_turn(loop, "hi", render=False)
+    assert loop.last_stop_reason == "max_budget"
+    assert s.budget_exceeded is True
+    assert s.max_turns_exceeded is False
+
+
+@pytest.mark.asyncio
+async def test_stop_reason_max_turns_sets_flag(tmp_path, monkeypatch):
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [
+            StreamEvent(type="tool_use_start", tool_use_id="t1", tool_name="Bash"),
+            StreamEvent(type="tool_use_delta", input_json_delta='{"command": "ls"}'),
+            StreamEvent(type="done", stop_reason="tool_use"),
+        ]],
+        monkeypatch=monkeypatch,
+    )
+    loop.max_turns = 1  # turn 0 runs; the loop-top check after it stops the loop
+    s = await run_single_turn(loop, "hi", render=False)
+    assert loop.last_stop_reason == "max_turns"
+    assert s.max_turns_exceeded is True
+    assert s.budget_exceeded is False
+
+
+@pytest.mark.asyncio
+async def test_stop_reason_completed_no_flags(tmp_path, monkeypatch):
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [StreamEvent(type="text_delta", text="finished"), StreamEvent(type="done")]],
+        monkeypatch=monkeypatch,
+    )
+    s = await run_single_turn(loop, "hi", render=False)
+    assert loop.last_stop_reason == "completed"
+    assert s.budget_exceeded is False
+    assert s.max_turns_exceeded is False
+
+
+@pytest.mark.asyncio
+async def test_no_stop_reason_falls_back_to_text_sniff():
+    """Loop without last_stop_reason (pre-landing/foreign fakes): legacy sniff."""
+    from codesage.core import assistant_message
+
+    class PlainLoop:
+        client = None
+        session = None
+        max_budget_usd = None
+
+        async def run(self, user_input):
+            yield assistant_message("Stopped: maximum budget reached.")
+
+    s = await run_single_turn(PlainLoop(), "hi", render=False)
+    assert s.budget_exceeded is True

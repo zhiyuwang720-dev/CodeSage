@@ -33,6 +33,9 @@ class ToolUseContext:
     #: against these so external changes are never silently overwritten.
     read_file_timestamps: dict[str, float] = field(default_factory=dict)
     read_file_hashes: dict[str, str] = field(default_factory=dict)
+    #: (path, offset, limit) -> (mtime_ns, output): a same-args re-Read with
+    #: unchanged mtime returns a stub instead of resending the whole content.
+    read_cache: dict[tuple[str, int, int], tuple[int, str]] = field(default_factory=dict)
     #: set by the engine to abort a running tool (Bash kills its process tree).
     abort_event: asyncio.Event | None = None
 
@@ -65,7 +68,8 @@ class Tool:
     name: str = ""
     description: str = ""
     input_schema: dict[str, Any] = {"type": "object", "properties": {}}
-    is_concurrency_safe: bool = True  # read-only tools run in parallel (phase 06)
+    #: fail-closed: only read-only tools explicitly opt into parallel execution.
+    is_concurrency_safe: bool = False
     user_facing_name: str | None = None
 
     def spec(self) -> ToolSpec:

@@ -1,5 +1,7 @@
 """Permission engine decision-chain matrix tests."""
 
+import os
+
 import pytest
 
 from pathlib import Path
@@ -156,6 +158,40 @@ def test_path_deny_rule_for_file_tool(tmp_path):
         tool_name="Write",
         tool_input={"file_path": str(target), "content": "x"},
         permissions={"deny": [str(target)]},
+        cwd=tmp_path,
+    )
+    assert d.mode == "deny"
+
+
+# ---- CC-06: rules match the lexical path too (pre-resolution) ----
+
+def test_deny_rule_matches_lexical_dotdot_path(tmp_path):
+    """A deny rule on the unexpanded spelling (.. segments intact) hits the
+    lexical candidate even though the real path collapses elsewhere."""
+    lexical = str(tmp_path / "sub" / ".." / "secret.txt")
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read",
+        tool_input={"file_path": lexical},
+        permissions={"deny": [lexical]},
+        cwd=tmp_path,
+    )
+    assert d.mode == "deny"
+
+
+def test_deny_rule_matches_symlink_lexical_path(tmp_path):
+    """/tmp/link → ~/.ssh/config: a deny on the link spelling must still hit —
+    the resolved realpath would never match the lexical rule."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks not permitted on this system")
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read",
+        tool_input={"file_path": str(link / "config")},
+        permissions={"deny": [str(link / "**")]},
         cwd=tmp_path,
     )
     assert d.mode == "deny"

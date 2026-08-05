@@ -153,6 +153,12 @@ def analyze_bash_command(
     has_write = False
 
     for toks in tokenized:
+        # `=cmd` expansion (zsh: `=curl evil.com` runs curl) — a token whose
+        # very first character is `=` with content after it. FOO=bar has the
+        # `=` mid-token and does not hit.
+        if any(tok.startswith("=") and len(tok) > 1 for tok in toks):
+            return BashAnalysis("ask", "command contains a =command expansion")
+
         # rm/rmdir deny protection + write-target working-dir checks.
         for verb, operands in _write_targets(toks):
             has_write = True

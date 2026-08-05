@@ -5,7 +5,14 @@ import os
 
 import pytest
 
-from codesage.permissions.store import build_rule_string, load_permission_rules, save_approval
+from codesage.permissions import PermissionEngine
+from codesage.permissions.store import (
+    SessionRuleStore,
+    build_rule_string,
+    build_session_rule,
+    load_permission_rules,
+    save_approval,
+)
 
 
 def test_save_approval_creates_file(tmp_path):
@@ -83,3 +90,34 @@ def test_save_approval_through_symlink_keeps_link(tmp_path):
     assert link.is_symlink()
     assert os.path.realpath(link) == os.path.realpath(real)
     assert json.loads(real.read_text(encoding="utf-8"))["permissions"]["allow"] == ["Bash"]
+
+
+# ---- CC-07: session rules (in-memory, never persisted) ----
+
+def test_build_session_rule_matches_build_rule_string():
+    assert build_session_rule("Bash", {"command": "git status"}) == "Bash(git status)"
+    assert build_session_rule("Edit", {"file_path": "/repo/x.py"}) == "Edit(/repo/**)"
+    assert build_session_rule("Read", None) == "Read"
+
+
+def test_session_rule_store_roundtrip():
+    store = SessionRuleStore()
+    assert store.rules() == {"allow": [], "deny": [], "ask": []}
+    store.allow("Bash(git status)")
+    store.allow("Bash(git status)")  # idempotent
+    store.allow("Read")
+    assert store.rules() == {"allow": ["Bash(git status)", "Read"], "deny": [], "ask": []}
+    # the returned dict is a copy — mutating it must not corrupt the store
+    store.rules()["allow"].append("mutate")
+    assert store.rules()["allow"] == ["Bash(git status)", "Read"]
+
+
+def test_session_rule_store_feeds_engine(tmp_path):
+    """rules() output plugs straight into session_permissions (loop wiring)."""
+    store = SessionRuleStore()
+    store.allow("Bash")
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "ls"},
+        session_permissions=store.rules(), cwd=tmp_path,
+    )
+    assert d.allowed and d.mode == "allow"

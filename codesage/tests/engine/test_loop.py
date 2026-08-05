@@ -253,6 +253,44 @@ async def test_session_persistence(tmp_path):
     assert len(session.load()) == 2  # user + assistant
 
 
+async def test_session_permissions_deny_bash():
+    """Session-scoped deny rules reach the permission engine (CC-07)."""
+    from codesage.tools.builtin.shell.bash import BashTool
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t1", '{"command": "ls"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[BashTool()], session_permissions={"deny": ["Bash"]})
+    messages = await _collect(loop)
+    assert messages[2].content[0].is_error
+    assert "Permission denied" in str(messages[2].content[0].content)
+
+
+async def test_last_stop_reason_completed():
+    llm = FakeLLM([lambda i: text_event("hello")])
+    loop = _loop(llm)
+    await _collect(loop)
+    assert loop.last_stop_reason == "completed"
+
+
+async def test_last_stop_reason_max_turns():
+    llm = FakeLLM([lambda i: tool_use_event("Echo", f"t{i}", '{"text": "x"}')])
+    loop = _loop(llm, max_turns=3)
+    await _collect(loop)
+    assert loop.last_stop_reason == "max_turns"
+
+
+async def test_last_stop_reason_interrupted():
+    llm = FakeLLM([lambda i: tool_use_event("Echo", f"t{i}", '{"text": "x"}')])
+    loop = _loop(llm)
+    loop.abort.set()
+    await _collect(loop)
+    assert loop.last_stop_reason == "interrupted"
+
+
 async def test_ask_approved_via_callback():
     approvals = []
 
