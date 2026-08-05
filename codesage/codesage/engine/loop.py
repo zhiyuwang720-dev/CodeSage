@@ -1,0 +1,213 @@
+"""AgentLoop: the main agent runtime (design note #1/#2/#4).
+
+Kode implements the loop as a recursive async generator; Python's recursion
+limit (1000) makes that fail after ~a thousand turns — R1. This loop uses an
+explicit `while` over a growable message list: same transparent message
+stream, zero stack growth (verified by the >2000-turn pressure test).
+
+The loop yields SessionMessages; the final yield of each turn is the model's
+response, and the loop terminates on: final answer, max_turns, max_budget,
+or abort (three checkpoints: loop top, after LLM call, tool batch).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
+from typing import Any
+
+from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest
+from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
+from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
+from ..permissions.store import load_permission_rules
+from ..tools import ToolRegistry, ToolResult, ToolUseContext
+from .system_prompt import build_system_prompt
+from .tool_queue import ScheduledTool, ToolUseQueue
+
+#: Synthesized messages (is_meta — filtered by normalize_for_api).
+INTERRUPT_TEXT = "(interrupted by user)"
+MAX_TURNS_TEXT = "Stopped: maximum turn count reached."
+MAX_BUDGET_TEXT = "Stopped: maximum budget reached."
+
+
+class AgentLoop:
+    def __init__(
+        self,
+        *,
+        client: LLMClient,
+        tools: ToolRegistry,
+        permissions: PermissionEngine | None = None,
+        request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
+        system_prompt: str = "",
+        context: dict[str, str] | None = None,
+        model: str = "main",
+        mode: str | PermissionMode = PermissionMode.DEFAULT,
+        max_turns: int = 100,
+        max_budget_usd: float | None = None,
+        cwd: Path | None = None,
+        session: Session | None = None,
+        settings: Any = None,  # phase-01 Settings for permission rules
+    ):
+        self.client = client
+        self.tools = tools
+        self.permissions = permissions or PermissionEngine()
+        self.request_permission = request_permission
+        self.system_prompt = system_prompt
+        self.context = context
+        self.model = model
+        self.mode = mode
+        self.max_turns = max_turns
+        self.max_budget_usd = max_budget_usd
+        self.cwd = cwd or Path.cwd()
+        self.session = session
+        self.settings = settings
+        self.abort = asyncio.Event()
+
+    # ---- public entry ----
+
+    async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
+        """Run the loop from a user input; yields the conversation messages."""
+        first = user_message(user_input)
+        yield first
+        await self._persist(first)
+
+        messages: list[SessionMessage] = [first]
+        turn = 0
+        try:
+            while True:
+                if turn >= self.max_turns:
+                    yield await self._finish(MAX_TURNS_TEXT)
+                    return
+                if self.max_budget_usd is not None and self.client.total_cost[0] >= self.max_budget_usd:
+                    yield await self._finish(MAX_BUDGET_TEXT)
+                    return
+                if self.abort.is_set():
+                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    return
+                turn += 1
+
+                # LLM call (checkpoint 1: abort before and after)
+                assistant = await self._ask_model(messages)
+                if assistant is None:
+                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    return
+                yield assistant
+                await self._persist(assistant)
+                messages.append(assistant)
+
+                tool_uses = [b for b in assistant.content if b.type == "tool_use"] if isinstance(assistant.content, list) else []
+                if not tool_uses:
+                    return  # final answer — terminate
+
+                # execute tools (checkpoint 2: abort before the batch)
+                if self.abort.is_set():
+                    yield await self._finish(INTERRUPT_TEXT, meta=True)
+                    return
+                scheduled = await self._execute_tools(tool_uses)
+                results_block = [
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id=item.tool_use_id,
+                        content=item.result.content if item.result else "(no result)",
+                        is_error=item.result.is_error if item.result else True,
+                    )
+                    for item in scheduled
+                ]
+                tool_round = user_message(results_block)
+                yield tool_round
+                await self._persist(tool_round)
+                messages.append(tool_round)
+        except LLMError as exc:
+            # unrecoverable provider error surfaces as a message, not a crash
+            failed = assistant_message(
+                f"(provider error: {exc})",
+                is_error=True,
+            )
+            yield failed
+            await self._persist(failed)
+
+    # ---- internals ----
+
+    async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+        request = LLMRequest(
+            messages=normalize_for_api(messages),
+            system=build_system_prompt(self.system_prompt, self.context),
+            tools=self.tools.specs(),
+        )
+        stream = self.client.stream(request, model=self.model)
+        response = await LLMClient.collect(stream)
+        if self.abort.is_set():
+            return None
+        return assistant_message(
+            response.content,
+            usage=response.usage,
+            model=response.model,
+            is_error=response.is_error,
+        )
+
+    async def _execute_tools(self, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
+        scheduled: list[ScheduledTool] = []
+        for block in tool_uses:
+            tool = self.tools.get(block.name or "")
+            ctx = ToolUseContext(cwd=self.cwd)
+            if tool is None:
+                scheduled.append(
+                    ScheduledTool(
+                        tool_use_id=block.id or "",
+                        tool=_MissingTool(block.name or ""),
+                        input={},
+                        context=ctx,
+                        result=ToolResult(f"Unknown tool: {block.name}", is_error=True),
+                        status="completed",
+                    )
+                )
+                continue
+            scheduled.append(
+                ScheduledTool(
+                    tool_use_id=block.id or "",
+                    tool=tool,
+                    input=block.input or {},
+                    context=ctx,
+                )
+            )
+        queue = ToolUseQueue(scheduled, permission_check=self._permission_check)
+        return await queue.run()
+
+    async def _permission_check(self, item: ScheduledTool) -> ToolResult | None:
+        """Return a denial ToolResult, or None to allow execution."""
+        decision = self.permissions.evaluate_tool_use(
+            tool_name=item.tool.name,
+            tool_input=item.input,
+            tool=item.tool,
+            mode=self.mode,
+            cwd=self.cwd,
+            permissions=load_permission_rules(self.settings) if self.settings is not None else None,
+        )
+        if decision.allowed:
+            return None
+        if decision.mode == "ask" and self.request_permission is not None:
+            if await self.request_permission(decision, item.tool, item.input):
+                return None
+        return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
+
+    async def _finish(self, text: str, *, meta: bool = False) -> SessionMessage:
+        message = assistant_message(text, is_meta=meta)
+        await self._persist(message)
+        return message
+
+    async def _persist(self, message: SessionMessage) -> None:
+        if self.session is not None:
+            self.session.append(message)
+
+
+class _MissingTool:
+    """Placeholder for unknown tool names; reports itself as failed."""
+
+    is_concurrency_safe = True
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def needs_permissions(self, input: dict) -> bool:
+        return False
