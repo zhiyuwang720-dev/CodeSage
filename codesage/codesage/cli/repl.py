@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ..engine import AgentLoop
 from .commands import find_command
-from .render import CYAN, RESET, YELLOW, _c, render_message, render_streamed_text_delta
+from .render import CYAN, DIM, RESET, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 
 
 @dataclass
@@ -74,9 +74,17 @@ async def run_single_turn(
         if render and ev.type == "text_delta" and ev.text:
             render_streamed_text_delta(ev.text, target)
 
+    def _on_tool_event(event, name, payload):
+        # PI-01 wiring: a lightweight status line when a tool starts running.
+        # The end state is rendered by the tool_result message (✓/✗) instead.
+        if render and event == "start":
+            print(_c(f"  {_glyph('●', target)} {name} running…", DIM), file=target, flush=True)
+
     prev_on_stream = getattr(loop, "on_stream", None)
+    prev_on_tool_event = getattr(loop, "on_tool_event", None)
     if render:
         loop.on_stream = _on_stream  # type: ignore[attr-defined]
+        loop.on_tool_event = _on_tool_event  # type: ignore[attr-defined]
     try:
         async for message in loop.run(user_input):
             has_error = has_error or (message.role == "assistant" and message.is_error)
@@ -95,6 +103,7 @@ async def run_single_turn(
                     last_text = text
     finally:
         loop.on_stream = prev_on_stream  # type: ignore[attr-defined]
+        loop.on_tool_event = prev_on_tool_event  # type: ignore[attr-defined]
     client = getattr(loop, "client", None)
     # CC-10: prefer the engine's structured stop reason over text sniffing.
     stop_reason = getattr(loop, "last_stop_reason", None)

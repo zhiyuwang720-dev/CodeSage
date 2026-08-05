@@ -158,3 +158,21 @@ async def test_no_stop_reason_falls_back_to_text_sniff():
 
     s = await run_single_turn(PlainLoop(), "hi", render=False)
     assert s.budget_exceeded is True
+
+
+async def test_tool_start_status_line(tmp_path, monkeypatch):
+    """PI-01 wiring: REPL prints a status line when a tool starts running."""
+    from codesage.tools.builtin.filesystem.ls import LSTool
+
+    script = [
+        lambda i: [
+            StreamEvent(type="tool_use_start", tool_use_id="t1", tool_name="LS"),
+            StreamEvent(type="tool_use_delta", input_json_delta='{"path": "."}'),
+            StreamEvent(type="done", stop_reason="tool_use"),
+        ],
+        lambda i: [StreamEvent(type="text_delta", text="done"), StreamEvent(type="done")],
+    ]
+    loop = _mock_loop(tmp_path, script, monkeypatch=monkeypatch)
+    buf = io.StringIO()
+    await run_single_turn(loop, "list", out=buf)
+    assert "LS running" in buf.getvalue()
