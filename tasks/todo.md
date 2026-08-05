@@ -100,3 +100,28 @@
 - [ ] **compact(10)**:熔断器(连续 3 次失败停止重试)+ 多级阈值(硬阻塞预留手动 /compact 空间)+ boundary 消息模式
 - [ ] **Bash 安全(16)**:denial-tracking(连续 3 次/累计 20 次拒绝回退人工)+ classifier 不可用 iron-gate fail-closed(照抄 CC 整套)
 - [ ] **hooks(09)**:钩子先于权限引擎(deny 优先/allow 短路/updatedInput 透传)+ safetyCheck bypass-免疫位
+
+## pi-agent-core 借鉴任务(2026-08-05 新增)
+
+> 深读代理对照 pi/packages/agent(11081 行)输出。完整分析见 `docs/pi-agent-core-analysis.md`。pi 强在事件模型/工具管道/持久化会话/compaction;我们强在权限/审计/默认串行。最值得抄:三阶段工具管道 + 生命周期事件、结构化 compaction、树状会话。
+
+### 高价值(优先)
+
+- [ ] **PI-01 工具执行生命周期事件**:tool_execution_start/update/end,UI 显示执行中状态与流式输出(现裸 yield 消息,拿不到工具级时序)→ engine/loop + cli/render
+- [ ] **PI-02 beforeToolCall/afterToolCall 三阶段管道**:prepare(校验+权限,拒绝用 {block:true} 一等语义)→ execute → finalize(结果改写口)→ tool_queue + permissions
+- [ ] **PI-03 stopReason=="length" 时 fail 全部工具调用**:防截断产生残缺参数被照常执行(现已解析完整参数的调用会执行)→ ai/client collect + engine/loop
+- [ ] **PI-04 工具结果 terminate 语义**:全批同意才提前停,工具可表达「该停了」→ tools/base ToolResult + engine/loop
+- [ ] **PI-05 结构化 compaction 管线**:usage 优先估算 + turn 边界切割 + split-turn 前缀单独摘要 + 文件操作清单随摘要 → 新 engine/compaction.py(阶段 10 需求增强)
+
+### 中价值
+
+- [ ] **PI-06 steering/followUp 双队列**:运行中插话(steer)/结束后追问(followUp),QueueMode 控制条数 → cli/repl + engine/loop
+- [ ] **PI-07 会话操作日志 + 恢复**:Record(operation_started/tool_started/step_attempt)+ findOpenOperations → --continue 从中断点恢复而非消息末尾 → core/session(阶段 12)
+- [ ] **PI-08 模型/思考级别/活动工具作为 entry**:会话自描述,审计/恢复不用猜当时配置 → core/session(阶段 12)
+
+### 长期/低
+
+- [ ] **PI-09 树状会话**(重点思想):entry 链 + lane 指针,分支/fork 是追加指针;单文件多分支;/**tree 导航至任何先前位置继续**;按消息类型筛选;条目标记为书签 → core/session(阶段 12 升级)
+- [ ] **PI-10 AgentMessage 分离**(重点思想):应用状态(工具记录/分支摘要/审计)与模型上下文物理分离,只在 LLM 边界 convertToLlm 转换;自定义消息类型扩展,无字符串 hack → core/messages(阶段 12/19)
+- [ ] **PI-11 失败也走完整事件序列**:abort/错误路径产出完整 message→turn→agent 序列,消费者统一处理 → engine/loop
+- [ ] **PI-12 Result + 稳定错误码**:FS/shell 期望内失败不 throw,错误码可程序化 → tools 内部约定
