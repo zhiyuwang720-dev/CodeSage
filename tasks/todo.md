@@ -2,25 +2,25 @@
 
 > 对应 `docs/specs/codesage.md` 阶段路线图。每个任务 = 一个分支 + 阶段规格 + 实现 + 文档 + 合并。
 
-- [ ] **01 config 配置系统** (`feat/01-config`)
+- [x] **01 config 配置系统** (`feat/01-config`)
   - 验收:settings 三层(user/project/local)加载与覆盖正确;全局配置读写;AGENTS.md 路径发现
   - 验证:`pytest tests/ -q`;针对覆盖优先级的单测
-- [ ] **02 ai LLM 客户端** (`feat/02-ai`)
+- [x] **02 ai LLM 客户端** (`feat/02-ai`)
   - 验收:OpenAI 兼容 + Anthropic 原生双 adapter;流式;重试(retry-after);模型指针 main/task/compact/quick;VCR 录制回放;成本核算
   - 验证:单测(离线 mock)+ VCR 回放测试
-- [ ] **03 tools 工具契约与内置工具** (`feat/03-tools`)
+- [x] **03 tools 工具契约与内置工具** (`feat/03-tools`)
   - 验收:Tool 三合一对象;注册表;Read/Write/Edit/Glob/Grep/LS/Bash(真超时/kill);超大结果落盘
   - 验证:每工具单测;Bash 超时/kill 实测
-- [ ] **04 core 消息与会话** (`feat/04-core`)
+- [x] **04 core 消息与会话** (`feat/04-core`)
   - 验收:Message 类型;normalizeMessagesForAPI(合并/剔除);会话 JSONL append-only + 原子写
   - 验证:归一化规则单测(含边界:相邻 user 合并、tool_result 前置)
-- [ ] **05 permissions 权限引擎** (`feat/05-permissions`)
+- [x] **05 permissions 权限引擎** (`feat/05-permissions`)
   - 验收:决策链完整顺序;deny>ask>allow;路径规则(gitignore 语义 + symlink 展开);写保护路径;plan/default/yolo 三模式;**审计钩子**
   - 验证:决策链矩阵单测;审计事件断言
-- [ ] **06 engine 引擎主循环** (`feat/06-engine`)
+- [x] **06 engine 引擎主循环** (`feat/06-engine`)
   - 验收:主循环(递归或显式迭代,见 R1);ToolUseQueue 并发屏障;错误转 tool_result;AbortSignal 三检查点;hooks 挂接点
   - 验证:循环终止单测;**>2000 轮压力测试**
-- [ ] **07 cli CLI REPL** (`feat/07-cli`)
+- [x] **07 cli CLI REPL** (`feat/07-cli`)
   - 验收:交互循环;权限询问(文本);信号处理;流式输出 → **V1 闭环验收**
   - 验证:端到端小任务;V1 验收清单(见 plan.md)
 - [ ] **08 context 上下文管理** (`feat/08-context`)
