@@ -62,12 +62,14 @@
 - [高] --safe + root 防护 + --allowedTools + 单轮权限逃生口
 - [中] 优雅退出(SIGTERM/SIGBREAK + 退出码语义)+ /show-thinking 真开关
 
-## 生产级达标判定
+## 生产级达标判定(2026-08-05 修复完成)
 
-修复完成后再次验证:
-- [ ] 成本/预算在真实路径生效(stream 记账)
-- [ ] 网络抖动不毁回合(重试/回退)
-- [ ] Edit/Write 不破坏外部修改(freshness)
-- [ ] yolo 不能写出工作目录
-- [ ] CI 可用(stdin + 退出码)
-- [ ] 全量测试绿 + 真实 API 验收通过
+- [x] 成本/预算在真实路径生效(stream 记账,单测覆盖)
+- [x] 网络抖动不毁回合(传输错误包装 + 流首事件重试)
+- [x] Edit/Write 不破坏外部修改(read-first + mtime/sha256)
+- [x] yolo 不能写出工作目录(目录外强制 ask + 显式批准)
+- [x] CI 可用(stdin 单轮 + 退出码语义 + --allowedTools)
+- [x] 全量测试绿:269 passed, 4 skipped(环境性)
+- [ ] 真实 API 验收(待 DEEPSEEK_API_KEY 恢复 —— backend/.env 缺失)
+
+修复统计:批次 1(ai/core/config/tools)+ 批次 2(permissions/engine/cli),共 +2479 行,测试从 170 → 269(新增 ~100 项)。
