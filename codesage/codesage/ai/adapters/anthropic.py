@@ -109,7 +109,10 @@ class AnthropicAdapter(BaseAdapter):
                 "POST", self._url(), headers=self._headers(), json=self._build_payload(request, stream=True)
             ) as response:
                 if response.status_code >= 400:
-                    yield StreamEvent(type="error", error=f"HTTP {response.status_code}: {response.text[:200]}")
+                    yield StreamEvent(
+                        type="error",
+                        error=f"HTTP {response.status_code}: {await _read_body(response)}",
+                    )
                     return
                 # content block state: tool_use blocks stream input_json_delta
                 async for line in response.aiter_lines():
@@ -180,6 +183,15 @@ def _http_error(profile: Any, response: httpx.Response) -> LLMError:
         retryable=LLMError.classify(status),
         retry_after_seconds=retry_after,
     )
+
+
+async def _read_body(response: httpx.Response) -> str:
+    """Read a streaming response's body safely (aread before accessing .text)."""
+    try:
+        await response.aread()
+        return response.text[:200]
+    except (httpx.HTTPError, OSError):
+        return ""
 
 
 def _transport_error(profile: Any, exc: httpx.HTTPError) -> LLMError:

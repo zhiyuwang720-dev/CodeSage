@@ -176,7 +176,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 if response.status_code >= 400:
                     yield StreamEvent(
                         type="error",
-                        error=f"HTTP {response.status_code}: {response.text[:200]}",
+                        error=f"HTTP {response.status_code}: {await _read_body(response)}",
                     )
                     return
                 tool_partials: dict[int, dict[str, Any]] = {}
@@ -267,6 +267,15 @@ def _http_error(profile: Any, response: httpx.Response) -> LLMError:
         retryable=LLMError.classify(status),
         retry_after_seconds=retry_after,
     )
+
+
+async def _read_body(response: httpx.Response) -> str:
+    """Read a streaming response's body safely (aread before accessing .text)."""
+    try:
+        await response.aread()
+        return response.text[:200]
+    except (httpx.HTTPError, OSError):
+        return ""
 
 
 def _transport_error(profile: Any, exc: httpx.HTTPError) -> LLMError:

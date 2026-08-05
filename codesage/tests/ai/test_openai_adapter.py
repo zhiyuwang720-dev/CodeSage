@@ -216,3 +216,30 @@ def _sse(chunks):
     lines = [f"data: {json.dumps(c)}\n" for c in chunks]
     lines.append("data: [DONE]\n")
     return "".join(lines)
+
+
+async def test_streaming_http_error_reads_body():
+    """Streaming 4xx must yield an error event without ResponseNotRead
+    (streaming responses need aread() before .text)."""
+    adapter = _adapter(lambda req: httpx.Response(401, text="unauthorized"))
+    events = [ev async for ev in adapter.astream(LLMRequest(messages=[Message(role="user", content="hi")], stream=True))]
+    assert len(events) == 1
+    assert events[0].type == "error"
+    assert "401" in events[0].error
+    assert "unauthorized" in events[0].error
+
+
+async def test_streaming_http_error_body_read_failure():
+    """Even if aread() fails, the error event must still be produced."""
+    adapter = _adapter(lambda req: httpx.Response(500, text="boom"))
+
+    async def broken_aread(self):
+        raise httpx.ReadError("broken stream")
+
+    original = httpx.Response.aread
+    httpx.Response.aread = broken_aread  # type: ignore[method-assign]
+    try:
+        events = [ev async for ev in adapter.astream(LLMRequest(messages=[], stream=True))]
+    finally:
+        httpx.Response.aread = original  # type: ignore[method-assign]
+    assert events[0].type == "error" and "500" in events[0].error
