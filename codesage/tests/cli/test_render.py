@@ -9,7 +9,8 @@ from codesage.cli.render import render_message
 
 def _render(msg, **kw):
     buf = io.StringIO()
-    render_message(msg, out=buf, **kw)
+    transcript = kw.pop("transcript", kw.pop("show_thinking", False))
+    render_message(msg, out=buf, transcript=transcript)
     return buf.getvalue()
 
 
@@ -35,12 +36,12 @@ def test_assistant_text_and_thinking():
     out = _render(msg, show_thinking=False)
     assert "answer" in out
     assert "secret reasoning" not in out  # thinking hidden by default
-    assert "thinking" in out  # but its length is shown
+    assert "Thinking" in out  # but its length is shown
 
 
 def test_assistant_show_thinking():
     msg = assistant_message([ContentBlock(type="thinking", text="visible"), ContentBlock(type="text", text="answer")])
-    out = _render(msg, show_thinking=True)
+    out = _render(msg, transcript=True)
     assert "visible" in out
 
 

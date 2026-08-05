@@ -27,7 +27,7 @@ from ..config import paths
 from ..core import Session, find_session, most_recent_session
 from .assemble import apply_tool_filter, build_loop, session_root
 from .permission_prompt import request_permission
-from .render import render_message
+from .render import CYAN, _c, render_message
 from .repl import _install_single_shot_sigint, repl_loop, run_single_turn
 
 
@@ -69,7 +69,9 @@ def main(argv: list[str] | None = None) -> int:
     prompt_group.add_argument("--system-prompt", metavar="TEXT", help="override the system prompt")
     prompt_group.add_argument("--system-prompt-file", metavar="PATH", help="read the system prompt from a file")
     resume_group = parser.add_mutually_exclusive_group()
-    resume_group.add_argument("--resume", action="store_true", help="resume the most recent session")
+    resume_group.add_argument("-c", "--continue", dest="continue_flag", action="store_true",
+                              help="continue the most recent conversation (history as context, same session file)")
+    resume_group.add_argument("--resume", action="store_true", help="resume the most recent session (summary + new session)")
     resume_group.add_argument("--session-id", metavar="ID", help="resume a specific session by id")
     parser.add_argument("--allowedTools", metavar="N1,N2", help="comma-separated tool allowlist")
     parser.add_argument("--disallowedTools", metavar="N1,N2", help="comma-separated tool denylist")
@@ -122,27 +124,44 @@ def main(argv: list[str] | None = None) -> int:
     else:
         mode = args.mode
 
-    # resume: show history, then start a fresh session in the same project dir
-    # (history is not fed to the model — degraded resume, all in the CLI layer).
+    # resume: --continue feeds the history back as context and keeps the same
+    # session file; --resume shows a summary then starts a fresh session.
     cwd = args.cwd.resolve()
     root = session_root()
     resumed = None
+    continue_mode = False
     if args.session_id:
         resumed = find_session(root, args.session_id)
         if resumed is None:
             print(f"session not found: {args.session_id}", file=sys.stderr)
             return 1
+    elif args.continue_flag:
+        resumed = most_recent_session(root)
+        if resumed is None:
+            print("no sessions to continue", file=sys.stderr)
+            return 1
+        continue_mode = True
     elif args.resume:
         resumed = most_recent_session(root)
         if resumed is None:
             print("no sessions to resume", file=sys.stderr)
             return 1
-    if resumed is not None:
-        _print_history_summary(resumed, root)
 
     project_key = None
     if resumed is not None and resumed.parent != root:
         project_key = resumed.parent.name
+
+    history = None
+    session = None
+    if resumed is not None:
+        if continue_mode:
+            # --continue: load prior turns as context and keep appending to
+            # the same session file (chains across runs)
+            session = Session(resumed.stem, root, project_key=project_key)
+            history = session.load()
+            print(_c(f"Continuing session {resumed.stem} ({len(history)} messages)", CYAN), file=sys.stderr)
+        else:
+            _print_history_summary(resumed, root)
 
     loop = build_loop(
         cwd=cwd,
@@ -153,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         request_permission=None if prompt else _interactive_permission(),
         project_key=project_key,
         system_prompt=system_prompt,
+        session=session,
+        history=history,
     )
     apply_tool_filter(loop, args.allowedTools, args.disallowedTools)
     _warn_if_no_api_key(loop)

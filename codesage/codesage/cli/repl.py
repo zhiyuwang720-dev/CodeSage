@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..engine import AgentLoop
 from .commands import find_command
-from .render import CYAN, RESET, _c, render_message
+from .render import CYAN, RESET, YELLOW, _c, render_message, render_streamed_text_delta
 
 
 @dataclass
@@ -51,6 +51,7 @@ async def run_single_turn(
     user_input: str,
     *,
     show_thinking: bool = False,
+    transcript: bool = False,  # Ctrl+O expanded mode
     out=None,  # TextIO; default sys.stdout (injectable for tests)
     render: bool = True,  # False for --output-format json (summary only)
 ) -> RunSummary:
@@ -66,21 +67,33 @@ async def run_single_turn(
     last_text = ""
     llm_calls = 0
     total_tokens = 0
-    async for message in loop.run(user_input):
-        has_error = has_error or (message.role == "assistant" and message.is_error)
-        if render:
-            render_message(message, out=target, show_thinking=show_thinking)
-        if message.role != "assistant":
-            continue
-        if message.usage is not None:
-            llm_calls += 1
-            total_tokens += message.usage.total_tokens
-        if isinstance(message.content, str):
-            last_text = message.content
-        else:
-            text = "\n".join(b.text or "" for b in message.content if b.type == "text")
-            if text:
-                last_text = text
+
+    def _on_stream(ev):
+        # live text_deltas print complete lines as they arrive (CC behavior)
+        if render and ev.type == "text_delta" and ev.text:
+            render_streamed_text_delta(ev.text, target)
+
+    prev_on_stream = getattr(loop, "on_stream", None)
+    if render:
+        loop.on_stream = _on_stream  # type: ignore[attr-defined]
+    try:
+        async for message in loop.run(user_input):
+            has_error = has_error or (message.role == "assistant" and message.is_error)
+            if render:
+                render_message(message, out=target, transcript=transcript)
+            if message.role != "assistant":
+                continue
+            if message.usage is not None:
+                llm_calls += 1
+                total_tokens += message.usage.total_tokens
+            if isinstance(message.content, str):
+                last_text = message.content
+            else:
+                text = "\n".join(b.text or "" for b in message.content if b.type == "text")
+                if text:
+                    last_text = text
+    finally:
+        loop.on_stream = prev_on_stream  # type: ignore[attr-defined]
     client = getattr(loop, "client", None)
     # CC-10: prefer the engine's structured stop reason over text sniffing.
     stop_reason = getattr(loop, "last_stop_reason", None)
@@ -113,17 +126,20 @@ async def repl_loop(
     cwd: Path,
     show_thinking: bool = False,
 ) -> None:
-    print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt)", CYAN))
+    print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt, Ctrl+O to expand)", CYAN))
     _install_signal_handlers(loop)
-    # /show-thinking toggles the flag; /mode writes loop.mode via "loop".
-    state = {"show_thinking": show_thinking, "loop": loop}
+    # /show-thinking toggles the flag; /mode writes loop.mode via "loop";
+    # transcript toggles Ctrl+O expanded rendering for subsequent messages.
+    state = {"show_thinking": show_thinking, "loop": loop, "transcript": False}
 
     while True:
         try:
-            line = await asyncio.to_thread(input, _c(f"\n{_prompt_mark()} ", CYAN))
+            line = await asyncio.to_thread(_read_line, state)
         except (EOFError, KeyboardInterrupt):
             print("\nbye")
             return
+        if line is None:
+            continue  # a hotkey was handled (e.g. Ctrl+O toggled transcript)
         line = line.strip()
         if not line:
             continue
@@ -132,7 +148,48 @@ async def repl_loop(
                 return
             continue
         loop.abort.clear()
-        await run_single_turn(loop, line, show_thinking=state["show_thinking"])
+        await run_single_turn(
+            loop, line,
+            show_thinking=state["show_thinking"],
+            transcript=state["transcript"],
+        )
+
+
+def _read_line(state: dict) -> str | None:
+    """Read one input line; None when a hotkey was consumed.
+
+    Windows: msvcrt raw input so Ctrl+O (0x0F) toggles the transcript mode
+    mid-typing. POSIX: plain input() (no Ctrl+O — use /expand instead).
+    """
+    if sys.platform != "win32":
+        return input(_c(f"\n{_prompt_mark()} ", CYAN))
+    import msvcrt
+
+    prompt = _c(f"\n{_prompt_mark()} ", CYAN)
+    print(prompt, end="", flush=True)
+    buf: list[str] = []
+    while True:
+        ch = msvcrt.getwch()
+        if ch == "\x0f":  # Ctrl+O
+            state["transcript"] = not state["transcript"]
+            print("\r" + " " * (len(prompt) + sum(len(c) for c in buf)) + "\r", end="", flush=True)
+            print(_c(f"\n[transcript {'on' if state['transcript'] else 'off'}]", YELLOW), file=sys.stdout)
+            print(prompt + "".join(buf), end="", flush=True)
+            continue
+        if ch in ("\r", "\n"):
+            print(file=sys.stdout)
+            return "".join(buf)
+        if ch == "\x08":  # backspace
+            if buf:
+                buf.pop()
+                print("\b \b", end="", flush=True)
+            continue
+        if ch == "\x03":  # Ctrl+C
+            raise KeyboardInterrupt
+        if ch == "\x1b":  # ESC: ignore sequences for now
+            continue
+        buf.append(ch)
+        print(ch, end="", flush=True)
 
 
 async def _handle_slash_command(loop: AgentLoop, line: str, state: dict) -> bool:

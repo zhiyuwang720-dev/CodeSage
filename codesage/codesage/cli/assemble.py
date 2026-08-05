@@ -37,13 +37,16 @@ def build_loop(
     session_id: str | None = None,
     system_prompt: str | None = None,
     project_key: str | None = None,
+    session: Session | None = None,  # existing session (--continue); else new
+    history: list | None = None,  # prior turns as context (--continue)
 ) -> AgentLoop:
     settings = load_settings(project_dir=cwd)
     client = LLMClient(project_dir=str(cwd), vcr_mode=vcr_mode)
     audit = JsonlAuditSink(paths.config_dir() / "audit.jsonl")
     permissions = PermissionEngine(audit_sink=audit)
     registry = ToolRegistry(get_builtin_tools())
-    session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
+    if session is None:
+        session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
 
     return AgentLoop(
         client=client,
@@ -58,6 +61,7 @@ def build_loop(
         cwd=cwd,
         session=session,
         settings=settings,
+        history=history,
     )
 
 

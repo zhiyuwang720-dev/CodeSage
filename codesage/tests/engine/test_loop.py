@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from codesage.ai import ContentBlock, StreamEvent
-from codesage.core import Session
+from codesage.core import Session, assistant_message, user_message
 from codesage.engine import AgentLoop
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
@@ -310,3 +310,23 @@ async def test_ask_approved_via_callback():
     messages = await _collect(loop)
     assert approvals == ["Bash"]
     assert not messages[2].content[0].is_error  # approved, executed fine
+
+
+async def test_history_used_as_context():
+    """--continue: prior turns become the model's context; new turns append."""
+    seen_messages = {}
+
+    class RecordingLLM(FakeLLM):
+        async def _gen(self):
+            self.calls += 1
+            seen_messages["count"] = len(self.last_messages)
+            for ev in text_event("resumed"):
+                yield ev
+
+    llm = RecordingLLM([lambda i: text_event("resumed")])
+    history = [user_message("earlier turn"), assistant_message("earlier answer")]
+    loop = _loop(llm, history=history)
+    messages = await _collect(loop, user_input="continue here")
+    assert llm.calls == 1
+    assert seen_messages["count"] == 3  # history(2) + new user(1)
+    assert messages[-1].content[0].text == "resumed"

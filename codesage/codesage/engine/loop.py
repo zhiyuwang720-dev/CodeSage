@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest
+from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, StreamEvent
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
@@ -64,6 +64,8 @@ class AgentLoop:
         session: Session | None = None,
         settings: Any = None,  # phase-01 Settings for permission rules
         session_permissions: dict | None = None,  # "this session only" rules (CC-07)
+        history: list["SessionMessage"] | None = None,  # prior turns as context (--continue)
+        on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
     ):
         self.client = client
         self.tools = tools
@@ -79,6 +81,8 @@ class AgentLoop:
         self.session = session
         self.settings = settings
         self.session_permissions = session_permissions
+        self.history = history or []
+        self.on_stream = on_stream
         #: Termination reason of the last run(): "completed" | "max_turns" |
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" (CC-10)
         self.last_stop_reason: str | None = None
@@ -95,7 +99,9 @@ class AgentLoop:
         yield first
         await self._persist(first)
 
-        messages: list[SessionMessage] = [first]
+        # resumed turns start from the prior history; the session file keeps
+        # growing so --continue chains naturally across runs
+        messages: list[SessionMessage] = [*self.history, first]
         turn = 0
         thinking_retries = 0
         try:
@@ -177,6 +183,17 @@ class AgentLoop:
             tools=self.tools.specs(),
         )
         stream = self.client.stream(request, model=self.model)
+        if self.on_stream is not None:
+            # tee: UI gets live deltas, the loop still gets the assembled result
+            # (capture a local copy — the closure must not see the reassignment)
+            inner = stream
+
+            async def _tee():
+                async for ev in inner:
+                    self.on_stream(ev)
+                    yield ev
+
+            stream = _tee()
         response = await LLMClient.collect(stream)
         if self.abort.is_set():
             return None
