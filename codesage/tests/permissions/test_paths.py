@@ -35,3 +35,31 @@ def test_protected_inside_any_depth():
 def test_sensitive_reads():
     assert is_sensitive_path(Path("/repo/.env"))
     assert not is_sensitive_path(Path("/repo/src/main.py"))
+
+
+def test_shell_and_vcs_config_files_protected():
+    for name in [
+        ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile",
+        ".zshrc", ".zprofile", ".profile", ".mcp.json",
+    ]:
+        assert is_write_protected(Path("/home/u") / name), name
+
+
+def test_ide_dirs_protected():
+    assert is_write_protected(Path("/repo/.vscode/settings.json"))
+    assert is_write_protected(Path("/repo/.idea/workspace.xml"))
+
+
+def test_windows_reserved_names_protected():
+    for name in ["CON", "con.txt", "PRN", "aux.log", "NUL", "COM1.txt", "COM9", "LPT3.dat", "LPT9"]:
+        assert is_write_protected(Path("C:/repo") / name), name
+    assert not is_write_protected(Path("C:/repo/conference.md"))
+
+
+def test_unc_and_extended_length_paths_protected():
+    assert is_write_protected(Path(r"\\server\share\file.txt"))
+    assert is_write_protected(Path(r"\\?\C:\repo\x.txt"))
+
+
+def test_traversal_segments_protected():
+    assert is_write_protected(Path("/repo/../etc/passwd"))

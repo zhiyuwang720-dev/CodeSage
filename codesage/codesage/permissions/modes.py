@@ -22,7 +22,8 @@ def normalize_mode(mode: str | PermissionMode | None) -> PermissionMode:
 READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
 
 #: Internal harness tools (not model-visible) — always allowed.
-SYSTEM_TOOLS = frozenset({"Skill", "TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"})
+# Skill is NOT whitelisted: model-invoked skills run through the normal chain.
+SYSTEM_TOOLS = frozenset({"TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"})
 
 #: Tools that are never auto-allowed even in yolo mode (require explicit approval).
 REQUIRES_EXPLICIT_APPROVAL = frozenset({"Bash"})

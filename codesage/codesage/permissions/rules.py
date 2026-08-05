@@ -68,11 +68,28 @@ def path_rule_matches(rule: str, resolved_path: Path) -> bool:
 
 
 def match_first(rules: list[Any], tool_name: str, path: Path | None) -> str | None:
-    """Return the rule string that matched (for audit/reason), or None."""
+    """Return the rule string that matched (for audit/reason), or None.
+
+    Gitignore-ish negation: a "!rule" entry (session rules commonly revoke
+    settings rules this way) cancels any earlier match — the path/rule match
+    fails and evaluation stops.
+    # ponytail: simplified last-wins-by-negation, not full gitignore matching.
+    """
+    matched: str | None = None
     for rule in rules:
-        if isinstance(rule, str):
-            if path is not None and path_rule_matches(rule, path):
-                return rule
-            if tool_rule_matches(rule, tool_name):
-                return rule
-    return None
+        if not isinstance(rule, str):
+            continue
+        if rule.startswith("!"):
+            inner = rule[1:].strip()
+            if inner and (
+                (path is not None and path_rule_matches(inner, path))
+                or tool_rule_matches(inner, tool_name)
+            ):
+                return None  # negation cancels all earlier matches
+            continue
+        if matched is None and (
+            (path is not None and path_rule_matches(rule, path))
+            or tool_rule_matches(rule, tool_name)
+        ):
+            matched = rule
+    return matched

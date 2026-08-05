@@ -26,8 +26,10 @@ def _c(text: str, code: str) -> str:
     return f"{code}{text}{RESET}" if USE_COLOR else text
 
 
-def render_message(message: SessionMessage, out: TextIO = sys.stdout, show_thinking: bool = False) -> None:
-    """Render one message to *out*."""
+def render_message(message: SessionMessage, out: TextIO | None = None, show_thinking: bool = False) -> None:
+    """Render one message to *out* (current sys.stdout when omitted)."""
+    if out is None:
+        out = sys.stdout
     if message.role == "user":
         _render_user(message, out)
     else:
@@ -42,8 +44,9 @@ def _render_user(message: SessionMessage, out: TextIO) -> None:
     # tool_result round
     for block in content:
         if block.type == "tool_result":
-            status = _c("✗", RED) if block.is_error else _c("✓", GREEN)
-            preview = _summarize_result(block.content)
+            glyphs = _glyphs(out)
+            status = _c(glyphs["err"], RED) if block.is_error else _c(glyphs["ok"], GREEN)
+            preview = _summarize_result(block.content, out)
             print(f"  {status} tool[{_short_id(block.tool_use_id)}] {preview}", file=out)
 
 
@@ -67,7 +70,7 @@ def _render_assistant(message: SessionMessage, out: TextIO, show_thinking: bool)
             text_parts.append(block.text or "")
         elif block.type == "tool_use":
             preview = _summarize_tool_call(block.name or "", block.input or {})
-            print(_c(f"\n◈ {preview}", CYAN), file=out)
+            print(_c(f"\n{_glyphs(out)['tool_use']} {preview}", CYAN), file=out)
     if thinking_chars:
         if show_thinking:
             for block in content:
@@ -84,12 +87,23 @@ def _summarize_tool_call(name: str, input: dict) -> str:
     return f"{name} {', '.join(bits)[:200]}"
 
 
-def _summarize_result(content) -> str:
+def _summarize_result(content, out: TextIO) -> str:
     text = content if isinstance(content, str) else ""
     if not text:
         return "(no output)"
     text = " ".join(text.split())
-    return text[:RESULT_PREVIEW_CHARS] + ("…" if len(text) > RESULT_PREVIEW_CHARS else "")
+    return text[:RESULT_PREVIEW_CHARS] + (_glyphs(out)["ellipsis"] if len(text) > RESULT_PREVIEW_CHARS else "")
+
+
+def _glyphs(out: TextIO) -> dict[str, str]:
+    """Decorative glyphs, ASCII fallbacks when the stream's encoding can't
+    represent them (e.g. GBK consoles) — rendering must never crash."""
+    encoding = getattr(out, "encoding", None) or "utf-8"
+    try:
+        "◈✓✗…".encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return {"tool_use": ">", "ok": "OK", "err": "ERR", "ellipsis": "..."}
+    return {"tool_use": "◈", "ok": "✓", "err": "✗", "ellipsis": "…"}
 
 
 def _short_id(tool_use_id: str | None) -> str:

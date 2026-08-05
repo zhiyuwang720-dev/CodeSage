@@ -21,7 +21,7 @@ from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
-from ..tools import ToolRegistry, ToolResult, ToolUseContext
+from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
 from .system_prompt import build_system_prompt
 from .tool_queue import ScheduledTool, ToolUseQueue
 
@@ -29,6 +29,21 @@ from .tool_queue import ScheduledTool, ToolUseQueue
 INTERRUPT_TEXT = "(interrupted by user)"
 MAX_TURNS_TEXT = "Stopped: maximum turn count reached."
 MAX_BUDGET_TEXT = "Stopped: maximum budget reached."
+#: Injected when the model replies with only internal reasoning (bounded retries).
+THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
+THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
+THINKING_ONLY_MAX_RETRIES = 3
+
+
+def _is_thinking_only(message: SessionMessage) -> bool:
+    """True when the assistant reply contains only thinking blocks (no text/tool_use)."""
+    content = message.content
+    return (
+        not message.is_error
+        and isinstance(content, list)
+        and len(content) > 0
+        and all(b.type == "thinking" for b in content)
+    )
 
 
 class AgentLoop:
@@ -57,7 +72,7 @@ class AgentLoop:
         self.context = context
         self.model = model
         self.mode = mode
-        self.max_turns = max_turns
+        self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
         self.max_budget_usd = max_budget_usd
         self.cwd = cwd or Path.cwd()
         self.session = session
@@ -77,6 +92,7 @@ class AgentLoop:
 
         messages: list[SessionMessage] = [first]
         turn = 0
+        thinking_retries = 0
         try:
             while True:
                 if turn >= self.max_turns:
@@ -101,6 +117,18 @@ class AgentLoop:
 
                 tool_uses = [b for b in assistant.content if b.type == "tool_use"] if isinstance(assistant.content, list) else []
                 if not tool_uses:
+                    if _is_thinking_only(assistant):
+                        thinking_retries += 1
+                        if thinking_retries >= THINKING_ONLY_MAX_RETRIES:
+                            yield await self._finish(THINKING_ONLY_GIVE_UP, meta=True)
+                            return
+                        # retry with a recovery nudge (counted separately, not as a turn)
+                        recovery = user_message(THINKING_ONLY_RECOVERY)
+                        yield recovery
+                        await self._persist(recovery)
+                        messages.append(recovery)
+                        turn -= 1
+                        continue
                     return  # final answer — terminate
 
                 # execute tools (checkpoint 2: abort before the batch)
@@ -108,19 +136,22 @@ class AgentLoop:
                     yield await self._finish(INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(tool_uses)
-                results_block = [
-                    ContentBlock(
-                        type="tool_result",
-                        tool_use_id=item.tool_use_id,
-                        content=item.result.content if item.result else "(no result)",
-                        is_error=item.result.is_error if item.result else True,
+                # one tool_result user message per tool, in tool_use order
+                # (normalize_for_api merges adjacent user messages — wire behavior unchanged)
+                for item in scheduled:
+                    tool_round = user_message(
+                        [
+                            ContentBlock(
+                                type="tool_result",
+                                tool_use_id=item.tool_use_id,
+                                content=item.result.content if item.result else "(no result)",
+                                is_error=item.result.is_error if item.result else True,
+                            )
+                        ]
                     )
-                    for item in scheduled
-                ]
-                tool_round = user_message(results_block)
-                yield tool_round
-                await self._persist(tool_round)
-                messages.append(tool_round)
+                    yield tool_round
+                    await self._persist(tool_round)
+                    messages.append(tool_round)
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
             failed = assistant_message(
@@ -168,11 +199,28 @@ class AgentLoop:
                     )
                 )
                 continue
+            tool_input = block.input or {}
+            try:
+                tool.validate_input(tool_input)
+            except ToolError as exc:
+                # invalid input: report without executing; marked done so the
+                # queue skips it and never poisons its siblings
+                scheduled.append(
+                    ScheduledTool(
+                        tool_use_id=block.id or "",
+                        tool=tool,
+                        input=tool_input,
+                        context=ctx,
+                        status="completed",
+                        result=ToolResult(str(exc), is_error=True),
+                    )
+                )
+                continue
             scheduled.append(
                 ScheduledTool(
                     tool_use_id=block.id or "",
                     tool=tool,
-                    input=block.input or {},
+                    input=tool_input,
                     context=ctx,
                 )
             )

@@ -1,5 +1,7 @@
 """Audit sink tests: one event per decision, durable, content complete."""
 
+from pathlib import Path
+
 import pytest
 
 from codesage.permissions import JsonlAuditSink, PermissionEngine
@@ -10,7 +12,7 @@ def test_every_decision_emits_event(tmp_path):
     engine = PermissionEngine(audit_sink=sink)
     engine.evaluate_tool_use(tool_name="Bash", tool_input={"command": "ls"})
     engine.evaluate_tool_use(tool_name="Bash", tool_input={"command": "rm -rf x"}, permissions={"deny": ["Bash"]})
-    engine.evaluate_tool_use(tool_name="Read", tool_input={"file_path": "/x"}, mode="yolo")
+    engine.evaluate_tool_use(tool_name="Read", tool_input={"file_path": "/x"}, mode="yolo", cwd=Path("/"))
 
     events = sink.load()
     assert len(events) == 3

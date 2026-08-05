@@ -9,12 +9,33 @@ the model sees the failure and self-heals.
 from __future__ import annotations
 
 import asyncio
+import tempfile
+import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..tools import ToolResult, ToolUseContext
 
 SIBLING_ERROR_TEXT = "<tool_use_error>Sibling tool call errored</tool_use_error>"
+#: str results larger than this are spilled to a temp file; the model sees a pointer.
+MAX_TOOL_RESULT_CHARS = 100_000
+RESULT_PREVIEW_CHARS = 500
+
+
+def _spill_large_result(result: ToolResult) -> ToolResult:
+    """Persist oversized str results to disk; replace content with a file pointer."""
+    content = result.content
+    if not isinstance(content, str) or len(content) <= MAX_TOOL_RESULT_CHARS:
+        return result
+    path = Path(tempfile.mkdtemp(prefix="codesage-tool-")) / f"tool-result-{uuid.uuid4().hex}.txt"
+    path.write_text(content, encoding="utf-8")
+    return ToolResult(
+        content=f"(result saved to {path}: {content[:RESULT_PREVIEW_CHARS]}...)",
+        is_error=result.is_error,
+        new_messages=result.new_messages,
+        metadata=result.metadata,
+    )
 
 
 @dataclass(slots=True)
@@ -101,6 +122,7 @@ class ToolUseQueue:
             result = partial  # last yielded value is the ToolResult
         if result is None:
             result = ToolResult("(no result)", is_error=True)
+        result = _spill_large_result(result)
         if self._post_hook is not None:
             await self._post_hook(item, result)
         return result

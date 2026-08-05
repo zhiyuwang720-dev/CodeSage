@@ -12,13 +12,22 @@ from pathlib import Path
 #: Path components that are never writable by tools.
 WRITE_PROTECTED_COMPONENTS = frozenset({".git", ".ssh", ".codesage"})
 
-#: Files that are never writable (settings/credentials/agents).
+#: Files that are never writable (settings/credentials/agents/shell config).
 WRITE_PROTECTED_FILENAMES = frozenset(
-    {"settings.json", "settings.local.json", "config.json", "agents.md", ".env"}
+    {
+        "settings.json", "settings.local.json", "config.json", "agents.md", ".env",
+        ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc",
+        ".zprofile", ".profile", ".mcp.json",
+    }
 )
 
-#: Directories whose contents are never writable (config/session state).
-WRITE_PROTECTED_DIRS = frozenset({"sessions", "memory", "runs", "worktrees"})
+#: Directories whose contents are never writable (config/session state/IDE).
+WRITE_PROTECTED_DIRS = frozenset({"sessions", "memory", "runs", "worktrees", ".vscode", ".idea"})
+
+#: Windows reserved device names (with any extension).
+_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
+)
 
 
 def resolve_candidates(path: Path) -> list[Path]:
@@ -31,11 +40,20 @@ def resolve_candidates(path: Path) -> list[Path]:
 
 def is_write_protected(path: Path) -> bool:
     """True if any resolved candidate touches protected components/files."""
-    resolved = path.resolve()
+    raw = str(path)
+    if raw.startswith("\\\\") or raw.startswith("//"):
+        return True  # UNC share or \\?\ extended-length prefix
+    if ".." in path.parts:
+        return True  # traversal segment — refuse outright
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return True  # unresolvable (e.g. dead UNC) — conservative
     parts = set(resolved.parts)
     if parts & WRITE_PROTECTED_COMPONENTS:
         return True
-    if resolved.name.lower() in WRITE_PROTECTED_FILENAMES:
+    name = resolved.name.lower()
+    if name in WRITE_PROTECTED_FILENAMES or resolved.stem.lower() in _RESERVED_NAMES:
         return True
     if any(parent.name in WRITE_PROTECTED_DIRS for parent in resolved.parents):
         return True

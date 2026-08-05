@@ -35,13 +35,14 @@ def build_loop(
     vcr_mode: str | None = None,
     session_id: str | None = None,
     system_prompt: str | None = None,
+    project_key: str | None = None,
 ) -> AgentLoop:
     settings = load_settings(project_dir=cwd)
     client = LLMClient(project_dir=str(cwd), vcr_mode=vcr_mode)
     audit = JsonlAuditSink(paths.config_dir() / "audit.jsonl")
     permissions = PermissionEngine(audit_sink=audit)
     registry = ToolRegistry(get_builtin_tools())
-    session = Session(session_id or _new_session_id(), session_root())
+    session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
 
     return AgentLoop(
         client=client,
@@ -63,3 +64,21 @@ def _new_session_id() -> str:
 
     # microsecond precision: same-second sessions must not collide
     return datetime.now().strftime("session-%Y%m%d-%H%M%S-%f")
+
+
+def apply_tool_filter(loop: AgentLoop, allowed: str | None, disallowed: str | None) -> None:
+    """Restrict the loop's registry: keep only --allowedTools, drop --disallowedTools (comma-separated).
+
+    The model sees only the surviving specs, so a removed tool reads as
+    "Unknown tool" — the precise surface-control path for unattended runs.
+    """
+    if not allowed and not disallowed:
+        return
+    tools = loop.tools.all()
+    if allowed:
+        keep = {name.strip() for name in allowed.split(",") if name.strip()}
+        tools = [t for t in tools if t.name in keep]
+    if disallowed:
+        drop = {name.strip() for name in disallowed.split(",") if name.strip()}
+        tools = [t for t in tools if t.name not in drop]
+    loop.tools = ToolRegistry(tools)

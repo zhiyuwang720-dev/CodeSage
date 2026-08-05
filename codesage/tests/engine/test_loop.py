@@ -44,6 +44,10 @@ def text_event(text="answer"):
     return [StreamEvent(type="text_delta", text=text), StreamEvent(type="done", stop_reason="end_turn")]
 
 
+def thinking_only_event():
+    return [StreamEvent(type="thinking_delta", thinking="hmm"), StreamEvent(type="done", stop_reason="end_turn")]
+
+
 class EchoTool(Tool):
     name = "Echo"
     description = "Echoes input"
@@ -165,6 +169,80 @@ async def test_denied_tool_reported():
     messages = await _collect(loop)
     assert messages[2].content[0].is_error
     assert "Permission denied" in str(messages[2].content[0].content)
+
+
+async def test_thinking_only_retries_then_succeeds():
+    """Two thinking-only replies get recovery nudges; the third call answers."""
+    from codesage.engine.loop import THINKING_ONLY_RECOVERY
+
+    llm = FakeLLM([lambda i: thinking_only_event(), lambda i: thinking_only_event(), lambda i: text_event("final answer")])
+    messages = await _collect(_loop(llm))
+    assert llm.calls == 3
+    assert [m.role for m in messages] == ["user", "assistant", "user", "assistant", "user", "assistant"]
+    assert messages[2].content == THINKING_ONLY_RECOVERY
+    assert messages[4].content == THINKING_ONLY_RECOVERY
+    assert messages[-1].content[0].text == "final answer"
+
+
+async def test_thinking_only_gives_up_after_3():
+    from codesage.engine.loop import THINKING_ONLY_GIVE_UP
+
+    llm = FakeLLM([lambda i: thinking_only_event()])
+    messages = await _collect(_loop(llm))
+    assert llm.calls == 3
+    assert messages[-1].content == THINKING_ONLY_GIVE_UP
+    assert messages[-1].is_meta
+
+
+async def test_thinking_only_retries_do_not_consume_turns():
+    """max_turns=1 still allows the bounded retry to answer."""
+    llm = FakeLLM([lambda i: thinking_only_event(), lambda i: text_event("finally")])
+    messages = await _collect(_loop(llm, max_turns=1))
+    assert llm.calls == 2
+    assert messages[-1].content[0].text == "finally"
+
+
+async def test_invalid_tool_input_returns_error():
+    from codesage.tools.builtin.shell.bash import BashTool
+
+    async def approve(decision, tool, input):
+        return True
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t1", '{"command": "ls", "timeout_ms": 999999999}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[BashTool()], request_permission=approve)
+    messages = await _collect(loop)
+    assert messages[2].content[0].is_error
+    assert "timeout_ms must be in" in str(messages[2].content[0].content)
+
+
+async def test_validation_failure_does_not_break_siblings():
+    """Invalid input on one tool must not void a valid sibling (per-tool results)."""
+    from codesage.tools.builtin.shell.bash import BashTool
+
+    async def approve(decision, tool, input):
+        return True
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t0", '{"command": "ls", "timeout_ms": 999999999}')
+            + tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[BashTool(), EchoTool()], request_permission=approve)
+    messages = await _collect(loop)
+    # per-tool tool_result messages: Bash error first, Echo result second
+    assert messages[2].content[0].tool_use_id == "t0"
+    assert messages[2].content[0].is_error
+    assert "timeout_ms must be in" in str(messages[2].content[0].content)
+    assert messages[3].content[0].tool_use_id == "t1"
+    assert not messages[3].content[0].is_error
+    assert messages[3].content[0].content == "echo:x"
 
 
 async def test_session_persistence(tmp_path):

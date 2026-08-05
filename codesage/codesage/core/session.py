@@ -57,3 +57,23 @@ class Session:
     @property
     def exists(self) -> bool:
         return self.path.exists()
+
+
+def list_sessions(root: Path) -> list[Path]:
+    """All session .jsonl files under *root* (incl. project_key subdirs), newest mtime first."""
+    if not root.exists():
+        return []
+    files = list(root.glob("*.jsonl"))
+    files.extend(p for sub in root.iterdir() if sub.is_dir() for p in sub.glob("*.jsonl"))
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def most_recent_session(root: Path) -> Path | None:
+    """Path of the newest session file, or None."""
+    sessions = list_sessions(root)
+    return sessions[0] if sessions else None
+
+
+def find_session(root: Path, session_id: str) -> Path | None:
+    """Locate a session file by id (root-level or inside any project_key subdir)."""
+    return next((p for p in list_sessions(root) if p.stem == session_id), None)

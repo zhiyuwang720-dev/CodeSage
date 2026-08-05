@@ -40,3 +40,14 @@ def test_match_first_returns_rule():
     assert match_first(["/home/u/**"], "Write", Path("/home/u/x.txt")) == "/home/u/**"
     assert match_first(["Bash"], "Bash", None) == "Bash"
     assert match_first(["Read"], "Bash", None) is None
+
+
+def test_negation_cancels_earlier_match():
+    assert match_first(["/repo/**", "!/repo/secret/**"], "Write", Path("/repo/secret/x")) is None
+    assert match_first(["!/repo/secret/**"], "Write", Path("/repo/secret/x")) is None
+    assert match_first(["Bash", "!Bash"], "Bash", None) is None
+
+
+def test_negation_not_matching_leaves_earlier_match():
+    assert match_first(["/repo/**", "!/other/**"], "Write", Path("/repo/x.txt")) == "/repo/**"
+    assert match_first(["Bash", "!Read"], "Bash", None) == "Bash"

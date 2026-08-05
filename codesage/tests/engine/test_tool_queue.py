@@ -1,11 +1,12 @@
-"""ToolUseQueue tests: concurrency barriers, sibling errors."""
+"""ToolUseQueue tests: concurrency barriers, sibling errors, result spill."""
 
 import asyncio
 import time
+from pathlib import Path
 
 from codesage.engine import ToolUseQueue
+from codesage.engine.tool_queue import MAX_TOOL_RESULT_CHARS, ScheduledTool
 from codesage.tools import Tool, ToolResult, ToolUseContext
-from codesage.engine.tool_queue import ScheduledTool
 
 
 class FastTool(Tool):
@@ -100,6 +101,35 @@ async def test_permission_check_can_deny():
     results = await ToolUseQueue(_schedule([FastTool()]), permission_check=deny).run()
     assert results[0].result.is_error
     assert "Permission denied" in str(results[0].result.content)
+
+
+class BigTool(Tool):
+    name = "Big"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult("x" * (MAX_TOOL_RESULT_CHARS + 1))
+
+
+async def test_large_result_spilled_to_disk():
+    """Oversized str results are saved to a temp file; content becomes a pointer."""
+    results = await ToolUseQueue(_schedule([BigTool()])).run()
+    content = results[0].result.content
+    assert content.startswith("(result saved to ")
+    path_part = content[len("(result saved to "):].split(": ", 1)[0]
+    assert path_part.endswith(".txt")
+    saved = Path(path_part)
+    assert saved.read_text(encoding="utf-8") == "x" * (MAX_TOOL_RESULT_CHARS + 1)
+    assert content.endswith("...)")
+    assert "x" * 500 in content  # first 500 chars previewed
+
+
+async def test_small_result_not_spilled():
+    results = await ToolUseQueue(_schedule([FastTool()])).run()
+    assert results[0].result.content == "fast"
 
 
 async def test_permission_check_allow_passthrough():

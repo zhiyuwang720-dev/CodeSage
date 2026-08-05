@@ -62,13 +62,52 @@ def test_deny_not_bypassed_by_yolo():
     assert d.mode == "deny" and not d.allowed
 
 
-def test_yolo_auto_allows_default_ask():
-    # Write (not in REQUIRES_EXPLICIT_APPROVAL) is auto-allowed under yolo
+def test_yolo_auto_allows_default_ask(tmp_path):
+    # Write inside the working directory (not in REQUIRES_EXPLICIT_APPROVAL)
+    # is auto-allowed under yolo
     d = PermissionEngine().evaluate_tool_use(
-        tool_name="Write", tool_input={"file_path": "/tmp/x.txt", "content": "x"},
-        mode=PermissionMode.YOLO, cwd=Path("/"),
+        tool_name="Write", tool_input={"file_path": str(tmp_path / "x.txt"), "content": "x"},
+        mode=PermissionMode.YOLO, cwd=tmp_path,
     )
     assert d.allowed and d.mode == "allow" and d.source == "yolo"
+
+
+def test_yolo_write_outside_working_dir_asks(tmp_path):
+    """The critical safety property: yolo never auto-allows out-of-tree writes."""
+    target = tmp_path.parent / "outside.txt"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Write", tool_input={"file_path": str(target), "content": "x"},
+        mode=PermissionMode.YOLO, cwd=tmp_path,
+    )
+    assert d.mode == "ask" and d.requires_explicit_approval
+    assert not d.allowed
+
+
+def test_read_outside_working_dir_asks(tmp_path):
+    target = tmp_path.parent / "elsewhere.txt"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read", tool_input={"file_path": str(target)}, cwd=tmp_path,
+    )
+    assert d.mode == "ask" and d.requires_explicit_approval
+
+
+def test_working_dirs_param_expands_scope(tmp_path):
+    inside = tmp_path / "sub" / "x.txt"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Write", tool_input={"file_path": str(inside), "content": "x"},
+        mode=PermissionMode.YOLO, cwd=tmp_path, working_dirs=[tmp_path / "sub"],
+    )
+    assert d.allowed
+
+
+def test_explicit_allow_rule_wins_over_working_dir(tmp_path):
+    """A user-whitelisted path outside the working dirs remains writable."""
+    target = tmp_path.parent / "allowed.txt"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Write", tool_input={"file_path": str(target), "content": "x"},
+        permissions={"allow": [str(target)]}, cwd=tmp_path,
+    )
+    assert d.allowed and d.mode == "allow"
 
 
 def test_bash_never_auto_allowed_even_in_yolo():
@@ -85,7 +124,7 @@ def test_plan_mode_denies_writes():
 def test_plan_mode_allows_read_only():
     d = PermissionEngine().evaluate_tool_use(
         tool_name="Read", tool_input={"file_path": "/x"}, mode=PermissionMode.PLAN,
-        tool=ReadTool(),
+        tool=ReadTool(), cwd=Path("/"),
     )
     assert d.allowed
 
@@ -145,6 +184,42 @@ def test_write_protection_wins_over_yolo():
 def test_session_rules_merge_with_settings():
     d = _engine(permissions={"allow": ["Bash"]}, session_permissions={"deny": ["Bash"]})
     assert d.mode == "deny"
+
+
+def test_session_negation_revokes_settings_allow():
+    """Later session !rule cancels an earlier settings allow (Kode semantics)."""
+    d = _engine(permissions={"allow": ["Bash"]}, session_permissions={"allow": ["!Bash"]})
+    assert d.mode == "ask" and not d.allowed
+
+
+def test_bash_rules_deny_wins_over_explicit_allow(tmp_path):
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "rm -rf /"},
+        permissions={"allow": ["Bash"]}, cwd=tmp_path,
+    )
+    assert d.mode == "deny" and d.source == "bash-rules"
+
+
+def test_bash_rules_ask_requires_explicit_approval(tmp_path):
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "echo hi > /etc/passwd"}, cwd=tmp_path,
+    )
+    assert d.mode == "ask" and d.requires_explicit_approval
+
+
+def test_bash_rules_allow_continues_normal_chain(tmp_path):
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "ls"}, permissions={"allow": ["Bash"]}, cwd=tmp_path,
+    )
+    assert d.allowed and d.mode == "allow" and d.source == "Bash"
+
+
+def test_bash_rules_ask_not_bypassed_by_yolo(tmp_path):
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "rm /etc/passwd"},
+        mode=PermissionMode.YOLO, cwd=tmp_path,
+    )
+    assert d.mode == "ask" and d.requires_explicit_approval
 
 
 def test_unknown_mode_normalizes_to_default():
