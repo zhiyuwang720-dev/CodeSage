@@ -86,6 +86,20 @@ class ToolUseQueue:
         self._finalize = finalize
         self._on_tool_event = on_tool_event
 
+    def _emit_tool_event(self, event: str, tool_name: str, payload: dict) -> None:
+        """Fire a lifecycle event; a misbehaving callback must never break tools."""
+        if self._on_tool_event is None:
+            return
+        try:
+            self._on_tool_event(event, tool_name, payload)
+        except Exception:
+            # UI/telemetry callbacks are best-effort; log and continue
+            import logging
+
+            logging.getLogger("codesage.engine").warning(
+                "on_tool_event %s(%s) failed", event, tool_name, exc_info=True
+            )
+
     async def run(self) -> list[ScheduledTool]:
         """Execute all scheduled tools; returns them with results attached."""
         pending = list(self._tools)
@@ -144,19 +158,21 @@ class ToolUseQueue:
                 return denied
 
         # ---- execute (PI-01: lifecycle events) ----
-        if self._on_tool_event is not None:
-            self._on_tool_event("start", item.tool.name, {"tool_use_id": item.tool_use_id})
+        self._emit_tool_event("start", item.tool.name, {"tool_use_id": item.tool_use_id})
         try:
             result = None
             async for partial in item.tool.call(item.input, item.context):
                 result = partial  # last yielded value is the ToolResult
-                if self._on_tool_event is not None and hasattr(partial, "content"):
-                    self._on_tool_event("update", item.tool.name, {"tool_use_id": item.tool_use_id})
+                if self._on_tool_event is not None and hasattr(partial, "text") and not hasattr(partial, "content"):
+                    # ToolProgress: carry the progress text (PI-01 update event)
+                    self._emit_tool_event(
+                        "update", item.tool.name,
+                        {"tool_use_id": item.tool_use_id, "progress": getattr(partial, "text", "")},
+                    )
         except ToolError as exc:
             result = ToolResult(str(exc), is_error=True, metadata={"error_code": exc.code} if exc.code else {})
         finally:
-            if self._on_tool_event is not None:
-                self._on_tool_event("end", item.tool.name, {"tool_use_id": item.tool_use_id})
+            self._emit_tool_event("end", item.tool.name, {"tool_use_id": item.tool_use_id})
         if result is None:
             result = ToolResult("(no result)", is_error=True)
 

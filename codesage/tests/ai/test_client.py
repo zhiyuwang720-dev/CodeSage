@@ -417,3 +417,30 @@ async def test_length_truncation_drops_tool_uses(tmp_path, monkeypatch):
     assert not any(b.type == "tool_use" for b in resp.content)
     assert "truncated" in (resp.error_message or "")
     await client.aclose()
+
+
+async def test_partial_json_sentinel_dropped_even_without_length(tmp_path, monkeypatch):
+    """PI-03 review fix: $partial_json sentinel drops tool calls even when
+    finish_reason is NOT length (provider returned broken arguments)."""
+    _cfg(tmp_path, monkeypatch)
+
+    def handler(req):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "message": {
+                        "content": None,
+                        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": '{"command": "rm -'}}],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+            },
+        )
+
+    client = LLMClient(project_dir=str(tmp_path), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    resp = await client.complete(LLMRequest(messages=[Message(role="user", content="hi")]))
+    assert resp.is_error
+    assert not any(b.type == "tool_use" for b in resp.content)
+    await client.aclose()

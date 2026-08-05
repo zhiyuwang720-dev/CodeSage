@@ -240,28 +240,39 @@ class LLMClient:
         await self._http.aclose()
 
 
-def _drop_truncated_tool_uses(response: LLMResponse) -> LLMResponse:
-    """PI-03: a length-truncated response may carry partial tool arguments.
+PARTIAL_TOOL_INPUT_KEY = "$partial_json"  # shared sentinel (adapter + collector)
 
-    Drop the tool_use blocks and surface the error so the model re-issues
-    them instead of executing possibly-broken calls. Shared by the streaming
-    (collect) and non-streaming (complete) paths.
+
+def _drop_truncated_tool_uses(response: LLMResponse) -> LLMResponse:
+    """PI-03: partial tool arguments must never be executed.
+
+    Drop tool_use blocks whose input carries the partial-JSON sentinel, or
+    whose response was length-truncated — either way the arguments may be
+    broken. The model sees an error and re-issues the calls. Shared by the
+    streaming (collect) and non-streaming (complete) paths.
     """
-    if (
-        response.stop_reason == "length"
-        and response.content
-        and any(b.type == "tool_use" for b in response.content)
-    ):
-        kept = [b for b in response.content if b.type != "tool_use"]
-        return LLMResponse(
-            content=kept,
-            stop_reason="length",
-            usage=response.usage,
-            model=response.model,
-            is_error=True,
-            error_message="response truncated before tool calls completed; re-issue the tool calls",
+    content = response.content
+    if not content or not any(b.type == "tool_use" for b in content):
+        return response
+    truncated = response.stop_reason == "length"
+    kept = [
+        b
+        for b in content
+        if not (
+            b.type == "tool_use"
+            and (truncated or (b.input or {}).get(PARTIAL_TOOL_INPUT_KEY) is not None)
         )
-    return response
+    ]
+    if len(kept) == len(content):
+        return response
+    return LLMResponse(
+        content=kept,
+        stop_reason=response.stop_reason,
+        usage=response.usage,
+        model=response.model,
+        is_error=True,
+        error_message="response truncated before tool calls completed; re-issue the tool calls",
+    )
 
 
 def _is_fallback_eligible(exc: LLMError) -> bool:

@@ -10,6 +10,7 @@ import asyncio
 import os
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,12 +131,15 @@ async def repl_loop(
     _install_signal_handlers(loop)
     # /show-thinking toggles the flag; /mode writes loop.mode via "loop";
     # transcript toggles Ctrl+O expanded rendering for subsequent messages.
-    # pending_input collects keystrokes typed while a turn is running (PI-06).
-    state = {"show_thinking": show_thinking, "loop": loop, "transcript": False, "pending_input": []}
-    # steer queue: inputs typed mid-run are drained into the next LLM call
+    state = {"show_thinking": show_thinking, "loop": loop, "transcript": False}
+    # steer queue is the single source of truth for mid-run inputs (PI-06):
+    # the capture thread appends to captured_lines (GIL-atomic); the main
+    # thread transfers them into the queue before/after each turn, and the
+    # followUp loop only re-runs what the engine did NOT consume.
     loop.steer_queue = asyncio.Queue()
-
-    _install_mid_run_input_capture(loop, state)
+    state["captured_lines"] = []
+    capture_gate = threading.Event()
+    _install_mid_run_input_capture(loop, state, capture_gate)
 
     while True:
         try:
@@ -152,40 +156,44 @@ async def repl_loop(
             if await _handle_slash_command(loop, line, state):
                 return
             continue
-        loop.abort.clear()
-        summary = await run_single_turn(
-            loop, line,
-            show_thinking=state["show_thinking"],
-            transcript=state["transcript"],
-        )
-        # PI-06 followUp: inputs typed while the turn was running become the
-        # next prompt automatically instead of being lost
-        pending = _drain_pending_input(state)
+        pending = line
         while pending:
             loop.abort.clear()
-            summary = await run_single_turn(
-                loop, pending,
-                show_thinking=state["show_thinking"],
-                transcript=state["transcript"],
-            )
-            pending = _drain_pending_input(state)
+            capture_gate.set()  # capture keystrokes only while a turn runs
+            try:
+                summary = await run_single_turn(
+                    loop, pending,
+                    show_thinking=state["show_thinking"],
+                    transcript=state["transcript"],
+                )
+            finally:
+                capture_gate.clear()
+            # followUp: transfer captured lines into the queue, then re-run
+            # whatever the engine did not consume (single source of truth)
+            _transfer_captured(loop, state)
+            pending = _drain_steer_queue(loop)
 
 
-def _install_mid_run_input_capture(loop: AgentLoop, state: dict) -> None:
+def _install_mid_run_input_capture(loop: AgentLoop, state: dict, gate: "threading.Event") -> None:
     """PI-06: while a turn runs, keystrokes accumulate instead of being lost.
 
-    The capture thread watches stdin non-blockingly; complete lines go to the
-    steer queue (engine injects them mid-run) and to pending_input (REPL
-    followUp). On POSIX this is best-effort (select); on Windows msvcrt.
+    The capture thread only reads stdin while *gate* is set (i.e. inside
+    run_single_turn) — never during _read_line, so it cannot race the main
+    prompt. Complete lines append to state["captured_lines"] (GIL-atomic);
+    the main thread transfers them into the steer queue. On POSIX this is
+    best-effort (select); on Windows msvcrt.
     """
-    import threading
-
     def _capture():
         if sys.platform == "win32":
             import msvcrt
 
             buf: list[str] = []
             while True:
+                if not gate.is_set():
+                    import time
+
+                    time.sleep(0.05)
+                    continue
                 if not msvcrt.kbhit():
                     import time
 
@@ -194,16 +202,14 @@ def _install_mid_run_input_capture(loop: AgentLoop, state: dict) -> None:
                 ch = msvcrt.getwch()
                 if ch in ("\r", "\n"):
                     if buf:
-                        text = "".join(buf).strip()
-                        if text and loop.steer_queue is not None:
-                            loop.steer_queue.put_nowait(text)
-                        if text:
-                            state.setdefault("pending_input", []).append(text)
+                        state.setdefault("captured_lines", []).append("".join(buf).strip())
                         buf = []
                 elif ch == "\x08":
                     if buf:
                         buf.pop()
-                elif ch not in ("\x1b", "\x0f", "\x03"):
+                elif ch == "\x03":
+                    buf = []  # interrupt: don't carry leftovers into the next line
+                elif ch not in ("\x1b", "\x0f"):
                     buf.append(ch)
         else:
             # POSIX best-effort: select on stdin, read one line at a time
@@ -212,34 +218,41 @@ def _install_mid_run_input_capture(loop: AgentLoop, state: dict) -> None:
             while True:
                 import time
 
+                if not gate.is_set():
+                    time.sleep(0.05)
+                    continue
                 if select.select([sys.stdin], [], [], 0.05)[0]:
                     line = sys.stdin.readline()
                     if not line:
                         break
                     text = line.strip()
-                    if text and loop.steer_queue is not None:
-                        loop.steer_queue.put_nowait(text)
                     if text:
-                        state.setdefault("pending_input", []).append(text)
+                        state.setdefault("captured_lines", []).append(text)
 
     thread = threading.Thread(target=_capture, daemon=True)
     thread.start()
 
 
-def _drain_pending_input(state: dict) -> str | None:
-    """PI-06 followUp: take the first pending input collected mid-run."""
-    pending = state.setdefault("pending_input", [])
-    if not pending:
+def _transfer_captured(loop: AgentLoop, state: dict) -> None:
+    """Move captured keystrokes into the steer queue (main thread, asyncio-safe)."""
+    captured = state.pop("captured_lines", [])
+    for text in captured:
+        if text and loop.steer_queue is not None:
+            loop.steer_queue.put_nowait(text)
+
+
+def _drain_steer_queue(loop: AgentLoop) -> str | None:
+    """PI-06 followUp: re-run what the engine did NOT consume of the steer queue.
+
+    The steer queue is the single source of truth — inputs the engine already
+    injected mid-run are gone; leftovers become the next prompt exactly once.
+    """
+    if loop.steer_queue is None:
         return None
-    text = pending.pop(0)
-    # also clear it from the steer queue if it was queued but not yet consumed
-    q = state.get("loop")
-    if q is not None and getattr(q, "steer_queue", None) is not None:
-        try:
-            q.steer_queue.get_nowait()
-        except Exception:
-            pass
-    return text
+    try:
+        return loop.steer_queue.get_nowait()
+    except asyncio.QueueEmpty:
+        return None
 
 
 def _read_line(state: dict) -> str | None:

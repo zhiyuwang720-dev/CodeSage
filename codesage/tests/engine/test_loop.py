@@ -438,3 +438,35 @@ async def test_tool_error_code_in_metadata():
     tool_round = messages[2]
     assert tool_round.content[0].is_error
     assert tool_round.content[0].content == "bad input"
+
+
+async def test_terminate_yields_tool_results_first():
+    """PI-04 review fix: tool results are yielded BEFORE the stop message."""
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Terminate", "t1", "{}"),
+            lambda i: text_event("should not run"),
+        ]
+    )
+    messages = await _collect(_loop(llm, tools=[TerminateTool()]))
+    # the tool_result round appears, then the stop message
+    assert messages[-2].content[0].type == "tool_result"
+    assert messages[-1].content == "Stopped: tools requested termination."
+    assert llm.calls == 1
+
+
+async def test_finalize_hook_rewrites_results():
+    """PI-02: finalize can rewrite tool results before the model sees them."""
+
+    async def finalize(item, result):
+        return ToolResult(f"rewritten:{result.content}", metadata=result.metadata)
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, finalize=finalize)
+    messages = await _collect(loop)
+    assert messages[2].content[0].content == "rewritten:echo:x"

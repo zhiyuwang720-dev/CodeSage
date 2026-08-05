@@ -68,6 +68,7 @@ class AgentLoop:
         on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
+        finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
     ):
         self.client = client
         self.tools = tools
@@ -87,8 +88,10 @@ class AgentLoop:
         self.on_stream = on_stream
         self.steer_queue = steer_queue
         self.on_tool_event = on_tool_event
+        self.finalize = finalize
         #: Termination reason of the last run(): "completed" | "max_turns" |
-        #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" (CC-10)
+        #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
+        #: "tool_terminated" (CC-10 / PI-04)
         self.last_stop_reason: str | None = None
         self.abort = asyncio.Event()
         #: One ToolUseContext per loop: carries read-freshness state and the
@@ -167,13 +170,6 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(tool_uses)
-                # PI-04: terminate semantics — the turn stops only when EVERY
-                # tool in the batch asks to stop (avoids one tool ending the run)
-                if scheduled and all(
-                    item.result is not None and item.result.terminate for item in scheduled
-                ):
-                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.")
-                    return
                 # one tool_result user message per tool, in tool_use order
                 # (normalize_for_api merges adjacent user messages — wire behavior unchanged)
                 for item in scheduled:
@@ -190,6 +186,14 @@ class AgentLoop:
                     yield tool_round
                     await self._persist(tool_round)
                     messages.append(tool_round)
+                # PI-04: terminate semantics — the turn stops only when EVERY
+                # tool in the batch asks to stop. Checked AFTER the tool results
+                # were yielded so the model/user still see what the tools did.
+                if scheduled and all(
+                    item.result is not None and item.result.terminate for item in scheduled
+                ):
+                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.")
+                    return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
             self.last_stop_reason = "error"
@@ -279,6 +283,7 @@ class AgentLoop:
             scheduled,
             permission_check=self._permission_check,
             on_tool_event=self.on_tool_event,
+            finalize=self.finalize,
         )
         return await queue.run()
 
