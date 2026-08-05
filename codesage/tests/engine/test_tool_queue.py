@@ -84,14 +84,17 @@ async def test_non_safe_tool_is_barrier():
     assert len(results) == 2
 
 
-async def test_sibling_error_poisons_queue():
-    """One failed tool voids every sibling (Kode design note #3)."""
-    tools = [FastTool(), ErrorTool(), FastTool()]
+async def test_sibling_error_keeps_completed_voids_unstarted():
+    """A failed tool keeps its completed siblings' real results; only tools
+    that have NOT started (later batches) are voided (CC review softening)."""
+    # batch 1: ErrorTool (safe) + SlowTool (barrier) run together;
+    # batch 2: FastTool queued behind the barrier — never starts.
+    tools = [ErrorTool(), SlowTool(), FastTool()]
     results = await ToolUseQueue(_schedule(tools)).run()
     by_id = {r.tool_use_id: r for r in results}
-    assert by_id["t1"].result.is_error  # the erroring tool
-    assert "Sibling tool call errored" in str(by_id["t0"].result.content)  # voided
-    assert "Sibling tool call errored" in str(by_id["t2"].result.content)  # voided
+    assert by_id["t0"].result.is_error  # the erroring tool
+    assert by_id["t1"].result.content == "slow done"  # completed sibling kept
+    assert "Sibling tool call errored" in str(by_id["t2"].result.content)  # unstarted voided
 
 
 async def test_permission_check_can_deny():

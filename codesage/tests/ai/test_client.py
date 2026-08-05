@@ -366,3 +366,24 @@ async def test_stream_empty_raises_retryable(tmp_path, monkeypatch):
     assert not exc_info.value.cancelled
     assert calls["n"] == 2  # retried once before giving up
     await client.aclose()
+
+
+# ---- api_key field + startup hint support ----
+
+async def test_profile_api_key_field_preferred(tmp_path, monkeypatch):
+    """An explicit api_key on the profile wins over the env var."""
+    _cfg(tmp_path, monkeypatch)
+    from codesage.ai import ModelProfile
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    profile = ModelProfile(model="m", api_key="file-key")
+    assert profile.get_api_key() == "file-key"
+
+
+async def test_profile_api_key_falls_back_to_env(tmp_path, monkeypatch):
+    from codesage.ai import ModelProfile
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert ModelProfile(model="m").get_api_key() is None
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    assert ModelProfile(model="m").get_api_key() == "env-key"

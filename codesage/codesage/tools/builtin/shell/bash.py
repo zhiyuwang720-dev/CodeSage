@@ -27,6 +27,24 @@ _RM_RF_PROTECTED = ("/", "/home", "/root")
 _RM_RF_PROTECTED_PATHS = {Path(p).resolve() for p in _RM_RF_PROTECTED}
 #: `cd <path>` at command start or after a separator (quotes stripped).
 _CD_RE = re.compile(r'(?:^|[;&|\r\n]\s*)cd(?:\s+(?:"([^"]*)"|\'([^\']*)\'|(\S+)))?')
+#: Git Bash style "/e/Mac/..." → drive-letter path (models output POSIX-style
+#: paths on Windows; Path() would resolve them against the *current* drive).
+_GITBASH_PATH_RE = re.compile(r"^/([a-zA-Z])/(.*)$")
+
+
+def _parse_target(target: str) -> Path:
+    """Interpret a path argument the way the shell would on this platform.
+
+    On Windows, Git Bash style `/e/Mac/...` means `E:\Mac\...` — Python's
+    Path would attach the *current* drive instead, making in-cwd checks fail
+    for perfectly legal commands.
+    """
+    t = target.strip("'\"")
+    if sys.platform == "win32":
+        m = _GITBASH_PATH_RE.match(t)
+        if m:
+            return Path(f"{m.group(1).upper()}:/{m.group(2)}")
+    return Path(t)
 
 
 def _rm_target_protected(target: str, cwd: Path) -> bool:
@@ -37,7 +55,8 @@ def _rm_target_protected(target: str, cwd: Path) -> bool:
     if t.rstrip("/") in _RM_RF_PROTECTED or t.rstrip("/") == "~":
         return True
     try:
-        return Path(t).resolve() in _RM_RF_PROTECTED_PATHS or Path(t).resolve() == cwd.resolve()
+        resolved = _parse_target(t).resolve()
+        return resolved in _RM_RF_PROTECTED_PATHS or resolved == cwd.resolve()
     except OSError:
         return True
 
@@ -75,7 +94,7 @@ def check_cd(command: str, cwd: Path) -> str | None:
         if target is None or target == "-":  # bare `cd` (home) / `cd -` (old pwd)
             return "Command refused: cd outside the working directory"
         try:
-            t = Path(target).expanduser()
+            t = _parse_target(target).expanduser()
             if not t.is_absolute():
                 t = cwd / t
             if not t.resolve().is_relative_to(base):

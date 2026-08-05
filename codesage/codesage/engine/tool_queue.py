@@ -111,11 +111,12 @@ class ToolUseQueue:
                     item.result = result
                 item.status = "completed"
             if any_error:
-                # a failed batch voids its own non-error siblings (design note #3)
-                for item in batch:
-                    if not item.result.is_error:
-                        item.result = ToolResult(SIBLING_ERROR_TEXT, is_error=True)
-                # ...and poisons everything still queued
+                # Sibling policy (Kode design note #3, softened per CC review):
+                # completed siblings keep their real results — voiding a
+                # successful Read/Grep because a sibling failed throws away
+                # useful signal. Only tools that have NOT started yet are
+                # voided (a failed write may have corrupted the environment,
+                # so speculative siblings must not run).
                 for item in pending[index:]:
                     item.result = ToolResult(SIBLING_ERROR_TEXT, is_error=True)
                     item.status = "completed"
