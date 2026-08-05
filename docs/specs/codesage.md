@@ -135,15 +135,15 @@ class PermissionDecision(BaseModel):
 
 V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,端到端完成小任务)
 
-| # | 分支 | 模块 | 内容(对照保留清单) | 交付 |
-|---|---|---|---|---|
-| 01 | `feat/01-config` | 配置系统 | settings 三层(user/project/local)+ 全局配置 + 项目发现(含 AGENTS.md 路径发现,#19) | 配置加载 + 单测 |
-| 02 | `feat/02-ai` | LLM 客户端 | OpenAI 兼容 + Anthropic 原生 adapter、流式、重试(#11)、成本、模型指针、VCR | 适配器 + 单测 |
-| 03 | `feat/03-tools` | 工具契约与内置工具 | Tool 三合一对象、注册表、Read/Write/Edit/Glob/Grep/LS/Bash(最小安全:真超时/kill + validateInput)、超大结果落盘 | 工具 + 单测 |
-| 04 | `feat/04-core` | 消息与会话 | Message 类型、normalizeMessagesForAPI(合并/剔除规则)、会话 JSONL + 原子写(#14) | 消息模型 + 单测 |
-| 05 | `feat/05-permissions` | 权限引擎 | 决策链完整顺序(#5)、deny>ask>allow(#6)、路径规则(gitignore 语义 + symlink 展开)、写保护路径、模式(plan/default/yolo)、**审计钩子**、规则持久化 | 决策链 + 单测 |
-| 06 | `feat/06-engine` | 引擎主循环 | 递归循环(#1)、ToolUseQueue(#3)、错误转 tool_result(#2)、AbortSignal 三检查点(#4)、hooks 挂接点预留、system prompt 组装骨架 | 循环 + 单测 |
-| 07 | `feat/07-cli` | CLI REPL | 交互循环、权限询问(文本)、信号处理、流式输出 → **V1 闭环验收** | REPL + 验收 |
+| # | 分支 | 模块 | 内容(对照保留清单) | 交付 | 状态 |
+|---|---|---|---|---|---|
+| 01 | `feat/01-config` | 配置系统 | settings 三层 + 全局配置 + AGENTS.md 发现 + BOM/symlink/mode/降级 | 配置 + 单测 | ✅ 已交付 + 强化 |
+| 02 | `feat/02-ai` | LLM 客户端 | 双 adapter、流式、重试、成本、模型指针、VCR + 传输错误包装/取消/截断处理 | 适配器 + 单测 | ✅ 已交付 + 强化 |
+| 03 | `feat/03-tools` | 工具契约与内置工具 | Tool 契约、注册表、**12 工具**(LS/Read/Write/Edit/Glob/Grep/Bash/TaskOutput/TaskStop/TodoWrite/WebFetch/AskUserQuestion 规划中)+ 陈旧性校验/守卫/后台 | 工具 + 单测 | ✅ 已交付 + 强化 |
+| 04 | `feat/04-core` | 消息与会话 | Message 类型、normalize(toolResultsFirst)、会话 JSONL + 项目作用域 | 消息模型 + 单测 | ✅ 已交付 + 强化 |
+| 05 | `feat/05-permissions` | 权限引擎 | 10 步决策链、Bash 静态分析、规则 Tool(content) 语义、工作目录约束、写保护、审计 | 决策链 + 单测 | ✅ 已交付 + 强化 |
+| 06 | `feat/06-engine` | 引擎主循环 | while 迭代(非递归)、ToolUseQueue、错误自愈、abort、thinking-only 重试、结果落盘 | 循环 + 单测 | ✅ 已交付 + 强化 |
+| 07 | `feat/07-cli` | CLI REPL | 交互/单次双模式、权限询问、信号、--print/--resume/--safe/--json/--budget | REPL + 验收 | ✅ 已交付 + 强化 |
 | 08 | `feat/08-context` | 上下文管理 | AGENTS.md 收集/截断(#19)、system prompt 分层组装、system-reminder(#20) | 上下文 + 单测 |
 | 09 | `feat/09-hooks` | 钩子系统 | PreToolUse(权限决策汇入 #10)/PostToolUse/Stop/UserPromptSubmit/SessionStart、命令+提示双执行体、JSON 结果解析 | 钩子 + 单测 |
 | 10 | `feat/10-compact` | 上下文压缩 | token 预算、auto-compact(LLM 摘要)+ micro-compact(#13) | 压缩 + 单测 |
@@ -159,6 +159,18 @@ V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,
 
 每阶段交付:`[代码] + docs/modules/0N-*.md(理解文档)+ 单测全绿 + 合并回 master`。
 阶段规格在该分支细化(六项核心区 + 完成标准 + 对照保留清单)。
+
+## V1 生产级强化记录(2026-08-05,三轮修复)
+
+V1(01–07)交付后经 7 代理对照 Kode 审查(功能级 + 文件级两轮),确认未达生产级标准,执行三轮修复(共 ~4200 行,测试 170 → 337):
+
+| 轮次 | 范围 | 关键修复 |
+|---|---|---|
+| 批次 1 | ai/core/config/tools | 传输错误包装(重试复活)、stream 成本累计(max_budget 死代码)、Edit/Write 陈旧性校验、Bash 守卫/cd 限制、后台任务、BOM/symlink/mode、normalize toolResultsFirst、OpenAI 转换丢 text bug |
+| 批次 2 | permissions/engine/cli | **工作目录约束(堵 yolo 任意写)**、Bash 静态分析、规则 ! 否定、thinking-only 重试、validate_input 接线、超大结果落盘、stdin/--resume/--safe/退出码 |
+| 批次 3 | 文件级 A 类 19 项 | 规则 Tool(content) 语义(路径约束恢复)、Bash 精确规则 + 子命令级、remember 精确粒度、Windows 守卫、取消贯穿 HTTP、截断流丢弃 tool_use、Grep rg 化、TodoWrite/WebFetch(SSRF)、cli 7 项 |
+
+**结论**:V1 现达到生产级标准(差距分析见 `docs/gap-analysis-v1.md` + `docs/gap-analysis-file-level.md`)。Kode 剩余功能全部映射后续阶段(08–19)或有明确 C 类理由(daemon 域/ant 内部/UI 框架/兼容层)。
 
 ## 假设清单(默认成立,可修正)
 
