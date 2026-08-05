@@ -15,8 +15,10 @@ CodeSage —— 用 Python 实现类 Claude Code / Kode-CLI 的 Harness 框架,�
 ## 命令
 
 ```bash
-cd codesage
-python -m pytest tests/ -q                            # 全量测试
+# 测试(项目根 codesage/ 或仓库根均可,顶层 shim 已兼容)
+python -m pytest codesage/tests/ -q                  # 仓库根运行
+cd codesage && python -m pytest tests/ -q            # 项目根运行
+python -m codesage.cli --version                     # 仓库根直接可用
 python -m pytest tests/<module>/ -q                   # 单模块(如 tests/permissions/)
 python -m pytest tests/<module>/test_x.py -q          # 单文件
 python -m pytest tests/...::test_name -q              # 单个测试
