@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -163,6 +164,22 @@ class _Aborted(Exception):
     """Internal: subprocess was aborted via ctx.abort_event."""
 
 
+def _shell_argv(command: str) -> tuple[list[str], str] | None:
+    """Return (argv, kind) for the shell to use, or None for the platform
+    default (create_subprocess_shell).
+
+    On Windows the platform default is cmd.exe, but the model writes POSIX
+    syntax (`;`, `/e/...` paths, `&&` chains) — running that under cmd fails
+    systematically. Prefer Git Bash when it is installed so the commands the
+    model produces actually work.
+    """
+    if sys.platform == "win32":
+        bash = shutil.which("bash")
+        if bash:
+            return [bash, "-c", command], "bash"
+    return None
+
+
 async def run_shell(
     command: str,
     *,
@@ -172,20 +189,32 @@ async def run_shell(
     abort_event: asyncio.Event | None = None,
 ) -> tuple[str, str, int]:
     """Run a command with a hard timeout; kills the whole process tree on
-    expiry, on abort, or on caller cancellation."""
+    expiry, on abort, or on caller cancellation. On Windows, runs via Git
+    Bash when available (the model writes POSIX syntax)."""
     process_env = os.environ.copy()
     if env:
         process_env.update(env)
     start_new_session = sys.platform != "win32"  # posix: own process group for killpg
+    argv = _shell_argv(command)
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd),
-            env=process_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=start_new_session,
-        )
+        if argv is not None:
+            proc = await asyncio.create_subprocess_exec(
+                *argv[0],
+                cwd=str(cwd),
+                env=process_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=start_new_session,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(cwd),
+                env=process_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=start_new_session,
+            )
     except OSError as exc:
         raise ToolError(f"Failed to start process: {exc}") from exc
 

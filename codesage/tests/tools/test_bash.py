@@ -125,3 +125,30 @@ async def test_cd_restriction_skipped_in_user_bash_mode(tmp_path):
     ctx.command_source = "user_bash_mode"
     result = await BashTool().call({"command": "cd /tmp && pwd"}, ctx).__anext__()
     assert not result.is_error
+
+
+def test_shell_argv_prefers_git_bash_on_windows(monkeypatch):
+    """On Windows with Git Bash installed, commands run via `bash -c`
+    (the model writes POSIX syntax; cmd.exe would break on `;` etc.)."""
+    import codesage.tools.builtin.shell.bash as bash_mod
+
+    monkeypatch.setattr(bash_mod.sys, "platform", "win32")
+    monkeypatch.setattr(bash_mod.shutil, "which", lambda name: "C:/Program Files/Git/bin/bash.exe" if name == "bash" else None)
+    argv, kind = bash_mod._shell_argv("git log; echo done")
+    assert kind == "bash"
+    assert argv == ["C:/Program Files/Git/bin/bash.exe", "-c", "git log; echo done"]
+
+
+def test_shell_argv_falls_back_when_no_bash(monkeypatch):
+    import codesage.tools.builtin.shell.bash as bash_mod
+
+    monkeypatch.setattr(bash_mod.sys, "platform", "win32")
+    monkeypatch.setattr(bash_mod.shutil, "which", lambda name: None)
+    assert bash_mod._shell_argv("dir") is None
+
+
+def test_shell_argv_posix_uses_default_shell(monkeypatch):
+    import codesage.tools.builtin.shell.bash as bash_mod
+
+    monkeypatch.setattr(bash_mod.sys, "platform", "linux")
+    assert bash_mod._shell_argv("ls") is None
