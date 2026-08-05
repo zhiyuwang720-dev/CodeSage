@@ -185,6 +185,7 @@ class AgentLoop:
             usage=response.usage,
             model=response.model,
             is_error=response.is_error,
+            error_message=response.error_message,
         )
 
     async def _execute_tools(self, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:

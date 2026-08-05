@@ -30,6 +30,7 @@ class SessionMessage:
     message_id: str | None = None  # assistant streaming chunk anchor (Kode message.id)
     is_error: bool = False  # provider error surfaced as a message; dropped before API
     is_meta: bool = False  # synthesized messages (e.g. interruption notices)
+    error_message: str | None = None  # provider/transport error detail (diagnostics)
 
     # ---- serialization ----
 
@@ -47,6 +48,7 @@ class SessionMessage:
             "message_id": self.message_id,
             "is_error": self.is_error,
             "is_meta": self.is_meta,
+            "error_message": self.error_message,
         }
 
     @classmethod
@@ -67,6 +69,7 @@ class SessionMessage:
             message_id=data.get("message_id"),
             is_error=bool(data.get("is_error", False)),
             is_meta=bool(data.get("is_meta", False)),
+            error_message=data.get("error_message"),
         )
 
     def to_json(self) -> str:

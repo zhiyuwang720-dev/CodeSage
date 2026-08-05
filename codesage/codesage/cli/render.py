@@ -59,7 +59,8 @@ def _render_assistant(message: SessionMessage, out: TextIO, show_thinking: bool)
         print(_c(f"\n{content}", RED) if message.is_error else f"\n{content}", file=out)
         return
     if message.is_error and not _blocks_text(content):
-        print(_c("\n(provider error)", RED), file=out)
+        detail = message.error_message or "unknown provider error"
+        print(_c(f"\n(provider error: {detail})", RED), file=out)
         return
     text_parts: list[str] = []
     thinking_chars = 0
