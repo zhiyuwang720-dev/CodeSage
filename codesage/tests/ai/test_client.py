@@ -1,11 +1,12 @@
 """LLMClient tests: pointer resolution, auxiliary fallback, cost tracking."""
 
+import asyncio
 import json
 
 import httpx
 import pytest
 
-from codesage.ai import LLMClient, LLMError, LLMRequest, Message
+from codesage.ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from codesage.config import GlobalConfig, paths
 
 
@@ -199,4 +200,169 @@ async def test_stream_retries_once_on_immediate_error(tmp_path, monkeypatch):
     resp = await LLMClient.collect(client.stream(LLMRequest(messages=[Message(role="user", content="hi")])))
     assert resp.text == "ok"
     assert calls["n"] == 2
+    await client.aclose()
+
+
+# ---- A1: cancellation threading ----
+
+async def test_complete_cancelled_before_call(tmp_path, monkeypatch):
+    """A pre-set cancel event aborts before any request hits the wire."""
+    _cfg(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    cancel = asyncio.Event()
+    cancel.set()
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(lambda req: (calls.__setitem__("n", calls["n"] + 1), _ok_response())[1])),
+        cancel_event=cancel,
+    )
+    with pytest.raises(LLMError) as exc_info:
+        await client.complete(LLMRequest(messages=[Message(role="user", content="hi")]))
+    assert exc_info.value.cancelled
+    assert not exc_info.value.retryable
+    assert calls["n"] == 0
+    await client.aclose()
+
+
+async def test_complete_cancelled_mid_call(tmp_path, monkeypatch):
+    """Cancellation during an in-flight request aborts it as LLMError(cancelled)."""
+    _cfg(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    cancel = asyncio.Event()
+
+    async def handler(req):
+        calls["n"] += 1
+        await asyncio.sleep(30.0)  # never completes unless the abort works
+        return _ok_response()
+
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        cancel_event=cancel,
+    )
+    task = asyncio.create_task(client.complete(LLMRequest(messages=[Message(role="user", content="hi")])))
+    await asyncio.sleep(0.05)
+    cancel.set()
+    with pytest.raises(LLMError) as exc_info:
+        await task
+    assert exc_info.value.cancelled
+    assert calls["n"] == 1  # aborted, no retry
+    await client.aclose()
+
+
+async def test_cancelled_aux_does_not_fall_back(tmp_path, monkeypatch):
+    """A cancelled auxiliary request must not restart against the main profile."""
+    _cfg(
+        tmp_path,
+        monkeypatch,
+        model_profiles={
+            "main": {"provider": "openai_compatible", "model": "deepseek-chat", "base_url": "https://api.deepseek.com"},
+            "fast": {"provider": "openai_compatible", "model": "qwen-plus", "base_url": "https://dashscope.example.com"},
+        },
+        model_pointers={"main": "main", "task": "fast", "compact": "fast", "quick": "fast"},
+    )
+    cancel = asyncio.Event()
+    models = []
+
+    async def handler(req):
+        models.append(json.loads(req.content)["model"])
+        await asyncio.sleep(30.0)  # never completes unless the abort works
+        return _ok_response()
+
+    client = LLMClient(
+        project_dir=str(tmp_path),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        cancel_event=cancel,
+    )
+    task = asyncio.create_task(client.complete(LLMRequest(messages=[Message(role="user", content="hi")]), model="task"))
+    await asyncio.sleep(0.05)
+    cancel.set()
+    with pytest.raises(LLMError) as exc_info:
+        await task
+    assert exc_info.value.cancelled
+    assert models == ["qwen-plus"]  # no fallback call to main
+    await client.aclose()
+
+
+async def test_stream_cancelled_mid_stream(tmp_path, monkeypatch):
+    """Setting cancel between streamed events interrupts collect mid-way."""
+    _cfg(tmp_path, monkeypatch)
+    cancel = asyncio.Event()
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    class SlowAdapter:
+        def __init__(self, profile, http):
+            self.profile = profile
+            self.http = http
+
+        async def acomplete(self, request):
+            raise NotImplementedError
+
+        async def astream(self, request):
+            yield StreamEvent(type="text_delta", text="hi")
+            started.set()
+            await release.wait()
+            yield StreamEvent(type="done")
+
+    client = LLMClient(project_dir=str(tmp_path), cancel_event=cancel)
+    client._adapter = lambda profile: SlowAdapter(profile, None)
+    task = asyncio.create_task(
+        LLMClient.collect(client.stream(LLMRequest(messages=[Message(role="user", content="hi")])))
+    )
+    await started.wait()  # first event consumed, stream parked on `release`
+    cancel.set()
+    release.set()
+    with pytest.raises(LLMError) as exc_info:
+        await task
+    assert exc_info.value.cancelled
+    await client.aclose()
+
+
+# ---- A2: truncated streams / empty streams ----
+
+async def test_collect_drops_tool_use_on_error():
+    """An error event mid-stream drops accumulated tool_use (keeps text)."""
+    async def events():
+        yield StreamEvent(type="text_delta", text="sure")
+        yield StreamEvent(type="tool_use_start", tool_use_id="tu1", tool_name="bash")
+        yield StreamEvent(type="tool_use_delta", input_json_delta='{"cmd"')
+        yield StreamEvent(type="tool_use_delta", input_json_delta=':"ls"}')
+        yield StreamEvent(type="error", error="HTTP 503: unavailable")
+
+    resp = await LLMClient.collect(events())
+    assert resp.is_error
+    assert resp.error_message == "HTTP 503: unavailable"
+    assert resp.content == [ContentBlock(type="text", text="sure")]  # no tool_use block
+    assert resp.text == "sure"
+
+
+async def test_stream_empty_raises_retryable(tmp_path, monkeypatch):
+    """A stream with zero events is retried once, then raises a retryable error."""
+    _cfg(tmp_path, monkeypatch)
+    calls = {"n": 0}
+
+    class EmptyAdapter:
+        """Adapter whose stream terminates without yielding (real adapters
+        always emit at least a done event, so this can't go through MockTransport)."""
+
+        def __init__(self, profile, http):
+            self.profile = profile
+            self.http = http
+
+        async def acomplete(self, request):
+            raise NotImplementedError
+
+        async def astream(self, request):
+            calls["n"] += 1
+            if False:
+                yield None  # keep this an async generator
+
+    client = LLMClient(project_dir=str(tmp_path))
+    client._adapter = lambda profile: EmptyAdapter(profile, None)
+    with pytest.raises(LLMError) as exc_info:
+        await LLMClient.collect(client.stream(LLMRequest(messages=[Message(role="user", content="hi")])))
+    assert exc_info.value.retryable
+    assert not exc_info.value.cancelled
+    assert calls["n"] == 2  # retried once before giving up
     await client.aclose()

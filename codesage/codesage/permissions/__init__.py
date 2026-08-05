@@ -9,7 +9,7 @@ from .modes import (
     PermissionMode,
     normalize_mode,
 )
-from .store import load_permission_rules, save_approval
+from .store import build_rule_string, load_permission_rules, save_approval
 
 __all__ = [
     "JsonlAuditSink",
@@ -21,6 +21,7 @@ __all__ = [
     "REQUIRES_EXPLICIT_APPROVAL",
     "SYSTEM_TOOLS",
     "ToolAuditEvent",
+    "build_rule_string",
     "load_permission_rules",
     "normalize_mode",
     "save_approval",

@@ -138,3 +138,26 @@ async def test_permission_check_allow_passthrough():
 
     results = await ToolUseQueue(_schedule([FastTool()]), permission_check=allow).run()
     assert not results[0].result.is_error
+
+
+async def test_abort_event_skips_unstarted_siblings():
+    """Abort set mid-batch: not-yet-started siblings never run, get interrupted."""
+    called = []
+
+    class AbortTool(FastTool):
+        async def _run(self, input, ctx):
+            called.append(input["tag"])
+            ctx.abort_event.set()
+            await asyncio.sleep(0)  # suspend mid-execution; siblings start now
+            return ToolResult("done")
+
+    ctx = ToolUseContext(cwd=Path("."), abort_event=asyncio.Event())
+    scheduled = [
+        ScheduledTool(tool_use_id=f"t{i}", tool=AbortTool(), input={"tag": f"t{i}"}, context=ctx)
+        for i in range(3)
+    ]
+    results = await ToolUseQueue(scheduled).run()
+    assert called == ["t0"]  # only the first tool was invoked
+    for r in results[1:]:
+        assert r.result.is_error
+        assert "(interrupted by user)" in str(r.result.content)

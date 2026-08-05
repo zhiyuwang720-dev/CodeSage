@@ -7,6 +7,7 @@ profile on recoverable errors. Retry lives here, never in the adapters.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ from .adapters.anthropic import AnthropicAdapter
 from .adapters.base import BaseAdapter
 from .adapters.openai_compatible import OpenAICompatibleAdapter
 from .cost import estimate_cost
-from .retry import with_retry
+from .retry import cancelled_error, with_cancel, with_retry
 from .types import ContentBlock, LLMError, LLMRequest, LLMResponse, StreamEvent
 from .vcr import VCRTransport
 from ..config import GlobalConfig
@@ -51,6 +52,7 @@ class LLMClient:
         http: httpx.AsyncClient | None = None,
         vcr_mode: str | None = None,
         total_cost: list[float] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ):
         self._cfg = GlobalConfig.load()
         self._http = http or httpx.AsyncClient(
@@ -60,6 +62,8 @@ class LLMClient:
         self._adapters: dict[tuple[str, str], BaseAdapter] = {}
         # list so cost can be shared across clients (design: session total)
         self.total_cost = total_cost if total_cost is not None else [0.0]
+        #: when set, in-flight requests and retry backoff abort (LLMError "cancelled")
+        self._cancel_event = cancel_event
 
     # ---- pointer resolution ----
 
@@ -109,7 +113,10 @@ class LLMClient:
     async def complete(self, request: LLMRequest, *, model: str = "main") -> LLMResponse:
         profile = self.resolve_profile(model)
         try:
-            response = await with_retry(lambda: self._adapter(profile).acomplete(request))
+            response = await with_retry(
+                lambda: with_cancel(self._adapter(profile).acomplete(request), self._cancel_event),
+                cancel_event=self._cancel_event,
+            )
         except LLMError as exc:
             if model == "main" or not _is_fallback_eligible(exc):
                 raise
@@ -117,7 +124,10 @@ class LLMClient:
             if main_profile == profile:
                 raise
             logger.warning("auxiliary request failed, falling back to main: %s — %s", model, exc)
-            response = await with_retry(lambda: self._adapter(main_profile).acomplete(request))
+            response = await with_retry(
+                lambda: with_cancel(self._adapter(main_profile).acomplete(request), self._cancel_event),
+                cancel_event=self._cancel_event,
+            )
         if response.usage:
             self.total_cost[0] += estimate_cost(response.model or profile.model, response.usage)
         return response
@@ -127,26 +137,34 @@ class LLMClient:
     def stream(self, request: LLMRequest, *, model: str = "main") -> AsyncIterator[StreamEvent]:
         """Stream events; cost is accumulated from the usage event.
 
-        A stream that fails before its first event (connection error or an
-        immediate error event) is retried once — the common network-blip case
-        must not kill a whole turn (design note #11).
+        A stream that fails before its first event (connection error, an
+        immediate error event, or an empty stream) is retried once — the
+        common network-blip case must not kill a whole turn (design note #11).
+        A still-empty stream raises a retryable LLMError.
         """
         profile = self.resolve_profile(model)
         return self._costing_stream(profile, request)
 
+    def _open_stream(self, profile: ModelProfile, request: LLMRequest) -> AsyncIterator[StreamEvent]:
+        """Open a provider stream; checks cancellation before and between events."""
+        self._check_cancel()
+        return _cancel_checked(self._adapter(profile).astream(request), self._cancel_event)
+
+    def _check_cancel(self) -> None:
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise cancelled_error()
+
     async def _costing_stream(
         self, profile: ModelProfile, request: LLMRequest
     ) -> AsyncIterator[StreamEvent]:
-        stream = self._adapter(profile).astream(request)
+        stream = self._open_stream(profile, request)
         first = await _anext_or_none(stream)
-        if first is None:
-            return
-        if first.type == "error":
-            # nothing produced yet: one retry for transient failures
-            stream = self._adapter(profile).astream(request)
+        if first is None or first.type == "error":
+            # nothing useful produced yet: one retry for transient failures / empty streams
+            stream = self._open_stream(profile, request)
             first = await _anext_or_none(stream)
             if first is None:
-                return
+                raise LLMError("empty response from model", retryable=True)
         yield first
 
         usage = first.usage if first.type == "usage" else None
@@ -191,15 +209,18 @@ class LLMClient:
             blocks.append(ContentBlock(type="thinking", text="".join(thinking)))
         if text:
             blocks.append(ContentBlock(type="text", text="".join(text)))
-        for key in tool_order:
-            tu = tool_uses[key]
-            try:
-                parsed = json.loads(tu["json"]) if tu["json"] else {}
-            except json.JSONDecodeError:
-                parsed = {"_partial_json": tu["json"]}
-            blocks.append(
-                ContentBlock(type="tool_use", id=tu["id"], name=tu["name"], input=parsed)
-            )
+        if not error:
+            # a truncated stream must never push partial tool_use blocks
+            # into the execution chain (design: dropped, keep text/thinking)
+            for key in tool_order:
+                tu = tool_uses[key]
+                try:
+                    parsed = json.loads(tu["json"]) if tu["json"] else {}
+                except json.JSONDecodeError:
+                    parsed = {"_partial_json": tu["json"]}
+                blocks.append(
+                    ContentBlock(type="tool_use", id=tu["id"], name=tu["name"], input=parsed)
+                )
         if error:
             return LLMResponse(
                 content=blocks, stop_reason="error", usage=usage, is_error=True, error_message=error
@@ -212,11 +233,26 @@ class LLMClient:
 
 def _is_fallback_eligible(exc: LLMError) -> bool:
     """Recoverable errors for fallback: auth/not-found/rate-limit/5xx/network."""
-    return (
+    # a cancelled request must not silently restart against the main profile
+    return not exc.cancelled and (
         exc.status_code in (401, 403, 404, 429)
         or (exc.status_code is not None and exc.status_code >= 500)
         or exc.status_code is None
     )
+
+
+async def _cancel_checked(
+    stream: AsyncIterator[StreamEvent], cancel_event: asyncio.Event | None
+) -> AsyncIterator[StreamEvent]:
+    """Yield *stream* events, raising LLMError("cancelled") once the event is set.
+
+    Checked per event; a stream stalled inside the provider can't be aborted
+    from here (httpx read loop owns it), which is the accepted simplification.
+    """
+    async for ev in stream:
+        if cancel_event is not None and cancel_event.is_set():
+            raise cancelled_error()
+        yield ev
 
 
 async def _anext_or_none(stream: AsyncIterator[StreamEvent]) -> StreamEvent | None:

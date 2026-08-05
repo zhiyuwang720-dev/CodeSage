@@ -5,6 +5,8 @@ from .filesystem.edit import EditTool
 from .filesystem.ls import LSTool
 from .filesystem.read import ReadTool
 from .filesystem.write import WriteTool
+from .interaction.todo import TodoWriteTool
+from .network.webfetch import WebFetchTool
 from .search.glob import GlobTool
 from .search.grep import GrepTool
 from .shell.bash import BashTool
@@ -21,6 +23,8 @@ BUILTIN_TOOLS: list[Tool] = [
     BashTool(),
     TaskOutputTool(),
     TaskStopTool(),
+    TodoWriteTool(),
+    WebFetchTool(),
 ]
 
 __all__ = ["BUILTIN_TOOLS"]

@@ -225,3 +225,91 @@ def test_bash_rules_ask_not_bypassed_by_yolo(tmp_path):
 def test_unknown_mode_normalizes_to_default():
     d = _engine(mode="weird-mode")
     assert d.mode == "ask"
+
+
+# ---- A1: Tool(content) rules through the engine ----
+
+def test_content_allow_read_rule_scoped(tmp_path):
+    """allow:["Read(<tmp>/**)"] — only Reads inside the dir, never Writes."""
+    rule = f"Read({tmp_path}/**)"
+    inside = str(tmp_path / "a.txt")
+    outside = str(tmp_path.parent / "b.txt")
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read", tool_input={"file_path": inside},
+        permissions={"allow": [rule]}, cwd=tmp_path,
+    )
+    assert d.allowed and d.source == rule
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read", tool_input={"file_path": outside},
+        permissions={"allow": [rule]}, cwd=tmp_path,
+    )
+    assert not d.allowed
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Write", tool_input={"file_path": inside, "content": "x"},
+        permissions={"allow": [rule]}, cwd=tmp_path,
+    )
+    assert not d.allowed
+
+
+def test_content_deny_edit_rule_does_not_block_read(tmp_path):
+    """deny:["Edit(<tmp>/**)"] must not block Reads."""
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Read", tool_input={"file_path": str(tmp_path / "x.py")},
+        permissions={"deny": [f"Edit({tmp_path}/**)"]}, tool=ReadTool(), cwd=tmp_path,
+    )
+    assert d.allowed  # Read self-declares no permissions
+
+
+def test_write_protection_beats_explicit_allow(tmp_path):
+    """A write-protected path stays ask even when an allow rule matches."""
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Write",
+        tool_input={"file_path": str(tmp_path / ".git" / "config"), "content": "x"},
+        permissions={"allow": [f"{tmp_path}/**"]}, cwd=tmp_path,
+    )
+    assert d.mode == "ask" and d.requires_explicit_approval
+
+
+# ---- A2: Bash command rules through the engine ----
+
+def test_bash_content_deny_rule(tmp_path):
+    rules = {"deny": ["Bash(rm *)"]}
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "rm -rf x"}, permissions=rules, cwd=tmp_path,
+    )
+    assert d.mode == "deny" and d.source == "Bash(rm *)"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "ls"}, permissions=rules, cwd=tmp_path,
+    )
+    assert d.mode != "deny"  # the rule does not block ls
+
+
+def test_bash_content_allow_exact_rule(tmp_path):
+    rules = {"allow": ["Bash(git status)"]}
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "git  status"}, permissions=rules, cwd=tmp_path,
+    )
+    assert d.allowed and d.source == "Bash(git status)"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "ls"}, permissions=rules, cwd=tmp_path,
+    )
+    assert d.mode == "ask"
+
+
+def test_bash_content_rule_subcommand_level(tmp_path):
+    """One denied subcommand denies the compound; mixed → ask."""
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "git status && rm -rf x"},
+        permissions={"deny": ["Bash(rm *)"]}, cwd=tmp_path,
+    )
+    assert d.mode == "deny"
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "git status && git diff"},
+        permissions={"allow": ["Bash(git status)"]}, cwd=tmp_path,
+    )
+    assert d.mode == "ask"  # mixed: git diff has no rule
+    d = PermissionEngine().evaluate_tool_use(
+        tool_name="Bash", tool_input={"command": "git status && git log"},
+        permissions={"allow": ["Bash(git status)", "Bash(git log)"]}, cwd=tmp_path,
+    )
+    assert d.allowed and d.mode == "allow"

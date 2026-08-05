@@ -36,7 +36,14 @@ def atomic_write(path: Path | str, content: str | bytes) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_name, path)
+        try:
+            os.replace(tmp_name, path)
+        except PermissionError:
+            # Windows: os.replace fails with EPERM/EACCES when the target is
+            # briefly locked (AV scan, editor); unlink and retry once.
+            if path.exists():
+                os.unlink(path)
+            os.replace(tmp_name, path)
         if mode is not None:
             os.chmod(path, mode)
     except BaseException:

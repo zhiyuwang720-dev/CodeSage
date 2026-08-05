@@ -91,3 +91,22 @@ async def test_final_attempt_propagates_original():
     with pytest.raises(LLMError) as exc_info:
         await with_retry(op, attempts=2, base_delay=0)
     assert exc_info.value.status_code == 500
+
+
+async def test_retry_sleep_cancelled():
+    """Setting cancel_event during the backoff sleep aborts immediately."""
+    cancel = asyncio.Event()
+    calls = []
+
+    async def op():
+        calls.append(1)
+        raise LLMError("rate limited", status_code=429, retryable=True, retry_after_seconds=30.0)
+
+    task = asyncio.create_task(with_retry(op, attempts=2, cancel_event=cancel))
+    await asyncio.sleep(0.05)  # first attempt failed; task is sleeping 30s
+    cancel.set()
+    with pytest.raises(LLMError) as exc_info:
+        await task
+    assert exc_info.value.cancelled
+    assert not exc_info.value.retryable
+    assert len(calls) == 1  # no retry attempt after cancel

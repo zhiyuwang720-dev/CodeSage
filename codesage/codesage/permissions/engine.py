@@ -2,16 +2,20 @@
 
 Chain order (mirroring Kode's hasPermissionsToUseTool):
 1. normalize mode; 2. system whitelist; 3. bash command analysis (deny/ask);
-4. explicit tool rules (deny>ask>allow); 5. file-tool working-directory
-constraint → explicit approval; 6. write-protection → explicit approval;
-7. sensitive reads → explicit approval; 8. needs_permissions() self-declaration
-→ allow; 9. mode post-processing (plan denies writes, yolo auto-allows what
-would ask — never explicit-approval items); 10. audit event.
+4. explicit rules (deny > ask > write-protection > allow; Bash content rules
+evaluated per sub-command — one denied subcommand denies the compound, only
+an all-allowed compound passes); 5. file-tool working-directory constraint →
+explicit approval; 6. sensitive reads → explicit approval;
+7. needs_permissions() self-declaration → allow; 8. mode post-processing
+(plan denies writes, yolo auto-allows what would ask — never
+explicit-approval items); 9. audit event.
 
 deny is absolute: no mode may override a deny (yolo only auto-allows "ask").
-The working-directory constraint is also absolute: a file tool targeting a
-path outside every working_dir asks with explicit approval even under yolo
-(Kode's isPathInWorkingDirectories), but explicit allow rules still win.
+Write protection is a hard floor: even an explicit allow rule cannot write a
+protected path. The working-directory constraint is also absolute: a file
+tool targeting a path outside every working_dir asks with explicit approval
+even under yolo (Kode's isPathInWorkingDirectories), but explicit allow rules
+still win.
 """
 
 from __future__ import annotations
@@ -30,10 +34,7 @@ from .modes import (
     normalize_mode,
 )
 from .paths import is_sensitive_path, is_write_protected
-from .rules import extract_rules, match_first
-
-#: File-like tools whose path rules apply.
-FILE_TOOLS = frozenset({"Read", "Write", "Edit", "LS", "Glob", "Grep"})
+from .rules import FILE_TOOLS, bash_rules_match, extract_rules, match_first
 
 
 @dataclass(slots=True)
@@ -92,32 +93,43 @@ class PermissionEngine:
                     requires_explicit_approval=True,
                 )
 
-        # 3. explicit tool-name rules: deny > ask > allow
+        # 3. explicit rules: deny > ask > write-protection > allow.
+        # Bash content rules (Bash(<cmd>)) are evaluated per sub-command:
+        # any denied subcommand denies the compound, only an all-allowed
+        # compound passes, mixed (unruled subcommand) falls through to ask.
+        command_text = str(tool_input.get("command") or "")
         denied = match_first(merged["deny"], tool_name, target_path)
+        if not denied and tool_name == "Bash":
+            denied = bash_rules_match(merged["deny"], command_text, require_all=False)
         if denied:
             return self._decide(False, "deny", denied, f"denied by rule: {denied}", tool_name, tool_input, mode_enum)
         asked = match_first(merged["ask"], tool_name, target_path)
+        if not asked and tool_name == "Bash":
+            asked = bash_rules_match(merged["ask"], command_text, require_all=False)
         if asked:
             return self._decide(False, "ask", asked, f"asked by rule: {asked}", tool_name, tool_input, mode_enum)
+
+        # 4. write protection is a hard floor, checked before allow rules —
+        # even an explicit allow rule cannot write a protected path
+        if tool_name in FILE_TOOLS and target_path is not None and is_write_protected(target_path):
+            return self._decide(
+                False, "ask", "write-protection", f"{target_path} is write-protected", tool_name, tool_input, mode_enum,
+                requires_explicit_approval=True,
+            )
+
         allowed = match_first(merged["allow"], tool_name, target_path)
+        if not allowed and tool_name == "Bash":
+            allowed = bash_rules_match(merged["allow"], command_text, require_all=True)
         if allowed:
             return self._decide(True, "allow", allowed, f"allowed by rule: {allowed}", tool_name, tool_input, mode_enum)
 
-        # 4. file tools: targets must live inside a working directory — even
+        # 5. file tools: targets must live inside a working directory — even
         # yolo does not auto-allow out-of-tree access (Kode isPathInWorkingDirectories)
         if tool_name in FILE_TOOLS and target_path is not None and not self._in_working_dirs(target_path, working_dirs):
             return self._decide(
                 False, "ask", "working-dir", f"{target_path} is outside the working directories",
                 tool_name, tool_input, mode_enum, requires_explicit_approval=True,
             )
-
-        # 5. file tools: write protection is a hard floor (needs explicit approval)
-        if tool_name in FILE_TOOLS and target_path is not None:
-            if is_write_protected(target_path):
-                return self._decide(
-                    False, "ask", "write-protection", f"{target_path} is write-protected", tool_name, tool_input, mode_enum,
-                    requires_explicit_approval=True,
-                )
 
         # 6. sensitive reads (keys, .env, credentials) need explicit approval
         if (

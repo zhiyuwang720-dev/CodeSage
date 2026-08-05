@@ -6,7 +6,10 @@ from codesage.tools import Tool, ToolRegistry, get_builtin_tools
 def test_builtin_registration():
     tools = get_builtin_tools()
     names = [t.name for t in tools]
-    assert names == ["LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash", "TaskOutput", "TaskStop"]
+    assert names == [
+        "LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash",
+        "TaskOutput", "TaskStop", "TodoWrite", "WebFetch",
+    ]
 
 
 def test_register_lookup_and_override():
@@ -24,8 +27,11 @@ def test_register_lookup_and_override():
 def test_specs_generated_for_engine():
     registry = ToolRegistry(get_builtin_tools())
     specs = registry.specs()
-    assert len(specs) == 9
-    assert {s.name for s in specs} == {"LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash", "TaskOutput", "TaskStop"}
+    assert len(specs) == 11
+    assert {s.name for s in specs} == {
+        "LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash",
+        "TaskOutput", "TaskStop", "TodoWrite", "WebFetch",
+    }
     # every spec carries a schema with properties
     for spec in specs:
         assert "properties" in spec.input_schema

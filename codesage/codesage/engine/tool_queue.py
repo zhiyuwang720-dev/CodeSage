@@ -108,6 +108,8 @@ class ToolUseQueue:
         return self._tools
 
     async def _execute(self, item: ScheduledTool) -> ToolResult:
+        if item.context.abort_event is not None and item.context.abort_event.is_set():
+            return ToolResult("(interrupted by user)", is_error=True)
         item.status = "executing"
         if self._pre_hook is not None:
             await self._pre_hook(item)

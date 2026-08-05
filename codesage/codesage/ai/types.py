@@ -113,6 +113,7 @@ class LLMError(Exception):
         retryable: bool = False,
         retry_after_seconds: float | None = None,
         original_error: BaseException | None = None,
+        cancelled: bool = False,
     ):
         super().__init__(message)
         self.provider = provider
@@ -120,6 +121,7 @@ class LLMError(Exception):
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
         self.original_error = original_error
+        self.cancelled = cancelled
 
     @classmethod
     def classify(cls, status_code: int) -> bool:

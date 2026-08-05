@@ -9,10 +9,37 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..engine import AgentLoop
 from .render import CYAN, RESET, _c, render_message
+
+
+@dataclass
+class RunSummary:
+    """Machine-readable outcome of one single-turn run (--output-format json)."""
+
+    session_id: str
+    result: str
+    num_turns: int
+    usage: int
+    total_cost_usd: float
+    is_error: bool
+    duration_seconds: float
+    budget_exceeded: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "result": self.result,
+            "num_turns": self.num_turns,
+            "usage": self.usage,
+            "total_cost_usd": self.total_cost_usd,
+            "is_error": self.is_error,
+            "duration_seconds": self.duration_seconds,
+        }
 
 HELP_TEXT = """Commands:
   /mode <plan|default|yolo>   switch permission mode
@@ -28,19 +55,50 @@ async def run_single_turn(
     *,
     show_thinking: bool = False,
     out=None,  # TextIO; default sys.stdout (injectable for tests)
-) -> bool:
+    render: bool = True,  # False for --output-format json (summary only)
+) -> RunSummary:
     """One user input, rendered (also used by acceptance tests).
 
-    Returns True if an assistant error message was rendered (exit code 1).
+    Returns a RunSummary: is_error mirrors the old bool (exit code 1),
+    budget_exceeded flags the max-budget stop message (exit code 1).
     """
-    import sys
-
     target = out or sys.stdout
+    started = time.monotonic()
     has_error = False
+    last_text = ""
+    llm_calls = 0
+    total_tokens = 0
     async for message in loop.run(user_input):
         has_error = has_error or (message.role == "assistant" and message.is_error)
-        render_message(message, out=target, show_thinking=show_thinking)
-    return has_error
+        if render:
+            render_message(message, out=target, show_thinking=show_thinking)
+        if message.role != "assistant":
+            continue
+        if message.usage is not None:
+            llm_calls += 1
+            total_tokens += message.usage.total_tokens
+        if isinstance(message.content, str):
+            last_text = message.content
+        else:
+            text = "\n".join(b.text or "" for b in message.content if b.type == "text")
+            if text:
+                last_text = text
+    client = getattr(loop, "client", None)
+    budget_exceeded = "budget" in last_text.lower() or (
+        getattr(loop, "max_budget_usd", None) is not None
+        and getattr(client, "total_cost", None) is not None
+        and client.total_cost[0] >= loop.max_budget_usd
+    )
+    return RunSummary(
+        session_id=loop.session.path.stem if getattr(loop, "session", None) is not None else "",
+        result=last_text,
+        num_turns=max(llm_calls, 1),
+        usage=total_tokens,
+        total_cost_usd=float(getattr(client, "total_cost", [0.0])[0]),
+        is_error=has_error,
+        duration_seconds=time.monotonic() - started,
+        budget_exceeded=budget_exceeded,
+    )
 
 
 async def repl_loop(

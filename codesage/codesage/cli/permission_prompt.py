@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from ..permissions import PermissionDecision, save_approval
+from ..permissions import PermissionDecision, build_rule_string, save_approval
 from .render import CYAN, RESET, USE_COLOR, _c
 
 
@@ -31,7 +31,7 @@ async def request_permission(
         if answer in ("n", "no", ""):
             return False
         if answer in ("r", "remember"):
-            save_approval(local_settings_path, tool.name, tool.name)
+            save_approval(local_settings_path, tool.name, build_rule_string(tool.name, tool_input))
             print(_c(f"已记住:允许 {tool.name}(写入 settings.local.json)", CYAN))
             return True
         print("输入 y / n / r")

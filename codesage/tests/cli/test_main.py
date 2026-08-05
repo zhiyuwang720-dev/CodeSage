@@ -1,5 +1,7 @@
 """CLI main() tests: piped stdin, resume, --safe/--allowedTools, exit codes (offline)."""
 
+import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -88,6 +90,163 @@ def test_stdin_pipe_error_turn_exits_1(tmp_path, monkeypatch):
 
     monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: ErrorLoop())
     assert main([]) == 1
+
+
+# ---- 1b. -p/--print + headless auto-detection (C1) ----
+
+def test_stdout_non_tty_prompt_auto_headless(tmp_path, monkeypatch, capsys):
+    """stdout not a tty + prompt present → auto single-turn (Kode headlessMode)."""
+    _patch_config_dir(monkeypatch, tmp_path)
+    loop = FakeLoop()
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: loop)
+    monkeypatch.setattr(sys, "stdin", _Stdin("", is_tty=True))
+
+    assert main(["auto headless"]) == 0
+    assert loop.inputs == ["auto headless"]  # single turn ran, stdin untouched
+
+
+def test_print_reads_piped_stdin(tmp_path, monkeypatch, capsys):
+    """-p with no prompt and non-tty stdin → read the pipe."""
+    _patch_config_dir(monkeypatch, tmp_path)
+    loop = FakeLoop()
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: loop)
+    monkeypatch.setattr(sys, "stdin", _Stdin("from pipe"))
+
+    assert main(["--print"]) == 0
+    assert loop.inputs == ["from pipe"]
+
+
+def test_print_no_input_stdin_tty_exits_1(tmp_path, monkeypatch, capsys):
+    """-p with no prompt and tty stdin → error exit 1."""
+    _patch_config_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "stdin", _Stdin("", is_tty=True))
+    called = []
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: called.append(1))
+
+    assert main(["--print"]) == 1
+    assert not called
+    err = capsys.readouterr().err
+    assert "prompt" in err and "usage" in err
+
+
+# ---- 1c. --max-budget-usd (C2) ----
+
+def test_max_budget_usd_passthrough(tmp_path, monkeypatch):
+    _patch_config_dir(monkeypatch, tmp_path)
+    calls = []
+    _patch_build_loop(monkeypatch, calls)
+
+    assert main(["--max-budget-usd", "1.5", "hi"]) == 0
+    assert calls[0]["max_budget_usd"] == 1.5
+
+
+def test_budget_exceeded_exits_1(tmp_path, monkeypatch, capsys):
+    """Engine stop message containing 'budget' → stderr note + exit 1."""
+    _patch_config_dir(monkeypatch, tmp_path)
+
+    class BudgetLoop(FakeLoop):
+        async def run(self, user_input):
+            yield assistant_message("Stopped: maximum budget reached.")
+
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: BudgetLoop())
+
+    assert main(["--max-budget-usd", "0.01", "hi"]) == 1
+    assert "budget" in capsys.readouterr().err.lower()
+
+
+# ---- 1d. --output-format json (C3) ----
+
+def test_output_format_json_emits_summary(tmp_path, monkeypatch, capsys):
+    _patch_config_dir(monkeypatch, tmp_path)
+    loop = FakeLoop()
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: loop)
+
+    assert main(["--output-format", "json", "hi"]) == 0
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert set(data) == {
+        "session_id",
+        "result",
+        "num_turns",
+        "usage",
+        "total_cost_usd",
+        "is_error",
+        "duration_seconds",
+    }
+    assert data["result"] == "ok"
+    assert data["is_error"] is False
+    assert data["num_turns"] >= 1
+    assert data["usage"] >= 0
+
+
+# ---- 1e. --debug / --verbose (C4) ----
+
+def test_debug_sets_logging_level(tmp_path, monkeypatch, capsys):
+    _patch_config_dir(monkeypatch, tmp_path)
+    _patch_build_loop(monkeypatch, [])
+    old = logging.getLogger().level
+    try:
+        assert main(["--debug", "api", "hi"]) == 0  # filter value accepted
+        assert logging.getLogger().level == logging.DEBUG
+    finally:
+        logging.getLogger().setLevel(old)
+
+
+def test_verbose_sets_logging_level(tmp_path, monkeypatch, capsys):
+    _patch_config_dir(monkeypatch, tmp_path)
+    _patch_build_loop(monkeypatch, [])
+    old = logging.getLogger().level
+    try:
+        assert main(["--verbose", "hi"]) == 0
+        assert logging.getLogger().level == logging.INFO
+    finally:
+        logging.getLogger().setLevel(old)
+
+
+# ---- 1f. --system-prompt / --system-prompt-file (C5) ----
+
+def test_system_prompt_passthrough(tmp_path, monkeypatch):
+    _patch_config_dir(monkeypatch, tmp_path)
+    calls = []
+    _patch_build_loop(monkeypatch, calls)
+
+    assert main(["--system-prompt", "be brief", "hi"]) == 0
+    assert calls[0]["system_prompt"] == "be brief"
+
+
+def test_system_prompt_file_reads(tmp_path, monkeypatch):
+    _patch_config_dir(monkeypatch, tmp_path)
+    f = tmp_path / "prompt.txt"
+    f.write_text("from file", encoding="utf-8")
+    calls = []
+    _patch_build_loop(monkeypatch, calls)
+
+    assert main(["--system-prompt-file", str(f), "hi"]) == 0
+    assert calls[0]["system_prompt"] == "from file"
+
+
+def test_system_prompt_file_missing_exits_1(tmp_path, monkeypatch, capsys):
+    _patch_config_dir(monkeypatch, tmp_path)
+    called = []
+    monkeypatch.setattr("codesage.cli.build_loop", lambda **kw: called.append(1))
+
+    assert main(["--system-prompt-file", str(tmp_path / "nope.txt"), "hi"]) == 1
+    assert not called
+    assert "system-prompt-file" in capsys.readouterr().err
+
+
+def test_system_prompt_flags_mutually_exclusive_exit_2(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--system-prompt", "x", "--system-prompt-file", "y", "hi"])
+    assert exc.value.code == 2  # C6: flag-combo validation failure
+
+
+# ---- 1g. headless permission semantics documented (C7) ----
+
+def test_docstring_documents_headless_permission_semantics():
+    import codesage.cli as cli_module
+
+    assert "ask 决策一律拒绝" in cli_module.__doc__
 
 
 # ---- 2. sessions: listing, most recent, resume flags ----
