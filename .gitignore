@@ -23,3 +23,7 @@ build/
 .DS_Store
 Thumbs.db
 claude-code-main
+pi
+# docs: only modules/ is public; specs/ideas/intent/analyses stay local
+/docs/*
+!/docs/modules/
