@@ -121,7 +121,18 @@ class ToolUseQueue:
             results = await asyncio.gather(
                 *(self._execute(item) for item in batch), return_exceptions=True
             )
-            any_error = any(isinstance(r, BaseException) or (r is not None and r.is_error) for r in results)
+            # a permission denial is the USER's decision on one tool, not an
+            # execution error — siblings must still run their own permission
+            # gate (CC semantics), so it never triggers the sibling policy
+            any_error = any(
+                isinstance(r, BaseException)
+                or (
+                    r is not None
+                    and r.is_error
+                    and r.metadata.get("error_code") != "permission_blocked"
+                )
+                for r in results
+            )
             # apply results
             for item, result in zip(batch, results):
                 if isinstance(result, BaseException):

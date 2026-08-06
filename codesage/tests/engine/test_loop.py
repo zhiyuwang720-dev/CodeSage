@@ -1081,3 +1081,117 @@ async def test_active_messages_exposed_and_updated_after_compact():
     assert loop._active_messages is not None
     assert loop._active_messages[0].is_compaction_summary  # compacted view
     assert loop._active_messages[-1].content[0].text == "answer"
+
+
+# ---- review fixes: P2/P3 batch ----
+
+async def test_max_turns_stop_is_meta():
+    """Stop notices are is_meta like the interrupt notice — they must never
+    enter the API as a real assistant reply on --continue (review P2-2)."""
+    llm = FakeLLM([lambda i: tool_use_event("Echo", f"t{i}", '{"text": "x"}')])
+    loop = _loop(llm, max_turns=2)
+    messages = await _collect(loop)
+    assert messages[-1].content == "Stopped: maximum turn count reached."
+    assert messages[-1].is_meta
+
+
+async def test_max_budget_stop_is_meta():
+    llm = FakeLLM([lambda i: text_event("answer")])
+    llm.total_cost[0] = 99.0
+    loop = _loop(llm, max_budget_usd=1.0)
+    messages = await _collect(loop)
+    assert messages[-1].content == "Stopped: maximum budget reached."
+    assert messages[-1].is_meta
+
+
+def test_max_turns_invalid_value_raises():
+    """A mistyped config must fail loudly, not silently become 100 turns."""
+    with pytest.raises(ValueError):
+        _loop(FakeLLM([lambda i: text_event("x")]), max_turns=0)
+    with pytest.raises(ValueError):
+        _loop(FakeLLM([lambda i: text_event("x")]), max_turns="lots")
+    # None = unspecified default
+    assert _loop(FakeLLM([lambda i: text_event("x")]), max_turns=None).max_turns == 100
+
+
+async def test_error_response_stop_reason_is_error_not_completed():
+    """A provider error response with no text is not a completed turn —
+    last_stop_reason must say "error" (review P3-7)."""
+    llm = FakeLLM([lambda i: [StreamEvent(type="error", error="HTTP 500: boom")]])
+    loop = _loop(llm)
+    messages = await _collect(loop)
+    assert loop.last_stop_reason == "error"
+    assert messages[-1].is_error
+
+
+async def test_reused_loop_instance_resets_per_run_state():
+    """PTL retry and cache-read tracking reset between runs on the same
+    instance (review P3-8)."""
+    loop = _loop(FakeLLM([_ptl_stream, lambda i: text_event("ok")]), history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert loop._ptl_retried is True  # first run consumed its PTL retry
+    # second run on the same instance gets a fresh retry budget
+    loop.client = FakeLLM([_ptl_stream, lambda i: text_event("ok2")], summary_text="s")
+    messages = await _collect(loop)
+    assert loop._ptl_retried is True  # retried again — state was reset
+    assert any(m.is_compaction_summary for m in messages)
+    assert messages[-1].content[0].text == "ok2"
+
+
+class GuardedSafeTool(Tool):
+    """Concurrency-safe tool that requires permission (sibling-batch tests)."""
+
+    name = "GuardedSafe"
+    description = "Guarded safe tool"
+    input_schema = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return True
+
+    async def _run(self, input, ctx):
+        return ToolResult(f"ran:{input['text']}")
+
+
+async def test_permission_denial_does_not_void_siblings():
+    """Denying one tool is a user decision, not an execution error — the
+    sibling's own permission gate must still get a chance (review P3-6).
+    Both tools are concurrency-safe so they share a batch."""
+    denied = []
+
+    async def deny_first(decision, tool, tool_input):
+        denied.append(tool.name)  # every tool reaches its own gate
+        if tool.name == "GuardedSafe":
+            return tool_input["text"] == "allow"  # deny the "deny" one
+        return True
+
+    class GuardedDeny(GuardedSafeTool):
+        name = "GuardedDeny"
+
+    llm = FakeLLM(
+        [
+            lambda i: [
+                StreamEvent(type="tool_use_start", tool_use_id="a1", tool_name="GuardedSafe"),
+                StreamEvent(type="tool_use_delta", input_json_delta='{"text": "deny"}'),
+                StreamEvent(type="tool_use_start", tool_use_id="b1", tool_name="GuardedDeny"),
+                StreamEvent(type="tool_use_delta", input_json_delta='{"text": "allow"}'),
+                StreamEvent(type="done", stop_reason="tool_use"),
+            ],
+            lambda i: text_event("final"),
+        ]
+    )
+    loop = _loop(llm, tools=[GuardedSafeTool(), GuardedDeny()])
+    loop.request_permission = deny_first
+    messages = await _collect(loop)
+    assert denied == ["GuardedSafe", "GuardedDeny"]  # both reached their own gate
+    results = [
+        b
+        for m in messages
+        if isinstance(m.content, list)
+        for b in m.content
+        if b.type == "tool_result"
+    ]
+    by_id = {b.tool_use_id: b for b in results}
+    assert by_id["a1"].is_error  # the denied one reports the denial
+    assert not by_id["b1"].is_error  # the sibling ran with a real result
+    assert by_id["b1"].content == "ran:allow"

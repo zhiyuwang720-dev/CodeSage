@@ -125,7 +125,11 @@ class AgentLoop:
         self._last_cache_read = 0
         self.model = model
         self.mode = mode
-        self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
+        if max_turns is not None and (not isinstance(max_turns, int) or max_turns <= 0):
+            # a mistyped config silently becoming 100 turns would run the
+            # model 100 rounds for nothing (review P3-3)
+            raise ValueError(f"max_turns must be a positive int or None, got {max_turns!r}")
+        self.max_turns = max_turns if max_turns is not None else 100
         self.max_budget_usd = max_budget_usd
         self.cwd = cwd or Path.cwd()
         self.session = session
@@ -149,6 +153,10 @@ class AgentLoop:
 
     async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
         """Run the loop from a user input; yields the conversation messages."""
+        # per-run state: a reused loop instance must start fresh (P3-8)
+        self._ptl_retried = False
+        self._last_cache_read = 0
+        self._active_messages = None
         first = user_message(user_input)
         yield first
         await self._persist(first)
@@ -164,10 +172,10 @@ class AgentLoop:
                 # drops it); updated again after a compaction replaces it
                 self._active_messages = messages
                 if turn >= self.max_turns:
-                    yield await self._stop("max_turns", MAX_TURNS_TEXT)
+                    yield await self._stop("max_turns", MAX_TURNS_TEXT, meta=True)
                     return
                 if self.max_budget_usd is not None and self.client.total_cost[0] >= self.max_budget_usd:
-                    yield await self._stop("max_budget", MAX_BUDGET_TEXT)
+                    yield await self._stop("max_budget", MAX_BUDGET_TEXT, meta=True)
                     return
                 if self.abort.is_set():
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
@@ -222,7 +230,12 @@ class AgentLoop:
                 try:
                     assistant = await self._ask_model(messages)
                 except LLMError as exc:
-                    if is_ptl_error(exc) and not self._ptl_retried and self.compaction is not None:
+                    if (
+                        is_ptl_error(exc)
+                        and not self._ptl_retried
+                        and self.compaction is not None
+                        and self.compaction.enabled  # breaker tripped: no more summary calls (P3-4)
+                    ):
                         # §3.8 reactive compaction: PTL is the one state a
                         # threshold-triggered compact can't prevent (huge
                         # tool result, compaction disabled). Force a compact
@@ -235,6 +248,7 @@ class AgentLoop:
                             summary_msg, cut = compacted
                             yield summary_msg
                             messages = [summary_msg, *messages[cut.index :]]
+                            self._active_messages = messages  # meter reflects it now (P3-5)
                             continue
                     raise
                 if assistant is None:
@@ -258,7 +272,9 @@ class AgentLoop:
                         messages.append(recovery)
                         turn -= 1
                         continue
-                    self.last_stop_reason = "completed"  # final answer — terminate
+                    # an is_error response (provider failure with no text) is
+                    # NOT a completed turn — stop reason must say so (P3-7)
+                    self.last_stop_reason = "error" if assistant.is_error else "completed"
                     return
 
                 # execute tools (checkpoint 2: abort before the batch)
@@ -288,7 +304,7 @@ class AgentLoop:
                 if scheduled and all(
                     item.result is not None and item.result.terminate for item in scheduled
                 ):
-                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.")
+                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
                     return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
@@ -395,7 +411,12 @@ class AgentLoop:
 
             async def _tee():
                 async for ev in inner:
-                    self.on_stream(ev)
+                    try:
+                        self.on_stream(ev)
+                    except Exception:
+                        # best-effort UI callback — a renderer bug must never
+                        # kill the run (same rule as tool_queue._emit_tool_event)
+                        logger.exception("on_stream callback failed")
                     yield ev
 
             stream = _tee()
