@@ -27,3 +27,5 @@ pi
 # docs: only modules/ is public; specs/ideas/intent/analyses stay local
 /docs/*
 !/docs/modules/
+Kode-CLI/
+.omc/
