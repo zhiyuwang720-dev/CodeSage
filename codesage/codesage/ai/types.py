@@ -56,7 +56,7 @@ class LLMRequest(BaseModel):
     messages: list[Message]
     system: str | None = None  # Anthropic-style separate system; OpenAI gets it as first message
     tools: list[ToolSpec] | None = None
-    max_tokens: int = 4096
+    max_tokens: int = 8192  # DeepSeek cap; 4096 truncates long Chinese replies
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
