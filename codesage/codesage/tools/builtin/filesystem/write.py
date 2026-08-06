@@ -9,7 +9,11 @@ from ._common import ensure_read_freshness, record_written, resolve_path
 
 class WriteTool(Tool):
     name = "Write"
-    description = "Write (create or overwrite) a file; parent directories are created."
+    description = (
+        "Write (create or overwrite) a file; parent directories are created. "
+        "An existing file must be Read first; Write replaces the whole content — "
+        "prefer Edit for small changes."
+    )
     input_schema = {
         "type": "object",
         "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}},

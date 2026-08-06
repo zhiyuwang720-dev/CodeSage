@@ -107,7 +107,11 @@ def check_cd(command: str, cwd: Path) -> str | None:
 
 class BashTool(Tool):
     name = "Bash"
-    description = "Execute a shell command with a timeout; use for build/run/system tasks."
+    description = (
+        "Execute a shell command (POSIX syntax — Git Bash on Windows when available) with a "
+        "timeout; use for build/run/system tasks. Prefer Glob/Grep/Read over ls/find/cat on "
+        "existing files. timeout_ms max 600000."
+    )
     input_schema = {
         "type": "object",
         "properties": {

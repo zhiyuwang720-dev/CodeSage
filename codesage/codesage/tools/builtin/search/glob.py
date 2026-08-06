@@ -8,7 +8,10 @@ from ._common import MAX_RESULTS, SKIP_DIRS, resolve_root
 
 class GlobTool(Tool):
     name = "Glob"
-    description = "Find files by glob pattern under a directory (SKIP_DIRS ignored)."
+    description = (
+        "Find files by glob pattern (e.g. **/*.py) under a directory, defaulting to the working "
+        "directory; ignores common junk dirs (.git, node_modules, __pycache__)."
+    )
     input_schema = {
         "type": "object",
         "properties": {

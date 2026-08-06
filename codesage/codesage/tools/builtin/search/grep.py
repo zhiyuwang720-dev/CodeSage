@@ -93,7 +93,10 @@ def _parse_rg_output(stdout: str, root: Path) -> list[tuple[str, int, str]]:
 
 class GrepTool(Tool):
     name = "Grep"
-    description = "Search file contents with a regex (case-sensitive by default)."
+    description = (
+        "Search file contents with a regex (case-sensitive by default; -i for case-insensitive). "
+        "Supports a glob filename filter and context lines (-A/-B/-C)."
+    )
     input_schema = {
         "type": "object",
         "properties": {

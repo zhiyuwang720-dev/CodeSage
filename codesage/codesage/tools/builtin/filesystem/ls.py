@@ -8,7 +8,10 @@ from ._common import resolve_path
 
 class LSTool(Tool):
     name = "LS"
-    description = "List directory contents (names and types only)."
+    description = (
+        "List directory contents (names and types only). "
+        "Use Glob for pattern-based file discovery."
+    )
     input_schema = {
         "type": "object",
         "properties": {"path": {"type": "string", "description": "Directory to list (default: cwd)"}},

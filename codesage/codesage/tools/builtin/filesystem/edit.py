@@ -9,7 +9,10 @@ from ._common import ensure_read_freshness, record_written, resolve_path
 
 class EditTool(Tool):
     name = "Edit"
-    description = "Replace old_string with new_string in a file (exact match, unique or replace_all)."
+    description = (
+        "Replace old_string with new_string in a file (exact match; must be unique unless replace_all=true). "
+        "The file must be Read first; re-Read if it may have changed."
+    )
     input_schema = {
         "type": "object",
         "properties": {
