@@ -49,6 +49,8 @@ MAX_TURNS_TEXT = "Stopped: maximum turn count reached."
 MAX_BUDGET_TEXT = "Stopped: maximum budget reached."
 #: system-reminder section cap (todo.md acceptance: system-reminder 上限 10).
 MAX_REMINDER_SECTIONS = 10
+#: Prefetch callback bail-out: a hung memory search must not block the loop.
+PREFETCH_TIMEOUT_S = 60
 
 #: system-reminder wrapper (Claude Code prependUserContext shape).
 REMINDER_HEADER = (
@@ -84,6 +86,7 @@ class AgentLoop:
         system_prompt: str = "",
         context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
         compaction: CompactionConfig | None = None,  # PI-05 auto-compact (S6; None disables)
+        prefetch: Callable[[list["SessionMessage"]], Awaitable[list[tuple[str, str]]]] | None = None,  # §3.10 memory prefetch (phase 17 fills in)
         model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
         max_turns: int = 100,
@@ -105,6 +108,8 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self.context_bundle = context_bundle
         self.compaction = compaction
+        self.prefetch = prefetch
+        self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
         # §3.6: one-shot reminder with recently modified files, injected into
@@ -288,6 +293,11 @@ class AgentLoop:
             )
             yield failed
             await self._persist(failed)
+        finally:
+            # a prefetch still in flight must not dangle past the loop
+            task = self._prefetch_task
+            if task is not None and not task.done():
+                task.cancel()
 
     # ---- internals ----
 
@@ -324,6 +334,10 @@ class AgentLoop:
         return summary_msg, cut
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+        # §3.10: a prefetch launched last turn that finished during the model
+        # response / tool execution rides THIS request (CC attachment message:
+        # injected after tool execution, visible in the next API call's context)
+        prefetch_sections = self._consume_prefetch()
         # §3.7 projection: old tool results cleared in the request view only —
         # the session log stays append-only (specs/08 §3.7). Independent of
         # compaction: it is most useful when compaction is off (messages only grow).
@@ -342,6 +356,8 @@ class AgentLoop:
             # prefix caching (specs/08 §3.4); the reminder is request-only,
             # it never enters the session log
             prefix.append(_render_reminder(self.context_bundle))
+        if prefetch_sections:
+            prefix.append(_render_prefetch(prefetch_sections))
         if self._recovery_reminder is not None:
             # §3.6 restore: recently modified files, injected once right
             # after the compaction that produced them
@@ -374,6 +390,9 @@ class AgentLoop:
         response = await LLMClient.collect(stream)
         if self.abort.is_set():
             return None
+        # §3.10: kick the prefetch for the NEXT turn before returning — the
+        # model's thinking time hides the disk search latency
+        self._start_prefetch(messages)
         # §3.9 cache-break detection (light): a drop from a high
         # cache_read_tokens to 0 means the server prefix cache was invalidated
         # (TTL expiry or server eviction). Diagnostic only — no action.
@@ -392,6 +411,37 @@ class AgentLoop:
             is_error=response.is_error,
             error_message=response.error_message,
         )
+
+    def _start_prefetch(self, messages: list[SessionMessage]) -> None:
+        """Launch the prefetch callback (bounded by PREFETCH_TIMEOUT_S) unless
+        one is already in flight — a slow search never starts a second."""
+        if self.prefetch is None:
+            return
+        if self._prefetch_task is not None and not self._prefetch_task.done():
+            return
+
+        async def _bounded():
+            try:
+                return await asyncio.wait_for(self.prefetch(messages), timeout=PREFETCH_TIMEOUT_S)
+            except Exception:  # timeout or callback failure: no sections
+                return None
+
+        self._prefetch_task = asyncio.create_task(_bounded())
+
+    def _consume_prefetch(self) -> list[tuple[str, str]] | None:
+        """Sections from a completed prefetch; None while it is still running
+        (the task survives into the next turn — first-completed-first-injected)."""
+        task = self._prefetch_task
+        if task is None or not task.done():
+            return None
+        self._prefetch_task = None
+        try:
+            sections = task.result()
+        except Exception:
+            return None
+        if not sections:
+            return None
+        return sections[:MAX_REMINDER_SECTIONS]
 
     async def _execute_tools(self, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
         scheduled: list[ScheduledTool] = []
@@ -476,6 +526,16 @@ class AgentLoop:
     async def _persist(self, message: SessionMessage) -> None:
         if self.session is not None:
             self.session.append(message)
+
+
+def _render_prefetch(sections: list[tuple[str, str]]) -> Message:
+    """§3.10 prefetch sections as one system-reminder user message (same
+    channel as the context bundle, capped at MAX_REMINDER_SECTIONS)."""
+    parts = [REMINDER_HEADER]
+    for title, text in sections:
+        parts.append(f"# {title}\n{text}\n")
+    parts.append(REMINDER_FOOTER)
+    return Message(role="user", content="".join(parts))
 
 
 def _render_reminder(bundle: ContextBundle) -> Message:

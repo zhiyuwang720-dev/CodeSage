@@ -1,5 +1,6 @@
 """AgentLoop tests: termination, self-healing, abort, permissions (mock LLM)."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,9 @@ class FakeLLM:
         self.calls += 1
         events = self.script[idx](self.calls)
         for ev in events:
+            # real streaming always suspends on I/O; a synchronous script
+            # would starve concurrently scheduled tasks (e.g. prefetch)
+            await asyncio.sleep(0)
             yield ev
 
 
@@ -920,3 +924,90 @@ async def test_cache_break_silent_when_never_high(caplog):
     )
     await _collect(_loop(llm))
     assert not [r for r in caplog.records if "cache break" in r.getMessage()]
+
+
+# ---- §3.10: memory prefetch interface ----
+
+async def test_prefetch_injected_next_turn():
+    """A prefetch launched during turn 1 finishes during the tool round and
+    rides turn 2's request — CC injects attachments after tool execution so
+    they appear in the NEXT API call's context (specs/08 §3.10)."""
+    seen = []
+
+    async def prefetch(messages):
+        seen.append(messages)
+        return [("memory", "remember this fact"), ("skills", "skill list")]
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("answer"),
+        ]
+    )
+    loop = _loop(llm, prefetch=prefetch)
+    await _collect(loop)
+    assert seen  # the callback received the message history
+    first = llm.last_messages[0].content  # turn 2's request view
+    assert "# memory\nremember this fact" in first
+    assert "# skills\nskill list" in first
+    assert first.startswith("<system-reminder>") and first.endswith("</system-reminder>")
+
+
+async def test_prefetch_sections_capped(monkeypatch):
+    """More sections than MAX_REMINDER_SECTIONS are truncated at injection."""
+    from codesage.engine.loop import MAX_REMINDER_SECTIONS
+
+    async def prefetch(messages):
+        return [(f"sec-{i}", "x") for i in range(MAX_REMINDER_SECTIONS + 5)]
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("answer"),
+        ]
+    )
+    loop = _loop(llm, prefetch=prefetch)
+    await _collect(loop)
+    content = llm.last_messages[0].content  # turn 2's request view
+    assert content.count("# sec-") == MAX_REMINDER_SECTIONS
+
+
+async def test_prefetch_timeout_does_not_block(monkeypatch):
+    """A hung prefetch bails out at PREFETCH_TIMEOUT_S and never touches the
+    request view (specs/08 §3.10 — interface must not block the main chain)."""
+    from codesage.engine import loop as loop_module
+
+    monkeypatch.setattr(loop_module, "PREFETCH_TIMEOUT_S", 0.01)
+
+    async def slow(messages):
+        await asyncio.sleep(30)
+        return [("memory", "never")]
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("answer"),
+        ]
+    )
+    loop = _loop(llm, prefetch=slow)
+    messages = await _collect(loop)
+    assert messages[-1].content[0].text == "answer"  # main chain unaffected
+    assert not any("# memory" in str(m.content) for m in llm.last_messages)
+
+
+async def test_prefetch_callback_failure_swallowed():
+    """A raising prefetch callback is swallowed — no crash, no injection."""
+
+    async def broken(messages):
+        raise RuntimeError("search failed")
+
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("answer"),
+        ]
+    )
+    loop = _loop(llm, prefetch=broken)
+    messages = await _collect(loop)
+    assert messages[-1].content[0].text == "answer"
+    assert llm.last_messages[0].content == "hi"  # plain user message, no reminder
