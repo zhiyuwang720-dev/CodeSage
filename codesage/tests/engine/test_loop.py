@@ -729,3 +729,78 @@ async def test_cleanup_is_request_view_only(tmp_path):
         isinstance(m.content, list) and any(b.content == "out:0" for b in m.content)
         for m in persisted
     )
+
+
+async def test_microcompact_before_autocompact_prevents_summary():
+    """CC pipeline order (query.ts:379-468 — microcompact before autocompact):
+    the cheap cleanup runs at the checkpoint BEFORE the threshold decision,
+    and the estimate uses the cleaned view. When cleanup frees enough tokens,
+    the LLM summary never fires. Regression: the old code estimated the raw
+    view and compacted regardless."""
+    from codesage.engine.compaction import OLD_RESULT_PLACEHOLDER
+    from codesage.engine.tokens import estimate_context_tokens
+
+    history = []
+    for i in range(40):  # 120 messages > the 60-message cleanup gate
+        content = "x" * 10_000 if i < 20 else f"out:{i}"  # 20 oldest results huge
+        history += [
+            user_message(f"q{i}"),
+            assistant_message(
+                [ContentBlock(type="tool_use", id=f"e{i}", name="Read", input={"file_path": f"f{i}.py"})]
+            ),
+            user_message([ContentBlock(type="tool_result", tool_use_id=f"e{i}", content=content)]),
+        ]
+    # sanity: the RAW view is far over the threshold (old code would compact)
+    assert estimate_context_tokens(history).tokens > 5_000 - 100
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(
+        llm,
+        history=history,
+        compaction=CompactionConfig(window=5_000, reserve=100, keep_recent=200),
+    )
+    messages = await _collect(loop)
+    assert llm.complete_calls == []  # summary never requested — cleanup sufficed
+    assert not any(m.is_compaction_summary for m in messages)
+    # the request view still carries the cleaned projection: exactly the 20
+    # oldest results placeholder-ized, the newest 20 kept intact
+    placeholders = [
+        block.content
+        for msg in llm.last_messages
+        if isinstance(msg.content, list)
+        for block in msg.content
+        if block.type == "tool_result" and block.content == OLD_RESULT_PLACEHOLDER
+    ]
+    assert len(placeholders) == 20
+    intact = [
+        block.content
+        for msg in llm.last_messages
+        if isinstance(msg.content, list)
+        for block in msg.content
+        if block.type == "tool_result" and block.content == "out:39"
+    ]
+    assert intact  # the newest result survived the cleanup
+
+
+async def test_compact_summarizes_raw_span_not_cleaned_view():
+    """The LLM summary is generated from the RAW messages, not the cleaned
+    projection — the placeholder must never reach the compaction prompt."""
+    from codesage.engine.compaction import OLD_RESULT_PLACEHOLDER
+
+    history = []
+    for i in range(40):
+        content = "x" * 10_000 if i < 20 else f"out:{i}"  # 20 oldest results huge
+        history += [
+            user_message(f"q{i}"),
+            assistant_message(
+                [ContentBlock(type="tool_use", id=f"e{i}", name="Read", input={"file_path": f"f{i}.py"})]
+            ),
+            user_message([ContentBlock(type="tool_result", tool_use_id=f"e{i}", content=content)]),
+        ]
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=history, compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert llm.complete_calls  # cleanup freed a lot, but the window is tiny — summary fires
+    assert any(m.is_compaction_summary for m in messages)
+    prompt = llm.complete_calls[0][1].messages[0].content
+    assert "truncated, 10000 chars" in prompt  # the raw payload reached the summary
+    assert OLD_RESULT_PLACEHOLDER not in prompt

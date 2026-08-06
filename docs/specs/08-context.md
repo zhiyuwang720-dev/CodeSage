@@ -51,13 +51,13 @@
 │                                │ ③ compaction.py          │        │
 │                                │  find_cut_point(不切turn) │        │
 │                                │  summarize(compact 指针)  │        │
-│                                │  摘要消息替换历史 + 持久化 │        │
+│                                │  摘要消息替换历史 + 持久化   │        │
 │                                └──────────────────────────┘        │
 │                                                                     │
 │  组装(每轮 _ask_model)                                              │
 │  ┌────────────────────────────────────────────────────────┐        │
 │  │ system: base(静态,字节稳定)                             │        │
-│  │ messages: [0] <system-reminder> context(会话内不变)     │        │
+│  │ messages:  [0] <system-reminder> context(会话内不变)     │        │
 │  │            [1..] 历史消息(含摘要消息)                   │        │
 │  └────────────────────────────────────────────────────────┘        │
 └────────────────────────────────────────────────────────────────────┘
@@ -149,12 +149,16 @@ def build_context_bundle(cwd: Path, *, override_file: Path | None = None) -> Con
 
 ### 3.5 压缩(`engine/compaction.py`,新,PI-05 落地)
 
-**触发(loop turn 顶部检查点,接在 abort/max_turns/max_budget 之后)**:
+**触发(loop turn 顶部检查点,接在 abort/max_turns/max_budget 之后;顺序对齐 CC query.ts:379-468 流水线——本地廉价级在前,LLM 级最后)**:
 
 ```python
-if self.compaction.enabled and should_compact(
-        estimate_context_tokens(messages).tokens, window, reserve):
-    messages = await self._compact(messages)   # 摘要替换 + 持久化
+# ① microcompact:旧结果 → 占位符(零 API 成本)
+cleaned, did = clean_old_tool_results(messages, now=now, last_clean=last_clean)
+if did:
+    last_clean = now
+# ② 阈值估算用清理后的视图——清理释放足够 token 时,LLM 摘要根本不触发
+if should_compact(estimate_context_tokens(cleaned).tokens, window, reserve):
+    messages = await self._compact(messages)   # 摘要替换 + 持久化(对 RAW 消息生成,保真)
 ```
 
 防抖:压缩后标记 `last_compact_turn`,同一轮不再触发;连续 2 次失败 → `self.compaction.enabled = False`(熔断,自动路径)。
@@ -198,7 +202,7 @@ user_message(summary_text, is_compaction_summary=True)
 
 触发:`len(messages) > MAX_RESULTS_BEFORE_CLEAN(默认 60)` 或距上次清理超过时间阈值(默认 30 分钟)时,在**组装请求前**(非持久化,仅请求视图)将较早的 tool_result 内容替换为占位符文本(`[Old tool result content cleared — see session log]`),保留最近 20 条。仅对 Read/Bash/Grep/Glob 类结果可清(白名单)。
 
-**理由**:等价于 CC 的 microcompact 时间路径(缓存冷时的直接替换),不做 cache_edits 热路径(见裁剪决策 2)。作为**请求视图投影**而非持久化修改,是为了不破坏会话 append-only 与审计完整性——pi 也没有这层,属于 CC 独有增强的降级版。
+**理由**:等价于 CC 的 microcompact 时间路径(缓存冷时的直接替换),不做 cache_edits 热路径(见裁剪决策 2)。作为**请求视图投影**而非持久化修改,是为了不破坏会话 append-only 与审计完整性——pi 也没有这层,属于 CC 独有增强的降级版。运行两处:turn 顶部检查点在 autocompact 决策**之前**(CC query.ts 注释 "Apply microcompact before autocompact")——阈值估算看清理后的视图,清理释放足够 token 时 LLM 摘要不触发;请求组装时再投影一次(压缩关闭时消息只增长,清理最有用)。估算不做 freed 修正,与 CC 一致(CC 只对 snip 做 snipTokensFreed 修正,usage 锚点看不到清理前的节省,倾向更早压缩,方向安全)。
 
 ## 4. 执行步骤(依赖序)
 
