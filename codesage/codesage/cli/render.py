@@ -72,6 +72,10 @@ def render_message(message: SessionMessage, out: TextIO = sys.stdout, transcript
 
 
 def _render_user(message: SessionMessage, out: TextIO, transcript: bool) -> None:
+    if message.is_compaction_summary:
+        # compaction artifact, not user speech: one dim status line
+        print(_c("\n[compacted: history summarized]", DIM), file=out)
+        return
     content = message.content
     if isinstance(content, str):
         print(f"\n{_c('You:', CYAN)} {content}", file=out)

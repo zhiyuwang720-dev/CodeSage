@@ -22,7 +22,9 @@ from ..core import Session, SessionMessage, assistant_message, normalize_for_api
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
+from .compaction import CompactionConfig, CutPoint, find_cut_point, generate_summary, summary_message
 from .context import ContextBundle
+from .tokens import estimate_context_tokens, should_compact
 from .tool_queue import ScheduledTool, ToolUseQueue
 
 #: Synthesized messages (is_meta — filtered by normalize_for_api).
@@ -65,6 +67,7 @@ class AgentLoop:
         request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
         system_prompt: str = "",
         context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
+        compaction: CompactionConfig | None = None,  # PI-05 auto-compact (S6; None disables)
         model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
         max_turns: int = 100,
@@ -85,6 +88,9 @@ class AgentLoop:
         self.request_permission = request_permission
         self.system_prompt = system_prompt
         self.context_bundle = context_bundle
+        self.compaction = compaction
+        self._last_compact_turn = -1  # debounce: one compaction per turn
+        self._compact_failures = 0  # consecutive failures → breaker
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -132,6 +138,18 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 turn += 1
+
+                # PI-05 checkpoint: auto-compaction, after abort/budget/turns
+                # (specs/08 §3.5). The summary request does not count as a turn.
+                if self.compaction is not None and self.compaction.enabled and turn != self._last_compact_turn:
+                    estimate = estimate_context_tokens(messages)
+                    if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
+                        self._last_compact_turn = turn  # debounce: no second pass this turn
+                        compacted = await self._compact(messages)
+                        if compacted is not None:
+                            summary_msg, cut = compacted
+                            yield summary_msg
+                            messages = [summary_msg, *messages[cut.index :]]
 
                 # PI-06: drain mid-run steer inputs into the conversation
                 # (they become user messages for the next LLM call)
@@ -214,6 +232,29 @@ class AgentLoop:
             await self._persist(failed)
 
     # ---- internals ----
+
+    async def _compact(self, messages: list[SessionMessage]) -> tuple[SessionMessage, CutPoint] | None:
+        """Summarize the history span and persist the summary (append-only).
+
+        Returns (summary_message, cut) on success, None when there is nothing
+        to compress or the request failed. Two consecutive failures trip the
+        breaker (specs/08 §3.5): the feature disables itself instead of
+        burning a summary call every turn.
+        """
+        cut = find_cut_point(messages, keep_recent=self.compaction.keep_recent)
+        if cut is None:
+            return None  # not a success — the failure streak stays intact (breaker)
+        try:
+            summary = await generate_summary(self.client, messages, cut=cut)
+        except LLMError:
+            self._compact_failures += 1
+            if self._compact_failures >= 2:
+                self.compaction.enabled = False  # breaker (specs/08 §3.5)
+            return None
+        self._compact_failures = 0
+        summary_msg = summary_message(summary)
+        await self._persist(summary_msg)  # append-only: compaction appends one summary
+        return summary_msg, cut
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
         api_messages = normalize_for_api(messages)

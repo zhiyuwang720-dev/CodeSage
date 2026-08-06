@@ -12,7 +12,7 @@ from pathlib import Path
 from ..ai import LLMClient
 from ..config import GlobalConfig, load_settings, paths
 from ..core import Session
-from ..engine import AgentLoop, build_context_bundle
+from ..engine import AgentLoop, CompactionConfig, build_context_bundle
 from ..permissions import JsonlAuditSink, PermissionEngine
 from ..permissions.store import load_permission_rules
 from ..tools import ToolRegistry, get_builtin_tools
@@ -55,6 +55,7 @@ def build_loop(
         request_permission=request_permission,
         system_prompt=system_prompt if system_prompt is not None else get_base_prompt(str(cwd)),
         context_bundle=build_context_bundle(cwd),  # memoize: once per session (S4)
+        compaction=CompactionConfig(),  # PI-05 auto-compact (S6)
         model=model,
         mode=mode,
         max_turns=max_turns,

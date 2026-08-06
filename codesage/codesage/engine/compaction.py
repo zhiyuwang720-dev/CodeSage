@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message
 from ..core import SessionMessage, user_message
-from .tokens import DEFAULT_RESERVE_TOKENS, estimate_message_tokens
+from .tokens import DEFAULT_CONTEXT_WINDOW, DEFAULT_RESERVE_TOKENS, estimate_message_tokens
 
 #: Recent tokens kept intact at the end of the conversation (pi keepRecentTokens).
 DEFAULT_KEEP_RECENT_TOKENS = 20_000
@@ -59,6 +59,16 @@ UPDATE_SUMMARIZATION_PROMPT = """Below is an existing summary followed by new co
 <conversation>
 {conversation}
 </conversation>"""
+
+
+@dataclass
+class CompactionConfig:
+    """Auto-compaction knobs (specs/08 §3.5). None on the loop disables it."""
+
+    enabled: bool = True
+    window: int = DEFAULT_CONTEXT_WINDOW
+    reserve: int = DEFAULT_RESERVE_TOKENS
+    keep_recent: int = DEFAULT_KEEP_RECENT_TOKENS
 
 
 @dataclass

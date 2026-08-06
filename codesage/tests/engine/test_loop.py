@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from codesage.ai import ContentBlock, StreamEvent
+from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent
 from codesage.core import Session, assistant_message, user_message
-from codesage.engine import AgentLoop
+from codesage.engine import AgentLoop, CompactionConfig
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 
@@ -14,16 +14,25 @@ from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 class FakeLLM:
     """Returns a scripted sequence of events; asserts nothing about the input."""
 
-    def __init__(self, script):
+    def __init__(self, script, summary_text="compacted summary", summary_error=None):
         # script: list of callables returning a list[StreamEvent]
         self.script = script
         self.calls = 0
         self.total_cost = [0.0]
         self.last_messages = None
+        self.summary_text = summary_text
+        self.summary_error = summary_error  # compaction path: raise instead of answering
+        self.complete_calls = []  # [(model, LLMRequest)] — the compaction path
 
     def stream(self, request, model="main"):
         self.last_messages = request.messages
         return self._gen()
+
+    async def complete(self, request, model="main"):
+        self.complete_calls.append((model, request))
+        if self.summary_error is not None:
+            raise self.summary_error
+        return LLMResponse(content=[ContentBlock(type="text", text=self.summary_text)])
 
     async def _gen(self):
         events = self.script[min(self.calls, len(self.script) - 1)](self.calls)
@@ -548,3 +557,80 @@ async def test_reminder_agents_sections_keep_nearest():
     assert "rules-0" not in content  # farthest dropped
     assert "rules-8" in content  # 2 fixed + 8 agents = 10 total
     assert content.count("# agentsMd\n") == 8
+
+
+# ---- PI-05: auto-compaction (S6) ----
+
+def _big_history(n=6, size=400):
+    return [user_message(f"hist-{i} " + "x" * size) for i in range(n)]
+
+
+def _tiny_compaction():
+    # window/reserve/keep_recent small so ordinary test messages overflow it
+    return CompactionConfig(window=100, reserve=10, keep_recent=200)
+
+
+async def test_compact_triggers_when_over_threshold():
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert len(llm.complete_calls) == 1
+    model, request = llm.complete_calls[0]
+    assert model == "compact"
+    assert any(m.is_compaction_summary for m in messages)  # summary yielded to the stream
+    # the next model request starts with the summary, not the old history
+    assert llm.last_messages[0].content == "compacted"
+
+
+async def test_compact_debounce_holds_on_same_turn_retry():
+    """The thinking-only retry re-enters the turn-top checkpoint on the SAME
+    turn number — the debounce (last_compact_turn) must block a second
+    compaction even though the context is still over the threshold."""
+    llm = FakeLLM(
+        [lambda i: thinking_only_event(), lambda i: text_event("final")],
+        summary_text="s",
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert len(llm.complete_calls) == 1  # compacted once, not again on re-entry
+    assert messages[-1].content[0].text == "final"
+
+
+async def test_compact_breaker_after_two_failures():
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("final"),
+        ],
+        summary_error=LLMError("summary boom"),
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert len(llm.complete_calls) == 2  # two consecutive failures trip the breaker
+    assert loop.compaction.enabled is False
+    assert loop.last_stop_reason == "completed"  # the loop itself keeps running
+
+
+async def test_compact_persists_summary_message(tmp_path):
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    # append-only: the summary landed in the session file, history untouched
+    lines = (tmp_path / "s1.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"is_compaction_summary": true' in ln for ln in lines)
+    assert len(session.load()) == 3  # user + summary + assistant
+
+
+async def test_compact_resume_replay(tmp_path):
+    """--continue replays the persisted summary as the conversation start."""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    # replay: fresh loop seeded with the persisted messages; the summary
+    # survives the roundtrip and stays unmerged (specs/08 §3.1) — the old
+    # session history sits before it, the new input after
+    resumed = _loop(FakeLLM([lambda i: text_event("resumed")]), history=session.load())
+    await _collect(resumed, user_input="continue")
+    assert resumed.client.last_messages[1].content == "compacted"
