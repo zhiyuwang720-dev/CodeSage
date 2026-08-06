@@ -125,3 +125,20 @@ def test_git_snapshot_none_outside_repo(tmp_path):
         pytest.skip("git not available")
     bundle = build_context_bundle(tmp_path)
     assert bundle.get("gitStatus") is None
+
+
+def test_git_snapshot_runs_commands_in_parallel(tmp_path, monkeypatch):
+    """Serial git runs would take ~0.6s with 4×0.15s sleeps; parallel ~0.3s."""
+    import time
+
+    import codesage.engine.context as ctx_mod
+
+    def slow_run(cwd, args):
+        time.sleep(0.15)
+        return "true" if "rev-parse" in args else "x"
+
+    monkeypatch.setattr(ctx_mod, "_git_run", slow_run)
+    start = time.monotonic()
+    ctx_mod._git_snapshot(tmp_path)
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.45, f"git commands ran serially: {elapsed:.2f}s"

@@ -23,6 +23,9 @@ MAX_AGENTS_CHARS = 32 * 1024
 MAX_STATUS_CHARS = 2_000
 #: git commands never take optional locks (avoid fighting other git ops).
 _GIT_FLAGS = ["--no-optional-locks"]
+#: One pool per process (a per-call pool would add startup jitter for
+#: zero benefit on one-shot bundles).
+_GIT_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="codesage-git")
 
 DISCLAIMER = (
     "This is the git status at the start of the conversation. "
@@ -106,10 +109,14 @@ def _git_snapshot(cwd: Path) -> str | None:
     """branch + recent commits + short status (capped), or None outside a repo."""
     if _git_run(cwd, ["rev-parse", "--is-inside-work-tree"]) != "true":
         return None
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        branch = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "branch", "--show-current"]).result()
-        log = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "log", "--oneline", "-n", "5"]).result()
-        status = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "status", "--short"]).result()
+    # submit all three first, THEN collect — calling .result() right after
+    # each submit would block until that task finishes, serializing them
+    futures = [
+        _GIT_POOL.submit(_git_run, cwd, [*_GIT_FLAGS, "branch", "--show-current"]),
+        _GIT_POOL.submit(_git_run, cwd, [*_GIT_FLAGS, "log", "--oneline", "-n", "5"]),
+        _GIT_POOL.submit(_git_run, cwd, [*_GIT_FLAGS, "status", "--short"]),
+    ]
+    branch, log, status = (f.result() for f in futures)
     if len(status) > MAX_STATUS_CHARS:
         status = status[:MAX_STATUS_CHARS] + f"\n... (truncated beyond {MAX_STATUS_CHARS} chars)"
     return "\n\n".join(
