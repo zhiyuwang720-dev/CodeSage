@@ -19,7 +19,10 @@ READ_STUB = (
 
 class ReadTool(Tool):
     name = "Read"
-    description = "Read a text file, optionally with line numbers and an offset/limit."
+    description = (
+        "Read a text file (default first 2000 lines) with optional line numbers, offset, and limit. "
+        "A re-Read of an unchanged file returns a stub to save tokens — page with offset/limit."
+    )
     input_schema = {
         "type": "object",
         "properties": {
