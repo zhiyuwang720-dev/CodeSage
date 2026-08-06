@@ -41,20 +41,20 @@ def ensure_read_freshness(ctx: ToolUseContext, path: Path) -> str | None:
     Only meaningful for paths previously Read (checked by the caller).
     Returns None when fresh, or the error string for the tool result.
     A pure mtime move (content identical — e.g. a touch) just refreshes.
+
+    The hash is the only reliable freshness signal: on filesystems where
+    two writes can land on the same mtime tick, an mtime match alone would
+    miss an external content change (observed flaky on Windows).
     """
     try:
         mtime_ns = path.stat().st_mtime_ns
-    except OSError as exc:
-        return f"Error reading {path}: {exc}"
-    if mtime_ns == ctx.read_file_timestamps.get(path):
-        return None
-    try:
         data = path.read_bytes()
     except OSError as exc:
         return f"Error reading {path}: {exc}"
     digest = hashlib.sha256(data).hexdigest()
     if digest == ctx.read_file_hashes.get(path):
-        ctx.read_file_timestamps[path] = mtime_ns  # touched, not changed
+        if mtime_ns != ctx.read_file_timestamps.get(path):
+            ctx.read_file_timestamps[path] = mtime_ns  # touched, not changed
         return None
     return "File changed since Read; re-Read it"
 

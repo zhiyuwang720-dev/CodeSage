@@ -112,3 +112,19 @@ async def test_edit_allows_mtime_touch_only(tmp_path):
     result = await _edit(ctx, "f.txt", "two", "2")
     assert not result.is_error
     assert f.read_text() == "one 2"
+
+
+@pytest.mark.asyncio
+async def test_edit_rejects_change_with_unchanged_mtime(tmp_path):
+    """Same-mtime content change must still be caught (hash is the signal;
+    an mtime match alone would miss writes that land on the same tick)."""
+    f = tmp_path / "f.txt"
+    f.write_text("one two")
+    ctx = _ctx(tmp_path)
+    await _read(ctx, "f.txt")
+    recorded = f.stat().st_mtime_ns
+    f.write_text("one TWO")
+    os.utime(f, ns=(recorded, recorded))  # restore the recorded mtime exactly
+    result = await _edit(ctx, "f.txt", "two", "2")
+    assert result.is_error
+    assert "changed since Read" in result.content
