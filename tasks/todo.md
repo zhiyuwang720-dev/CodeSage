@@ -23,9 +23,9 @@
 - [x] **07 cli CLI REPL** (`feat/07-cli`)
   - 验收:交互循环;权限询问(文本);信号处理;流式输出 → **V1 闭环验收**
   - 验证:端到端小任务;V1 验收清单(见 plan.md)
-- [ ] **08 context 上下文工程** (`feat/08-context`)(规格:`docs/specs/08-context.md`)
+- [x] **08 context 上下文工程** (`feat/08-context`)(规格:`docs/specs/08-context.md`)✅ 2026-08-06
   - 验收:AGENTS.md 逐层收集 + 32KB 截断 + override;system prompt 分层组装(静态 base + reminder 注入);system-reminder(上限 10);git 快照(CC-14);上下文 memoize(CC-13);token 预算(usage 锚点);结构化 auto-compact(PI-05:turn 边界 + split-turn 前缀摘要 + fileOps);旧工具结果清理;压缩后最近文件恢复
-  - 验证:上下文组装单测 + 压缩边界单测 + VCR 集成
+  - 验证:上下文组装单测 + 压缩边界单测 + VCR 集成;**471 passed, 9 skipped**
   - 步骤:S1 消息契约(is_reminder/is_compaction_summary + normalize)→ S2 tokens.py → S3 context.py → S4 注入接线 → S5 compaction 核心 → S6 loop 接线 → S7 恢复/清理 → S8 收尾
 - [ ] **09 hooks 钩子系统** (`feat/09-hooks`)
   - 验收:PreToolUse(汇入权限)/PostToolUse/Stop/UserPromptSubmit/SessionStart;命令 + 提示双执行体;JSON 解析;exit 2 硬阻断

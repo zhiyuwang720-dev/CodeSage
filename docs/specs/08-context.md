@@ -119,7 +119,7 @@ def should_compact(tokens: int, window: int, reserve: int = DEFAULT_RESERVE) -> 
 @dataclass
 class ContextBundle:
     sections: list[tuple[str, str]]   # (标题, 内容)——每条渲染为 reminder 一段
-    # 固定顺序:日期 → git 快照 → AGENTS.md(近→远)
+    # 固定顺序:日期 → git 快照 → AGENTS.md(远→近,近的落在末尾——近因效应)
 
 def build_context_bundle(cwd: Path, *, override_file: Path | None = None) -> ContextBundle
 ```
@@ -139,10 +139,10 @@ def build_context_bundle(cwd: Path, *, override_file: Path | None = None) -> Con
 
 ### 3.4 注入接线(`engine/loop.py` 改造)
 
-- `AgentLoop.__init__` 增参 `context_bundle: ContextBundle | None`;删去/弃用旧 `context: dict`
+- `AgentLoop.__init__` 增参 `context_bundle: ContextBundle | None`
 - `_ask_model`:
-  - `system=build_system_prompt(base)` — 只含 base,**字节级稳定**
-  - 请求消息 = `[reminder_msg] + normalize_for_api(history)`;reminder_msg 由 bundle 渲染(每条 section 包 `<system-reminder>` 段,合计最多 **10 段** —— 验收标准)
+  - `system=self.system_prompt` — 只含 base,**字节级稳定**
+  - 请求消息 = `[reminder_msg] + normalize_for_api(history)`;reminder_msg 由 bundle 渲染成**一条** user 消息(`<system-reminder>` 头 + 各 section 以 `# title` 分段 + 尾注),合计最多 **10 段** —— 验收标准;date/git 段恒保留,AGENTS.md 段超限时保留**最近**(靠近会话的)段
   - reminder 消息只进请求,**不持久化**到会话文件(它是派生的,不是对话内容;持久化会污染 resume 重放)
 
 **理由**:system 静态化 + reminder 前置的双重收益——(a) system 前缀字节稳定,Anthropic 端可打 cache_control 断点、DeepSeek 端自动前缀缓存命中;(b) context 变化(后续阶段:记忆、技能)只需追加 reminder 段,不触碰 system 缓存。不持久化 reminder 的理由:resume 时由 bundle 重建,避免与对话历史耦合(pi 同样把 context 投影放在读路径而非写路径)。
@@ -202,16 +202,16 @@ user_message(summary_text, is_compaction_summary=True)
 
 ## 4. 执行步骤(依赖序)
 
-| # | 步骤 | 内容 | 依赖 | 验收(测试) |
-|---|---|---|---|---|
+| # | 步骤 | 内容                                                                | 依赖 | 验收(测试) |
+|---|---|-------------------------------------------------------------------|---|---|
 | S1 | 消息契约扩展 | SessionMessage +is_reminder/+is_compaction_summary;normalize 前置/不合并 | — | `tests/core/test_normalize.py`:reminder 前置、summary 不合并、is_meta 仍过滤 |
-| S2 | tokens.py | 估算 + 阈值 | — | `tests/engine/test_tokens.py`:usage 锚点、image、JSON 密集、should_compact 边界 |
-| S3 | context.py | AGENTS.md 收集/截断/override + git 快照 + 日期 + memoize | — | `tests/engine/test_context.py`:tmp 目录树(多层 AGENTS.md、超 32KB、override、非 git 仓库) |
-| S4 | 注入接线 | loop 收 bundle;system 静态化;reminder 消息入请求不入会话 | S1, S3 | `tests/engine/test_loop.py`:请求消息序、会话文件无 reminder |
-| S5 | compaction.py 核心 | find_cut_point + serialize + 摘要生成(compact 指针) | S2 | `tests/engine/test_compaction.py`:cut 点边界(不切 tool_result/整 turn/split turn)、serialize 截断;摘要 VCR 集成 |
-| S6 | loop 压缩接线 | turn 顶部检查点 + 摘要替换 + 持久化 + 熔断 | S4, S5 | `tests/engine/test_loop.py`:小窗口触发、防抖、熔断、resume 重放 |
-| S7 | 恢复 + 清理 | fileOps 提取注入最近文件;旧结果清理 | S5 | 恢复注入单测;清理投影单测 |
-| S8 | 收尾 | 常量收敛、memoize 失效说明、docs/modules/08-context.md、todo 勾选 | S6, S7 | 全量回归 |
+| S2 | tokens.py | 估算 + 阈值                                                           | — | `tests/engine/test_tokens.py`:usage 锚点、image、JSON 密集、should_compact 边界 |
+| S3 | context.py | AGENTS.md 收集/截断/override + git 快照 + 日期 + memoize                  | — | `tests/engine/test_context.py`:tmp 目录树(多层 AGENTS.md、超 32KB、override、非 git 仓库) |
+| S4 | 注入接线 | loop 收 bundle;system 静态化;reminder 消息入请求不入会话                       | S1, S3 | `tests/engine/test_loop.py`:请求消息序、会话文件无 reminder |
+| S5 | compaction.py 核心 | find_cut_point + serialize + 摘要生成(compact 指针)                     | S2 | `tests/engine/test_compaction.py`:cut 点边界(不切 tool_result/整 turn/split turn)、serialize 截断;摘要 VCR 集成 |
+| S6 | loop 压缩接线 | turn 顶部检查点 + 摘要替换 + 持久化 + 熔断                                      | S4, S5 | `tests/engine/test_loop.py`:小窗口触发、防抖、熔断、resume 重放 |
+| S7 | 恢复 + 清理 | fileOps 提取注入最近文件;旧结果清理                                            | S5 | 恢复注入单测;清理投影单测 |
+| S8 | 收尾 | 常量收敛、memoize 失效/说明、docs/modules/08-context.md、todo 勾选             | S6, S7 | 全量回归 |
 
 **依赖图**:S1 → S4;S2 → S5 → S6;S3 → S4;S5 → S7;S6+S7 → S8。(S1/S2/S3 可并行)
 
