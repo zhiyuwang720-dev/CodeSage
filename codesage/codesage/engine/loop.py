@@ -119,6 +119,8 @@ class AgentLoop:
         self._last_result_clean = time.time()
         # §3.8: reactive compaction — one PTL recovery per loop run
         self._ptl_retried = False
+        #: active message list exposed for the CLI status bar's ctx meter
+        self._active_messages: list["SessionMessage"] | None = None
         # §3.9: previous response's cache_read_tokens (break detection)
         self._last_cache_read = 0
         self.model = model
@@ -158,6 +160,9 @@ class AgentLoop:
         thinking_retries = 0
         try:
             while True:
+                # CLI status bar's ctx meter reads this (compaction visibly
+                # drops it); updated again after a compaction replaces it
+                self._active_messages = messages
                 if turn >= self.max_turns:
                     yield await self._stop("max_turns", MAX_TURNS_TEXT)
                     return
@@ -196,6 +201,7 @@ class AgentLoop:
                             summary_msg, cut = compacted
                             yield summary_msg
                             messages = [summary_msg, *messages[cut.index :]]
+                            self._active_messages = messages  # meter reflects the compaction
 
                 # PI-06: drain mid-run steer inputs into the conversation
                 # (they become user messages for the next LLM call)

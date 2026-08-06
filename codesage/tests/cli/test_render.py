@@ -60,3 +60,32 @@ def test_result_preview_truncated():
     msg = user_message([ContentBlock(type="tool_result", tool_use_id="t1", content="x" * 1000)])
     out = _render(msg)
     assert "…" in out
+
+
+def test_midrun_tool_lines_are_grey(monkeypatch):
+    """Agent mid-run artifacts (tool calls/results/thinking) render grey;
+    the final assistant text stays uncolored (spec: grey = intermediate)."""
+    monkeypatch.setattr("codesage.cli.render.USE_COLOR", True)
+    from codesage.ai import ContentBlock
+    from codesage.core import assistant_message, user_message
+
+    mid = assistant_message(
+        [
+            ContentBlock(type="thinking", text="hmm"),
+            ContentBlock(type="tool_use", id="t1", name="Read", input={"file_path": "x.py"}),
+        ]
+    )
+    out = _render(mid, transcript=True)
+    assert "\033[90m" in out  # tool_use line + thinking grey
+
+    result = user_message(
+        [ContentBlock(type="tool_result", tool_use_id="t1", content="file content", is_error=False)]
+    )
+    out = _render(result)
+    assert "\033[90m" in out  # tool_result line grey
+    assert "✓" in out  # glyph still distinguishable
+
+    final = assistant_message("the final answer")
+    out = _render(final)
+    assert "the final answer" in out
+    assert "\033[90m" not in out  # final text uncolored

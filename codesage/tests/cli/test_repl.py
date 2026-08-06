@@ -176,3 +176,30 @@ async def test_tool_start_status_line(tmp_path, monkeypatch):
     buf = io.StringIO()
     await run_single_turn(loop, "list", out=buf)
     assert "LS running" in buf.getvalue()
+
+
+async def test_on_after_render_hook_fires(tmp_path):
+    """The status-bar redraw hook fires after rendered output (streamed
+    deltas, tool events, messages) — and never when render is off."""
+    def text_events(i):
+        return [
+            StreamEvent(type="text_delta", text="hello"),
+            StreamEvent(type="done", stop_reason="end_turn"),
+        ]
+
+    fires = []
+
+    async def run(render):
+        fires.clear()
+        loop = _mock_loop(tmp_path, [text_events])
+        await run_single_turn(
+            loop, "hi", out=io.StringIO(), render=render,
+            on_after_render=lambda: fires.append(1),
+        )
+
+    # rendered: streamed text + final message each fire
+    await run(True)
+    assert len(fires) >= 2
+    # render off (--output-format json): nothing fires
+    await run(False)
+    assert fires == []
