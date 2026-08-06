@@ -1,4 +1,5 @@
-"""normalize_for_api tests: filtering, merging (toolResultsFirst), sentinel."""
+"""normalize_for_api tests: filtering, merging (toolResultsFirst), sentinel,
+reminder hoisting, compaction-summary boundary (phase 08)."""
 
 from codesage.ai import ContentBlock
 from codesage.core import NO_CONTENT_MESSAGE, assistant_message, normalize_for_api, user_message
@@ -129,3 +130,78 @@ def test_whitespace_string_becomes_sentinel_and_merges():
     out = normalize_for_api([user_message("   "), user_message("")])
     assert len(out) == 1
     assert out[0].content == f"{NO_CONTENT_MESSAGE}\n{NO_CONTENT_MESSAGE}"
+
+
+# ---- phase 08: is_reminder hoisting / is_compaction_summary boundary ----
+
+def test_reminder_hoisted_first():
+    """A reminder buried mid-history lands at the front (byte-stable prefix)."""
+    out = normalize_for_api(
+        [
+            user_message("question"),
+            assistant_message("answer"),
+            user_message("<system-reminder>context</system-reminder>", is_reminder=True),
+        ]
+    )
+    assert [m.role for m in out] == ["user", "user", "assistant"]
+    assert out[0].content == "<system-reminder>context</system-reminder>"
+    assert out[1].content == "question"
+
+
+def test_multiple_reminders_merge_in_order():
+    out = normalize_for_api(
+        [
+            user_message("r1", is_reminder=True),
+            user_message("r2", is_reminder=True),
+            user_message("actual"),
+        ]
+    )
+    assert len(out) == 2
+    assert out[0].content == "r1\n\nr2"
+    assert out[1].content == "actual"
+
+
+def test_reminder_not_filtered_like_meta():
+    """is_meta is dropped before API; is_reminder must be kept."""
+    out = normalize_for_api(
+        [user_message("drop me", is_meta=True), user_message("keep me", is_reminder=True)]
+    )
+    assert len(out) == 1
+    assert out[0].content == "keep me"
+
+
+def test_reminder_merges_with_other_reminders_only():
+    """A reminder between normal messages joins the hoisted block, not neighbors."""
+    out = normalize_for_api(
+        [
+            user_message("first"),
+            user_message("reminder", is_reminder=True),
+            user_message("second"),
+        ]
+    )
+    assert [m.content for m in out] == ["reminder", "first\nsecond"]
+
+
+def test_summary_never_merges_with_adjacent_users():
+    out = normalize_for_api(
+        [
+            user_message("pre"),
+            user_message("summarized history", is_compaction_summary=True),
+            user_message("post"),
+        ]
+    )
+    assert [m.content for m in out] == ["pre", "summarized history", "post"]
+
+
+def test_summary_blocks_merge_of_neighbors_only_on_its_side():
+    """Users on each side of a summary merge among themselves, not across it."""
+    out = normalize_for_api(
+        [
+            user_message("pre1"),
+            user_message("pre2"),
+            user_message("summary", is_compaction_summary=True),
+            user_message("post1"),
+            user_message("post2"),
+        ]
+    )
+    assert [m.content for m in out] == ["pre1\npre2", "summary", "post1\npost2"]
