@@ -31,6 +31,21 @@ _CD_RE = re.compile(r'(?:^|[;&|\r\n]\s*)cd(?:\s+(?:"([^"]*)"|\'([^\']*)\'|(\S+))
 #: Git Bash style "/e/Mac/..." → drive-letter path (models output POSIX-style
 #: paths on Windows; Path() would resolve them against the *current* drive).
 _GITBASH_PATH_RE = re.compile(r"^/([a-zA-Z])/(.*)$")
+#: Drive-letter paths inside commands: `E:\Mac\x` is mangled by bash (`\M` is
+#: an escape → `E:Macx` → "No such file"). Rewrite to `/e/Mac/x` before the
+#: shell sees it — the model copies Windows-style paths from the context.
+_DRIVE_PATH_RE = re.compile(r"(?<![\"'])([A-Za-z]):\\([^\"' \t]+)")
+
+
+def _normalize_drive_paths(command: str) -> str:
+    """`E:\\Mac\\CodeSage` → `/e/Mac/CodeSage` inside a command line.
+
+    Only bare drive-letter paths are rewritten (a quoted or space-bearing
+    path is left for the shell). POSIX paths (`/e/...`) are untouched.
+    """
+    return _DRIVE_PATH_RE.sub(
+        lambda m: f"/{m.group(1).lower()}/{m.group(2).replace(chr(92), '/')}", command
+    )
 
 
 def _parse_target(target: str) -> Path:
@@ -110,7 +125,8 @@ class BashTool(Tool):
     description = (
         "Execute a shell command (POSIX syntax — Git Bash on Windows when available) with a "
         "timeout; use for build/run/system tasks. Prefer Glob/Grep/Read over ls/find/cat on "
-        "existing files. timeout_ms max 600000."
+        "existing files. Drive-letter paths (E:\\...) are converted automatically. "
+        "timeout_ms max 600000."
     )
     input_schema = {
         "type": "object",
@@ -195,6 +211,10 @@ async def run_shell(
     """Run a command with a hard timeout; kills the whole process tree on
     expiry, on abort, or on caller cancellation. On Windows, runs via Git
     Bash when available (the model writes POSIX syntax)."""
+    if sys.platform == "win32":
+        # the model copies Windows-style paths from the context; bash would
+        # mangle `E:\Mac\x` into `E:Macx` (backslash is an escape)
+        command = _normalize_drive_paths(command)
     process_env = os.environ.copy()
     if env:
         process_env.update(env)

@@ -152,3 +152,22 @@ def test_shell_argv_posix_uses_default_shell(monkeypatch):
 
     monkeypatch.setattr(bash_mod.sys, "platform", "linux")
     assert bash_mod._shell_argv("ls") is None
+
+
+# ---- Windows drive-letter path normalization (review: bash mangles E:\...) ----
+
+def test_normalize_drive_paths_converts_bare_paths():
+    from codesage.tools.builtin.shell.bash import _normalize_drive_paths
+
+    assert _normalize_drive_paths(r"ls E:\Mac\CodeSage\x") == "ls /e/Mac/CodeSage/x"
+    assert _normalize_drive_paths(r"cat C:\a\b.txt && echo done") == "cat /c/a/b.txt && echo done"
+
+
+def test_normalize_drive_paths_leaves_posix_and_quoted_alone():
+    from codesage.tools.builtin.shell.bash import _normalize_drive_paths
+
+    # already-POSIX and quoted/space-bearing paths are untouched
+    assert _normalize_drive_paths("ls /e/Mac/CodeSage") == "ls /e/Mac/CodeSage"
+    assert _normalize_drive_paths(r'echo "E:\my dir\x"') == r'echo "E:\my dir\x"'
+    # no drive letter: untouched
+    assert _normalize_drive_paths("grep -r foo .") == "grep -r foo ."
