@@ -1070,3 +1070,14 @@ async def test_prefetch_completing_during_stream_survives_to_next_turn():
         if b.type == "text"
     ]
     assert any("# memory\nfound it" in t for t in texts)
+
+
+async def test_active_messages_exposed_and_updated_after_compact():
+    """The CLI status bar's ctx meter reads loop._active_messages; a
+    compaction must replace it so the meter reflects the post-compact size."""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert loop._active_messages is not None
+    assert loop._active_messages[0].is_compaction_summary  # compacted view
+    assert loop._active_messages[-1].content[0].text == "answer"

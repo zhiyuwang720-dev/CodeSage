@@ -24,6 +24,7 @@ CYAN = "\033[36m"
 YELLOW = "\033[33m"
 RED = "\033[31m"
 GREEN = "\033[32m"
+GREY = "\033[90m"  # agent mid-run messages (tool calls/results/thinking)
 
 USE_COLOR = sys.stdout.isatty()
 
@@ -82,23 +83,25 @@ def _render_user(message: SessionMessage, out: TextIO, transcript: bool) -> None
         return
     for block in content:
         if block.type == "tool_result":
-            status = _c(_glyph("✗", out), RED) if block.is_error else _c(_glyph("✓", out), GREEN)
+            # mid-run artifact: the whole line is grey; ✓/✗ glyphs stay
+            # distinguishable by shape (color carries no extra meaning)
+            status = _glyph("✗", out) if block.is_error else _glyph("✓", out)
             body = block.content if isinstance(block.content, str) else ""
             body = body.strip()
             if not body:
-                print(f"  {status} tool[{_short_id(block.tool_use_id)}] (no output)", file=out)
+                print(_c(f"  {status} tool[{_short_id(block.tool_use_id)}] (no output)", GREY), file=out)
                 continue
             if transcript:
-                print(f"  {status} tool[{_short_id(block.tool_use_id)}]", file=out)
-                print(_indent(body, 4), file=out)
+                print(_c(f"  {status} tool[{_short_id(block.tool_use_id)}]", GREY), file=out)
+                print(_c(_indent(body, 4), GREY), file=out)
             else:
                 preview, truncated = _collapse(body, out)
                 if truncated:
-                    print(f"  {status} tool[{_short_id(block.tool_use_id)}]", file=out)
-                    print(_indent(preview, 4), file=out)
+                    print(_c(f"  {status} tool[{_short_id(block.tool_use_id)}]", GREY), file=out)
+                    print(_c(_indent(preview, 4), GREY), file=out)
                     print(_c(f"  … +{len(body.splitlines()) - COLLAPSED_RESULT_LINES} lines (ctrl+o to expand)", DIM), file=out)
                 else:
-                    print(f"  {status} tool[{_short_id(block.tool_use_id)}] {_summarize(body)}", file=out)
+                    print(_c(f"  {status} tool[{_short_id(block.tool_use_id)}] {_summarize(body)}", GREY), file=out)
 
 
 def _render_assistant(message: SessionMessage, out: TextIO, transcript: bool) -> None:
@@ -123,15 +126,15 @@ def _render_assistant(message: SessionMessage, out: TextIO, transcript: bool) ->
             text_parts.append(block.text or "")
         elif block.type == "tool_use":
             preview = _summarize_tool_call(block.name or "", block.input or {})
-            print(_c(f"\n{_glyph('◈', out)} {preview}", CYAN), file=out)
+            print(_c(f"\n{_glyph('◈', out)} {preview}", GREY), file=out)
     if thinking_chars:
         if transcript:
             for block in content:
                 if block.type == "thinking" and block.text:
-                    print(_c(f"{_glyph('∴', out)} Thinking…", DIM), file=out)
-                    print(_indent(block.text, 2), file=out)
+                    print(_c(f"{_glyph('∴', out)} Thinking…", GREY), file=out)
+                    print(_c(_indent(block.text, 2), GREY), file=out)
         else:
-            print(_c(f"  {_glyph('∴', out)} Thinking {thinking_chars} chars (ctrl+o to expand)", DIM), file=out)
+            print(_c(f"  {_glyph('∴', out)} Thinking {thinking_chars} chars (ctrl+o to expand)", GREY), file=out)
     if text_parts:
         print("\n" + "\n".join(text_parts), file=out)
 

@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..engine import AgentLoop
+from ..engine.tokens import estimate_context_tokens
 from .commands import find_command
-from .render import CYAN, DIM, RESET, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
+from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
+from .statusbar import StatusBar
 
 
 @dataclass
@@ -55,6 +57,7 @@ async def run_single_turn(
     transcript: bool = False,  # Ctrl+O expanded mode
     out=None,  # TextIO; default sys.stdout (injectable for tests)
     render: bool = True,  # False for --output-format json (summary only)
+    on_after_render: "Callable[[], None] | None" = None,  # status-bar redraw hook
 ) -> RunSummary:
     """One user input, rendered (also used by acceptance tests).
 
@@ -73,12 +76,16 @@ async def run_single_turn(
         # live text_deltas print complete lines as they arrive (CC behavior)
         if render and ev.type == "text_delta" and ev.text:
             render_streamed_text_delta(ev.text, target)
+            if on_after_render is not None:
+                on_after_render()
 
     def _on_tool_event(event, name, payload):
         # PI-01 wiring: a lightweight status line when a tool starts running.
         # The end state is rendered by the tool_result message (✓/✗) instead.
         if render and event == "start":
-            print(_c(f"  {_glyph('●', target)} {name} running…", DIM), file=target, flush=True)
+            print(_c(f"  {_glyph('●', target)} {name} running…", GREY), file=target, flush=True)
+            if on_after_render is not None:
+                on_after_render()
 
     prev_on_stream = getattr(loop, "on_stream", None)
     prev_on_tool_event = getattr(loop, "on_tool_event", None)
@@ -90,6 +97,8 @@ async def run_single_turn(
             has_error = has_error or (message.role == "assistant" and message.is_error)
             if render:
                 render_message(message, out=target, transcript=transcript)
+                if on_after_render is not None:
+                    on_after_render()
             if message.role != "assistant":
                 continue
             if message.usage is not None:
@@ -136,7 +145,6 @@ async def repl_loop(
     cwd: Path,
     show_thinking: bool = False,
 ) -> None:
-    print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt, Ctrl+O to expand)", CYAN))
     _install_signal_handlers(loop)
     # /show-thinking toggles the flag; /mode writes loop.mode via "loop";
     # transcript toggles Ctrl+O expanded rendering for subsequent messages.
@@ -150,37 +158,70 @@ async def repl_loop(
     capture_gate = threading.Event()
     _install_mid_run_input_capture(loop, state, capture_gate)
 
-    while True:
-        try:
-            line = await asyncio.to_thread(_read_line, state)
-        except (EOFError, KeyboardInterrupt):
-            print("\nbye")
-            return
-        if line is None:
-            continue  # a hotkey was handled (e.g. Ctrl+O toggled transcript)
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("/"):
-            if await _handle_slash_command(loop, line, state):
-                return
-            continue
-        pending = line
-        while pending:
-            loop.abort.clear()
-            capture_gate.set()  # capture keystrokes only while a turn runs
+    # Bottom status bar (branch | model | thinking | session | ctx meter) —
+    # pinned below the input line via an ANSI scroll region; inert off-tty.
+    # The ctx meter reads the loop's active message list, so a compaction
+    # visibly drops the bar (review R1: the meter must be wired).
+    bar = StatusBar(model_name=_model_display_name(loop), cwd=str(cwd))
+    bar._meter = lambda: estimate_context_tokens(loop._active_messages or []).tokens
+    state["sb"] = bar
+    bar.enable()  # clears the screen — the banner must print AFTER enable
+    print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt, Ctrl+O to expand)", CYAN))
+    bar.move_to_input()
+
+    def _bar_redraw() -> None:
+        # "thinking" reflects the /show-thinking mode switch (transcript
+        # expansion), not live model activity — no engine event feeds that
+        bar.thinking_on = state["show_thinking"]
+        bar.redraw()
+
+    try:
+        while True:
             try:
-                summary = await run_single_turn(
-                    loop, pending,
-                    show_thinking=state["show_thinking"],
-                    transcript=state["transcript"],
-                )
-            finally:
-                capture_gate.clear()
-            # followUp: transfer captured lines into the queue, then re-run
-            # whatever the engine did not consume (single source of truth)
-            _transfer_captured(loop, state)
-            pending = _drain_steer_queue(loop)
+                line = await asyncio.to_thread(_read_line, state)
+            except (EOFError, KeyboardInterrupt):
+                print("\nbye")
+                return
+            if line is None:
+                continue  # a hotkey was handled (e.g. Ctrl+O toggled transcript)
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("/"):
+                if await _handle_slash_command(loop, line, state):
+                    return
+                continue
+            pending = line
+            while pending:
+                loop.abort.clear()
+                capture_gate.set()  # capture keystrokes only while a turn runs
+                try:
+                    summary = await run_single_turn(
+                        loop, pending,
+                        show_thinking=state["show_thinking"],
+                        transcript=state["transcript"],
+                        on_after_render=_bar_redraw if bar.enabled else None,
+                    )
+                finally:
+                    capture_gate.clear()
+                # followUp: transfer captured lines into the queue, then re-run
+                # whatever the engine did not consume (single source of truth)
+                _transfer_captured(loop, state)
+                pending = _drain_steer_queue(loop)
+            bar.move_to_input()  # back to the fixed prompt line
+    finally:
+        bar.disable()
+
+
+def _model_display_name(loop: AgentLoop) -> str:
+    """Resolve the loop's model pointer to the concrete model name."""
+    try:
+        client = getattr(loop, "client", None)
+        if client is not None:
+            return client.resolve_profile(getattr(loop, "model", "main")).model
+    except Exception:
+        pass
+    return getattr(loop, "model", "main")
 
 
 def _install_mid_run_input_capture(loop: AgentLoop, state: dict, gate: "threading.Event") -> None:
@@ -264,6 +305,15 @@ def _drain_steer_queue(loop: AgentLoop) -> str | None:
         return None
 
 
+def _prompt_text(state: dict) -> str:
+    """The prompt string; no leading newline under the status-bar layout —
+    the LF would push the cursor from the input line onto the bar row
+    (review R2: the bar layout owns its own line separation)."""
+    bar = state.get("sb")
+    lead = "" if bar is not None and bar.enabled else "\n"
+    return _c(f"{lead}{_prompt_mark()} ", CYAN)
+
+
 def _read_line(state: dict) -> str | None:
     """Read one input line; None when a hotkey was consumed.
 
@@ -271,10 +321,10 @@ def _read_line(state: dict) -> str | None:
     mid-typing. POSIX: plain input() (no Ctrl+O — use /expand instead).
     """
     if sys.platform != "win32":
-        return input(_c(f"\n{_prompt_mark()} ", CYAN))
+        return input(_prompt_text(state))
     import msvcrt
 
-    prompt = _c(f"\n{_prompt_mark()} ", CYAN)
+    prompt = _prompt_text(state)
     print(prompt, end="", flush=True)
     buf: list[str] = []
     while True:
@@ -282,7 +332,14 @@ def _read_line(state: dict) -> str | None:
         if ch == "\x0f":  # Ctrl+O
             state["transcript"] = not state["transcript"]
             print("\r" + " " * (len(prompt) + sum(len(c) for c in buf)) + "\r", end="", flush=True)
-            print(_c(f"\n[transcript {'on' if state['transcript'] else 'off'}]", YELLOW), file=sys.stdout)
+            bar = state.get("sb")
+            if bar is not None and bar.enabled:
+                # status-bar layout: the note goes into the scroll region,
+                # then the prompt line is re-drawn in place
+                bar.print_below(_c(f"[transcript {'on' if state['transcript'] else 'off'}]", YELLOW))
+                bar.move_to_input()
+            else:
+                print(_c(f"\n[transcript {'on' if state['transcript'] else 'off'}]", YELLOW), file=sys.stdout)
             print(prompt + "".join(buf), end="", flush=True)
             continue
         if ch in ("\r", "\n"):
