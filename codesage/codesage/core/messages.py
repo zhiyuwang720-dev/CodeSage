@@ -31,6 +31,7 @@ class SessionMessage:
     is_error: bool = False  # provider error surfaced as a message; dropped before API
     is_meta: bool = False  # synthesized messages (e.g. interruption notices)
     error_message: str | None = None  # provider/transport error detail (diagnostics)
+    stop_reason: str | None = None  # end_turn / tool_use / length / error (UI truncation hint)
     # phase 08 context engineering flags
     is_reminder: bool = False  # system-reminder carrier (context); sent to API, hoisted first
     is_compaction_summary: bool = False  # compaction summary; kept in place, never merged (specs/08 §3.1)
@@ -52,6 +53,7 @@ class SessionMessage:
             "is_error": self.is_error,
             "is_meta": self.is_meta,
             "error_message": self.error_message,
+            "stop_reason": self.stop_reason,
             "is_reminder": self.is_reminder,
             "is_compaction_summary": self.is_compaction_summary,
         }
@@ -75,6 +77,7 @@ class SessionMessage:
             is_error=bool(data.get("is_error", False)),
             is_meta=bool(data.get("is_meta", False)),
             error_message=data.get("error_message"),
+            stop_reason=data.get("stop_reason"),
             is_reminder=bool(data.get("is_reminder", False)),
             is_compaction_summary=bool(data.get("is_compaction_summary", False)),
         )
@@ -97,6 +100,7 @@ def assistant_message(
     usage: Usage | None = None,
     model: str | None = None,
     is_error: bool = False,
+    stop_reason: str | None = None,
     **kw: Any,
 ) -> SessionMessage:
     return SessionMessage(
@@ -105,5 +109,6 @@ def assistant_message(
         usage=usage,
         model=model,
         is_error=is_error,
+        stop_reason=stop_reason,
         **kw,
     )

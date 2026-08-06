@@ -89,3 +89,14 @@ def test_midrun_tool_lines_are_grey(monkeypatch):
     out = _render(final)
     assert "the final answer" in out
     assert "\033[90m" not in out  # final text uncolored
+
+
+def test_truncated_output_shows_hint():
+    """stop_reason=length surfaces a truncation hint instead of looking cut off."""
+    from codesage.core import assistant_message
+
+    msg = assistant_message("partial answer", stop_reason="length")
+    out = _render(msg)
+    assert "output truncated" in out
+    # normal replies carry no hint
+    assert "output truncated" not in _render(assistant_message("full answer"))

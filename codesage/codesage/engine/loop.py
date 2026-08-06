@@ -427,6 +427,7 @@ class AgentLoop:
             model=response.model,
             is_error=response.is_error,
             error_message=response.error_message,
+            stop_reason=response.stop_reason,
         )
 
     def _start_prefetch(self, messages: list[SessionMessage]) -> None:

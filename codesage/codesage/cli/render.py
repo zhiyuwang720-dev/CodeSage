@@ -111,6 +111,8 @@ def _render_assistant(message: SessionMessage, out: TextIO, transcript: bool) ->
     content = message.content
     if isinstance(content, str):
         print(_c(f"\n{content}", RED) if message.is_error else f"\n{content}", file=out)
+        if message.stop_reason == "length":
+            print(_c("\n(output truncated: max tokens reached)", YELLOW), file=out)
         return
     if message.is_error and not _blocks_text(content):
         detail = message.error_message or "unknown provider error"
@@ -137,6 +139,9 @@ def _render_assistant(message: SessionMessage, out: TextIO, transcript: bool) ->
             print(_c(f"  {_glyph('∴', out)} Thinking {thinking_chars} chars (ctrl+o to expand)", GREY), file=out)
     if text_parts:
         print("\n" + "\n".join(text_parts), file=out)
+    if message.stop_reason == "length":
+        # the model hit its output cap — surface it instead of looking cut off
+        print(_c("\n(output truncated: max tokens reached)", YELLOW), file=out)
 
 
 def _indent(text: str, width: int) -> str:
