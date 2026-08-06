@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent
+from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
 from codesage.core import Session, assistant_message, user_message
 from codesage.engine import AgentLoop, CompactionConfig
 from codesage.permissions import PermissionEngine, PermissionMode
@@ -870,3 +870,53 @@ async def test_summary_ptl_truncates_head_and_retries_once():
     first, second = llm.complete_calls[0][1].messages[0].content, llm.complete_calls[1][1].messages[0].content
     assert "turn-1" not in second and "turn-2" in second  # oldest turn dropped
     assert "turn-1" in first  # the original attempt carried everything
+
+
+# ---- §3.9: cache-break detection (light diagnostic) ----
+
+def _usage_tool_event(cache_read):
+    return [
+        StreamEvent(type="text_delta", text="thinking"),
+        StreamEvent(type="usage", usage=Usage(cache_read_tokens=cache_read, input_tokens=100, output_tokens=10)),
+        StreamEvent(type="tool_use_start", tool_use_id="t1", tool_name="Echo"),
+        StreamEvent(type="tool_use_delta", input_json_delta='{"text": "x"}'),
+        StreamEvent(type="done", stop_reason="tool_use"),
+    ]
+
+
+async def test_cache_break_logs_once_per_drop(caplog):
+    """A cache_read drop to 0 after a high value logs one diagnostic per
+    drop; steady 0s and recoveries do not (specs/08 §3.9)."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="codesage.engine")
+    llm = FakeLLM(
+        [
+            lambda i: _usage_tool_event(5000),
+            lambda i: _usage_tool_event(0),
+            lambda i: _usage_tool_event(0),
+            lambda i: _usage_tool_event(8000),
+            lambda i: _usage_tool_event(0),
+            lambda i: text_event("final"),
+        ]
+    )
+    await _collect(_loop(llm))
+    breaks = [r for r in caplog.records if "cache break" in r.getMessage()]
+    assert len(breaks) == 2  # 5000->0 and 8000->0; the 0->0 and 0->8000 do not
+    assert "dropped 5000" in breaks[0].getMessage()
+    assert "dropped 8000" in breaks[1].getMessage()
+
+
+async def test_cache_break_silent_when_never_high(caplog):
+    """No log when cache_read is 0 from the start (nothing dropped)."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="codesage.engine")
+    llm = FakeLLM(
+        [
+            lambda i: _usage_tool_event(0),
+            lambda i: text_event("final"),
+        ]
+    )
+    await _collect(_loop(llm))
+    assert not [r for r in caplog.records if "cache break" in r.getMessage()]

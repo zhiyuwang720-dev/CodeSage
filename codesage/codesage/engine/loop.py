@@ -13,10 +13,13 @@ or abort (three checkpoints: loop top, after LLM call, tool batch).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("codesage.engine")
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from ..ai.retry import is_ptl_error
@@ -111,6 +114,8 @@ class AgentLoop:
         self._last_result_clean = time.time()
         # §3.8: reactive compaction — one PTL recovery per loop run
         self._ptl_retried = False
+        # §3.9: previous response's cache_read_tokens (break detection)
+        self._last_cache_read = 0
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -369,6 +374,17 @@ class AgentLoop:
         response = await LLMClient.collect(stream)
         if self.abort.is_set():
             return None
+        # §3.9 cache-break detection (light): a drop from a high
+        # cache_read_tokens to 0 means the server prefix cache was invalidated
+        # (TTL expiry or server eviction). Diagnostic only — no action.
+        if response.usage is not None:
+            cache_read = response.usage.cache_read_tokens
+            if cache_read == 0 and self._last_cache_read > 0:
+                logger.warning(
+                    "cache break: cache_read_tokens dropped %d -> 0 (TTL expiry or server eviction)",
+                    self._last_cache_read,
+                )
+            self._last_cache_read = cache_read
         return assistant_message(
             response.content,
             usage=response.usage,
