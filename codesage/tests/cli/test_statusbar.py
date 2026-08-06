@@ -127,3 +127,27 @@ def test_layout_sequences(monkeypatch):
 
     bar.disable()
     assert "\033[r" in out.getvalue()  # scroll region restored
+
+
+def test_after_submit_clears_input_and_enters_region(monkeypatch):
+    """Enter at the prompt: the echoed input is erased and the cursor moves
+    into the scroll region so the reply renders above (not on the bar)."""
+    import os
+    import shutil
+
+    from codesage.cli import statusbar as sb_mod
+
+    monkeypatch.setattr(sb_mod, "USE_COLOR", True)
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda: os.terminal_size((80, 24)))
+    out = FakeTTY()
+    bar = StatusBar(model_name="m", out=out)
+    bar.enable()
+    out.seek(0)
+    out.truncate()
+
+    bar.after_submit()
+    s = out.getvalue()
+    assert "\033[23;1H" in s  # input line row 23
+    assert "\033[2K" in s  # submitted text erased
+    assert "\033[22;1H" in s  # cursor re-enters the scroll region (row 22)
+    assert "\n" in s  # and moves down a line for the reply

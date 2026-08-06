@@ -321,7 +321,11 @@ def _read_line(state: dict) -> str | None:
     mid-typing. POSIX: plain input() (no Ctrl+O — use /expand instead).
     """
     if sys.platform != "win32":
-        return input(_prompt_text(state))
+        line = input(_prompt_text(state))
+        bar = state.get("sb")
+        if bar is not None and bar.enabled:
+            bar.after_submit()  # erase the echoed input, re-enter the scroll region
+        return line
     import msvcrt
 
     prompt = _prompt_text(state)
@@ -343,7 +347,11 @@ def _read_line(state: dict) -> str | None:
             print(prompt + "".join(buf), end="", flush=True)
             continue
         if ch in ("\r", "\n"):
-            print(file=sys.stdout)
+            bar = state.get("sb")
+            if bar is not None and bar.enabled:
+                bar.after_submit()  # erase the echoed input, re-enter the scroll region
+            else:
+                print(file=sys.stdout)
             return "".join(buf)
         if ch == "\x08":  # backspace
             if buf:

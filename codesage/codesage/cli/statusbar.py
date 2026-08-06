@@ -130,6 +130,17 @@ class StatusBar:
         print(text, file=self.out)
         self.redraw()
 
+    def after_submit(self) -> None:
+        """The user just hit Enter: erase the submitted text from the input
+        line and move into the scroll region so the reply renders above
+        (previously the echoed input lingered on the fixed line)."""
+        if not self._enabled:
+            return
+        self._move_to(self._rows - 1)
+        print("\033[2K", end="", file=self.out)
+        self._move_to(self._rows - 2)
+        print(file=self.out)
+
     def render_text(self) -> str:
         """The bar's text (no cursor control) — unit-testable."""
         parts = [f"branch:{self.branch}", f"Model: {self.model_name}"]

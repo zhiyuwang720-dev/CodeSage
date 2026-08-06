@@ -25,6 +25,7 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 GREEN = "\033[32m"
 GREY = "\033[90m"  # agent mid-run messages (tool calls/results/thinking)
+USER_BG = "\033[48;5;236m"  # user-message block background (visual grouping)
 
 USE_COLOR = sys.stdout.isatty()
 
@@ -79,7 +80,11 @@ def _render_user(message: SessionMessage, out: TextIO, transcript: bool) -> None
         return
     content = message.content
     if isinstance(content, str):
-        print(f"\n{_c('You:', CYAN)} {content}", file=out)
+        # real user speech: a background-tinted block (each line self-
+        # contained so the color never leaks across lines)
+        lines = content.splitlines() or [""]
+        body = "\n".join(f"{USER_BG}{ln}{RESET}" for ln in lines)
+        print(f"\n{_c('You:', CYAN)} {body}", file=out)
         return
     for block in content:
         if block.type == "tool_result":

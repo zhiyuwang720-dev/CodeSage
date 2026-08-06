@@ -100,3 +100,30 @@ def test_truncated_output_shows_hint():
     assert "output truncated" in out
     # normal replies carry no hint
     assert "output truncated" not in _render(assistant_message("full answer"))
+
+
+def test_user_message_rendered_as_colored_block(monkeypatch):
+    """Real user input renders as a background-tinted block (visual
+    grouping); multi-line content keeps the tint per line."""
+    monkeypatch.setattr("codesage.cli.render.USE_COLOR", True)
+    from codesage.core import user_message
+
+    out = _render(user_message("first line\nsecond line"))
+    assert "\033[48;5;236mfirst line\033[0m" in out
+    assert "\033[48;5;236msecond line\033[0m" in out
+    assert "You:" in out
+
+
+def test_tool_result_carrier_not_tinted(monkeypatch):
+    """tool_result carriers are agent mid-run artifacts, not user speech —
+    they keep the grey styling instead of the user block tint."""
+    monkeypatch.setattr("codesage.cli.render.USE_COLOR", True)
+    from codesage.ai import ContentBlock
+    from codesage.core import user_message
+
+    msg = user_message(
+        [ContentBlock(type="tool_result", tool_use_id="t1", content="out", is_error=False)]
+    )
+    out = _render(msg)
+    assert "\033[48;5;236m" not in out
+    assert "\033[90m" in out  # grey mid-run styling
