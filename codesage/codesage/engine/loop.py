@@ -157,12 +157,28 @@ class AgentLoop:
                 turn += 1
 
                 # PI-05 checkpoint: auto-compaction, after abort/budget/turns
-                # (specs/08 §3.5). The summary request does not count as a turn.
+                # (specs/08 §3.5). Pipeline order follows CC query.ts:379-468 —
+                # the cheap local level (microcompact: old tool results →
+                # placeholder) runs BEFORE the LLM level, and the threshold
+                # check estimates the CLEANED view: a cleanup that frees
+                # enough tokens makes the summary call unnecessary (auto-
+                # compact is the last resort). The summary request does not
+                # count as a turn.
                 if self.compaction is not None and self.compaction.enabled and turn != self._last_compact_turn:
-                    estimate = estimate_context_tokens(messages)
+                    # Estimative cleanup only — deliberately do NOT touch
+                    # _last_result_clean: that gate is shared with _ask_model's
+                    # request-view projection, and consuming the stale trigger
+                    # here would leave the actual request un-cleaned (review:
+                    # the checkpoint must not eat the other site's gate).
+                    cleaned, _ = clean_old_tool_results(
+                        messages, now=time.time(), last_clean=self._last_result_clean
+                    )
+                    # clean_old_tool_results returns `messages` itself when
+                    # nothing was cleared — safe to estimate unconditionally
+                    estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
                         self._last_compact_turn = turn  # debounce: no second pass this turn
-                        compacted = await self._compact(messages)
+                        compacted = await self._compact(messages)  # RAW span: summary keeps full detail
                         if compacted is not None:
                             summary_msg, cut = compacted
                             yield summary_msg

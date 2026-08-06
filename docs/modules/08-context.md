@@ -18,7 +18,9 @@
 
 ### 1. 三层裁剪:五级 → 三级
 
-Claude Code 五级压缩(预算 → snip → micro → collapse → auto)裁成三级:**工具结果预算(请求视图清理)→ 旧结果清理 → auto-compact**。理由见规格 §1:我们上下文规模小、模型窗口大(128K/200K),为服务端缓存设计的 L4 Context Collapse 收益不抵复杂度;L2/L3 合并为旧 tool_result 清理一步。**不做 cache_edits / API 端 context management**(Anthropic beta,DeepSeek 无对应)——只做「客户端不主动破坏前缀」的被动配合。
+Claude Code 五级压缩(预算 → snip → micro → collapse → auto)裁成两级:**microcompact(旧结果占位)→ auto-compact**。理由见规格 §1:我们上下文规模小、模型窗口大(128K/200K),为服务端缓存设计的 L4 Context Collapse 收益不抵复杂度;L1 大结果落盘未做(工具层已截断,Bash 30K/Grep MAX_RESULTS,无跨轮恢复需求);L2 snip 为 feature-gated,合并进旧 tool_result 清理一步。**不做 cache_edits / API 端 context management**(Anthropic beta,DeepSeek 无对应)——只做「客户端不主动破坏前缀」的被动配合。
+
+**顺序是硬约束,不是巧合**:两级在 turn 顶部检查点按 CC query.ts:379-468 的顺序执行——microcompact 先跑,阈值估算用**清理后的视图**;清理释放足够 token 时 auto-compact 根本不触发(LLM 摘要是最后手段)。摘要生成仍对 **RAW 消息**(非清理视图)进行,保真不损;阈值估算不做 freed 修正,与 CC 一致(CC 只对 snip 做 snipTokensFreed 修正,usage 锚点看不到清理节省,倾向更早压缩,方向安全)。
 
 ### 2. system-reminder 注入:静态 system + 前置 reminder
 
@@ -55,7 +57,7 @@ S4 把 context 从 system prompt 里拆出来(每轮重建 → 会话一次):
 
 ### 8. 旧结果清理:请求视图投影
 
->60 条或距上次清理 30 分钟时,把白名单(Read/Bash/Grep/Glob)旧 tool_result 替换为占位符,保留最近 20 条。**只改请求视图,不动会话日志**——等价 CC microcompact 时间路径,不做 cache_edits 热路径。独立于压缩:压缩关闭时消息只增长,清理最有用。
+>60 条或距上次清理 30 分钟时,把白名单(Read/Bash/Grep/Glob)旧 tool_result 替换为占位符,保留最近 20 条。**只改请求视图,不动会话日志**——等价 CC microcompact 时间路径,不做 cache_edits 热路径。运行两处:turn 顶部检查点在 autocompact 决策**之前**(CC 注释 "Apply microcompact before autocompact",清理后估算决定是否值得烧一次 LLM 摘要);请求组装时再投影一次(压缩关闭时消息只增长,清理最有用)。
 
 ## 风险边界(规格 §5 落地情况)
 
