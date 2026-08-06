@@ -819,7 +819,10 @@ async def test_compact_summarizes_raw_span_not_cleaned_view():
 # ---- PI-05 §3.8: reactive compaction on Prompt-Too-Long ----
 
 def _ptl_stream(i):
-    raise LLMError("HTTP 400: context_length_exceeded", status_code=400)
+    # PRODUCTION shape: adapters surface HTTP >= 400 as a streamed error
+    # event, never a raise; _ask_model converts it to the exception shape
+    # (review C1 — a raise-mode-only test would never see the real path)
+    return [StreamEvent(type="error", error="HTTP 400: context_length_exceeded")]
 
 
 async def test_ptl_forces_compact_and_retries():
@@ -947,10 +950,17 @@ async def test_prefetch_injected_next_turn():
     loop = _loop(llm, prefetch=prefetch)
     await _collect(loop)
     assert seen  # the callback received the message history
-    first = llm.last_messages[0].content  # turn 2's request view
-    assert "# memory\nremember this fact" in first
-    assert "# skills\nskill list" in first
-    assert first.startswith("<system-reminder>") and first.endswith("</system-reminder>")
+    # appended at the END of the history (before normalize): appending never
+    # breaks the server prefix cache — a leading reminder would (review O1)
+    texts = [
+        b.text or ""
+        for m in llm.last_messages
+        if isinstance(m.content, list)
+        for b in m.content
+        if b.type == "text"
+    ]
+    assert any("# memory\nremember this fact" in t for t in texts)
+    assert any("# skills\nskill list" in t for t in texts)
 
 
 async def test_prefetch_sections_capped(monkeypatch):
@@ -968,8 +978,14 @@ async def test_prefetch_sections_capped(monkeypatch):
     )
     loop = _loop(llm, prefetch=prefetch)
     await _collect(loop)
-    content = llm.last_messages[0].content  # turn 2's request view
-    assert content.count("# sec-") == MAX_REMINDER_SECTIONS
+    texts = [
+        b.text or ""
+        for m in llm.last_messages
+        if isinstance(m.content, list)
+        for b in m.content
+        if b.type == "text"
+    ]
+    assert any(t.count("# sec-") == MAX_REMINDER_SECTIONS for t in texts)
 
 
 async def test_prefetch_timeout_does_not_block(monkeypatch):
@@ -1011,3 +1027,46 @@ async def test_prefetch_callback_failure_swallowed():
     messages = await _collect(loop)
     assert messages[-1].content[0].text == "answer"
     assert llm.last_messages[0].content == "hi"  # plain user message, no reminder
+
+
+async def test_prefetch_completing_during_stream_survives_to_next_turn():
+    """A prefetch that finishes mid-stream of turn N+1 must survive to turn
+    N+2 — previously _start_prefetch rebinding dropped the completed result
+    (review R2: done-but-unconsumed tasks are kept)."""
+    seen_requests = []
+    gate = asyncio.Event()
+
+    class RecordingLLM(FakeLLM):
+        def stream(self, request, model="main"):
+            if self.calls == 1:  # turn 2: release the prefetch mid-stream
+                gate.set()
+            return super().stream(request, model)
+
+        async def _gen(self):
+            seen_requests.append(list(self.last_messages))
+            async for ev in super()._gen():
+                yield ev
+
+    async def slow(messages):
+        await gate.wait()  # completes during turn 2's streaming
+        return [("memory", "found it")]
+
+    llm = RecordingLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t2", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t3", '{"text": "x"}'),
+            lambda i: text_event("final"),
+        ]
+    )
+    loop = _loop(llm, prefetch=slow)
+    await _collect(loop)
+    # turn 3's request (index 2) carries the turn-1-launched result
+    texts = [
+        b.text or ""
+        for m in seen_requests[2]
+        if isinstance(m.content, list)
+        for b in m.content
+        if b.type == "text"
+    ]
+    assert any("# memory\nfound it" in t for t in texts)

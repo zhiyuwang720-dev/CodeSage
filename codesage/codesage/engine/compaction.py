@@ -229,11 +229,16 @@ def _summary_prompt(conversation: str, previous_summary: str | None) -> str:
 def _drop_oldest_turn(messages: list[SessionMessage]) -> list[SessionMessage] | None:
     """Trim the oldest full turn for a PTL retry (specs/08 §3.8): everything
     up to the second real user input is dropped. None when fewer than two
-    user turns exist (nothing meaningful to drop — propagate instead)."""
+    user turns exist (nothing meaningful to drop — propagate instead).
+
+    Compaction summaries are not turns (same rule as _turn_start): in a
+    multi-compaction session the span starts with a summary, and counting
+    it as a user input would make the "retry" drop only the summary —
+    the input barely shrinks and the second PTL fails (review R1)."""
     users = [
         i
         for i, msg in enumerate(messages)
-        if msg.role == "user" and not _is_tool_result_carrier(msg)
+        if msg.role == "user" and not _is_tool_result_carrier(msg) and not msg.is_compaction_summary
     ]
     if len(users) < 2:
         return None

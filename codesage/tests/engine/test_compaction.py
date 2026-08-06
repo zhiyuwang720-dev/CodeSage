@@ -427,3 +427,35 @@ def test_extract_file_ops_skips_denied_and_failed_calls(tmp_path):
     assert ops.modified == ["ok.py"]
     reminder = recovery_reminder_text(ops, tmp_path)
     assert reminder is not None and "private" not in reminder
+
+
+# ---- §3.8 PTL head-trim (review R1) ----
+
+def test_drop_oldest_turn_skips_summary_and_keeps_real_turns():
+    """A compaction summary at the span head is not a user turn: the trim
+    must drop a REAL oldest turn, not just the summary (multi-compaction
+    sessions — the retry input actually shrinks)."""
+    from codesage.engine.compaction import _drop_oldest_turn, summary_message
+
+    span = [
+        summary_message("previous summary"),
+        user_message("q1"),
+        assistant_message("a1"),
+        user_message("q2"),
+        assistant_message("a2"),
+        user_message("q3"),
+        assistant_message("a3"),
+    ]
+    trimmed = _drop_oldest_turn(span)
+    assert trimmed is not None
+    assert all(m.content != "q1" for m in trimmed)  # real oldest turn dropped
+    assert any(m.content == "q2" for m in trimmed)  # next turn kept
+    assert trimmed[0].content == "q2"
+
+
+def test_drop_oldest_turn_none_with_single_real_turn():
+    """Fewer than two real user turns: nothing to trim — propagate instead."""
+    from codesage.engine.compaction import _drop_oldest_turn, summary_message
+
+    span = [summary_message("s"), user_message("q1"), assistant_message("a1")]
+    assert _drop_oldest_turn(span) is None  # summary alone is not a turn

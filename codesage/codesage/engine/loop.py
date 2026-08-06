@@ -22,7 +22,7 @@ from typing import Any
 logger = logging.getLogger("codesage.engine")
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
-from ..ai.retry import is_ptl_error
+from ..ai.retry import is_ptl_error, is_ptl_text
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
@@ -348,6 +348,14 @@ class AgentLoop:
         if did:
             self._last_result_clean = now
             messages = cleaned
+        if prefetch_sections:
+            # §3.10: appended to the END of the history (before normalize) —
+            # appending never changes the existing prefix bytes, so the
+            # server prefix cache stays intact (review O1: a leading
+            # per-turn-changing reminder would break it and make the §3.9
+            # detector lie); normalize merges adjacent user messages, so the
+            # alternation contract holds. Request view only, never persisted.
+            messages = [*messages, user_message(_render_prefetch(prefetch_sections))]
         api_messages = normalize_for_api(messages)
         prefix: list[Message] = []
         if self.context_bundle is not None:
@@ -356,8 +364,6 @@ class AgentLoop:
             # prefix caching (specs/08 §3.4); the reminder is request-only,
             # it never enters the session log
             prefix.append(_render_reminder(self.context_bundle))
-        if prefetch_sections:
-            prefix.append(_render_prefetch(prefetch_sections))
         if self._recovery_reminder is not None:
             # §3.6 restore: recently modified files, injected once right
             # after the compaction that produced them
@@ -390,6 +396,11 @@ class AgentLoop:
         response = await LLMClient.collect(stream)
         if self.abort.is_set():
             return None
+        if response.is_error and response.error_message and is_ptl_text(response.error_message):
+            # adapters surface PTL as a streamed error event, not a raise —
+            # convert to the exception shape so the reactive-compaction
+            # branch (and its retry-once semantics) engages (review C1)
+            raise LLMError(response.error_message, status_code=400)
         # §3.10: kick the prefetch for the NEXT turn before returning — the
         # model's thinking time hides the disk search latency
         self._start_prefetch(messages)
@@ -413,16 +424,19 @@ class AgentLoop:
         )
 
     def _start_prefetch(self, messages: list[SessionMessage]) -> None:
-        """Launch the prefetch callback (bounded by PREFETCH_TIMEOUT_S) unless
-        one is already in flight — a slow search never starts a second."""
-        if self.prefetch is None:
-            return
-        if self._prefetch_task is not None and not self._prefetch_task.done():
+        """Launch the prefetch callback (bounded by PREFETCH_TIMEOUT_S) only
+        when no task is outstanding — a search that finished mid-stream but
+        was not yet consumed must survive into the next turn, not be
+        replaced by a fresh one (review R2: done-but-unconsumed is kept)."""
+        if self.prefetch is None or self._prefetch_task is not None:
             return
 
         async def _bounded():
             try:
-                return await asyncio.wait_for(self.prefetch(messages), timeout=PREFETCH_TIMEOUT_S)
+                return await asyncio.wait_for(
+                    self.prefetch(list(messages)),  # snapshot: the live list grows
+                    timeout=PREFETCH_TIMEOUT_S,
+                )
             except Exception:  # timeout or callback failure: no sections
                 return None
 
@@ -435,6 +449,8 @@ class AgentLoop:
         if task is None or not task.done():
             return None
         self._prefetch_task = None
+        if task.cancelled():
+            return None
         try:
             sections = task.result()
         except Exception:
@@ -528,14 +544,14 @@ class AgentLoop:
             self.session.append(message)
 
 
-def _render_prefetch(sections: list[tuple[str, str]]) -> Message:
-    """§3.10 prefetch sections as one system-reminder user message (same
-    channel as the context bundle, capped at MAX_REMINDER_SECTIONS)."""
+def _render_prefetch(sections: list[tuple[str, str]]) -> str:
+    """§3.10 prefetch sections as one system-reminder text block (same channel
+    as the context bundle, capped at MAX_REMINDER_SECTIONS)."""
     parts = [REMINDER_HEADER]
     for title, text in sections:
         parts.append(f"# {title}\n{text}\n")
     parts.append(REMINDER_FOOTER)
-    return Message(role="user", content="".join(parts))
+    return "".join(parts)
 
 
 def _render_reminder(bundle: ContextBundle) -> Message:
