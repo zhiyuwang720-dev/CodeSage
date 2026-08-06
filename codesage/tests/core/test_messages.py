@@ -46,3 +46,11 @@ def test_to_ai_message():
 def test_is_meta_flag_roundtrip():
     m = assistant_message("notice", is_meta=True)
     assert SessionMessage.from_dict(m.to_dict()).is_meta
+
+
+def test_phase08_flags_roundtrip():
+    m = user_message("<system-reminder>ctx</system-reminder>", is_reminder=True)
+    restored = SessionMessage.from_dict(m.to_dict())
+    assert restored.is_reminder and not restored.is_compaction_summary
+    s = user_message("summary", is_compaction_summary=True)
+    assert SessionMessage.from_dict(s.to_dict()).is_compaction_summary

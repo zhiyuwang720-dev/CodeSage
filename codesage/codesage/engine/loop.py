@@ -13,22 +13,45 @@ or abort (three checkpoints: loop top, after LLM call, tool batch).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, StreamEvent
+from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
-from .system_prompt import build_system_prompt
+from .compaction import (
+    CompactionConfig,
+    CutPoint,
+    FileOps,
+    clean_old_tool_results,
+    extract_file_ops,
+    find_cut_point,
+    find_previous_summary,
+    generate_summary,
+    recovery_reminder_text,
+    summary_message,
+)
+from .context import ContextBundle
+from .tokens import estimate_context_tokens, should_compact
 from .tool_queue import ScheduledTool, ToolUseQueue
 
 #: Synthesized messages (is_meta — filtered by normalize_for_api).
 INTERRUPT_TEXT = "(interrupted by user)"
 MAX_TURNS_TEXT = "Stopped: maximum turn count reached."
 MAX_BUDGET_TEXT = "Stopped: maximum budget reached."
+#: system-reminder section cap (todo.md acceptance: system-reminder 上限 10).
+MAX_REMINDER_SECTIONS = 10
+
+#: system-reminder wrapper (Claude Code prependUserContext shape).
+REMINDER_HEADER = (
+    "<system-reminder>\n"
+    "As you answer the user's questions, you can use the following context:\n"
+)
+REMINDER_FOOTER = "\n\nIMPORTANT: this context may or may not be relevant to your tasks.\n</system-reminder>"
 #: Injected when the model replies with only internal reasoning (bounded retries).
 THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
 THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
@@ -55,7 +78,8 @@ class AgentLoop:
         permissions: PermissionEngine | None = None,
         request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
         system_prompt: str = "",
-        context: dict[str, str] | None = None,
+        context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
+        compaction: CompactionConfig | None = None,  # PI-05 auto-compact (S6; None disables)
         model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
         max_turns: int = 100,
@@ -75,7 +99,15 @@ class AgentLoop:
         self.permissions = permissions or PermissionEngine()
         self.request_permission = request_permission
         self.system_prompt = system_prompt
-        self.context = context
+        self.context_bundle = context_bundle
+        self.compaction = compaction
+        self._last_compact_turn = -1  # debounce: one compaction per turn
+        self._compact_failures = 0  # consecutive failures → breaker
+        # §3.6: one-shot reminder with recently modified files, injected into
+        # the request right after a compaction (never persisted)
+        self._recovery_reminder: str | None = None
+        # §3.7: last time the request view cleared old tool results
+        self._last_result_clean = time.time()
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -123,6 +155,18 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 turn += 1
+
+                # PI-05 checkpoint: auto-compaction, after abort/budget/turns
+                # (specs/08 §3.5). The summary request does not count as a turn.
+                if self.compaction is not None and self.compaction.enabled and turn != self._last_compact_turn:
+                    estimate = estimate_context_tokens(messages)
+                    if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
+                        self._last_compact_turn = turn  # debounce: no second pass this turn
+                        compacted = await self._compact(messages)
+                        if compacted is not None:
+                            summary_msg, cut = compacted
+                            yield summary_msg
+                            messages = [summary_msg, *messages[cut.index :]]
 
                 # PI-06: drain mid-run steer inputs into the conversation
                 # (they become user messages for the next LLM call)
@@ -206,10 +250,72 @@ class AgentLoop:
 
     # ---- internals ----
 
+    async def _compact(self, messages: list[SessionMessage]) -> tuple[SessionMessage, CutPoint] | None:
+        """Summarize the history span and persist the summary (append-only).
+
+        Returns (summary_message, cut) on success, None when there is nothing
+        to compress or the request failed. Two consecutive failures trip the
+        breaker (specs/08 §3.5): the feature disables itself instead of
+        burning a summary call every turn.
+        """
+        cut = find_cut_point(messages, keep_recent=self.compaction.keep_recent)
+        if cut is None:
+            return None  # not a success — the failure streak stays intact (breaker)
+        compressed = messages[: cut.index]
+        prev_summary = find_previous_summary(compressed)
+        try:
+            summary = await generate_summary(
+                self.client, messages, cut=cut, previous_summary=prev_summary
+            )
+        except LLMError:
+            self._compact_failures += 1
+            if self._compact_failures >= 2:
+                self.compaction.enabled = False  # breaker (specs/08 §3.5)
+            return None
+        self._compact_failures = 0
+        # fileOps merge across rounds (§3.6): previous summary's lists + what
+        # this compressed span touched; appended to the summary tail so the
+        # info survives --continue replays
+        ops: FileOps = FileOps.parse(prev_summary).merged_with(extract_file_ops(compressed))
+        summary_msg = summary_message(ops.append_to(summary))
+        self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
+        await self._persist(summary_msg)  # append-only: compaction appends one summary
+        return summary_msg, cut
+
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+        # §3.7 projection: old tool results cleared in the request view only —
+        # the session log stays append-only (specs/08 §3.7). Independent of
+        # compaction: it is most useful when compaction is off (messages only grow).
+        now = time.time()
+        cleaned, did = clean_old_tool_results(
+            messages, now=now, last_clean=self._last_result_clean
+        )
+        if did:
+            self._last_result_clean = now
+            messages = cleaned
+        api_messages = normalize_for_api(messages)
+        prefix: list[Message] = []
+        if self.context_bundle is not None:
+            # context rides as a hoisted system-reminder user message, never
+            # in `system` — the system prefix stays byte-stable for server
+            # prefix caching (specs/08 §3.4); the reminder is request-only,
+            # it never enters the session log
+            prefix.append(_render_reminder(self.context_bundle))
+        if self._recovery_reminder is not None:
+            # §3.6 restore: recently modified files, injected once right
+            # after the compaction that produced them
+            prefix.append(
+                Message(
+                    role="user",
+                    content=f"{REMINDER_HEADER}{self._recovery_reminder}{REMINDER_FOOTER}",
+                )
+            )
+            self._recovery_reminder = None
+        if prefix:
+            api_messages = [*prefix, *api_messages]
         request = LLMRequest(
-            messages=normalize_for_api(messages),
-            system=build_system_prompt(self.system_prompt, self.context),
+            messages=api_messages,
+            system=self.system_prompt,
             tools=self.tools.specs(),
         )
         stream = self.client.stream(request, model=self.model)
@@ -318,6 +424,33 @@ class AgentLoop:
     async def _persist(self, message: SessionMessage) -> None:
         if self.session is not None:
             self.session.append(message)
+
+
+def _render_reminder(bundle: ContextBundle) -> Message:
+    """Render the context bundle as one system-reminder user message.
+
+    A plain ai.Message: it is already hoisted at the front, so it does not
+    need the normalize_for_api reminder pass (and must not be a
+    SessionMessage — LLMRequest.messages is list[Message]). Session history
+    never carries is_reminder messages, so normalize_for_api sees none.
+
+    Section budget: date/git always stay; AGENTS.md sections (far → near in
+    the bundle) keep the NEAREST ones within the cap — the recency-priority
+    files must not be the ones dropped at the 10-section limit.
+    """
+    fixed = [s for s in bundle.sections if s[0] != "agentsMd"]
+    agents = [s for s in bundle.sections if s[0] == "agentsMd"]
+    if len(fixed) >= MAX_REMINDER_SECTIONS:
+        fixed = fixed[:MAX_REMINDER_SECTIONS]
+        agents = []
+    else:
+        agents = agents[-(MAX_REMINDER_SECTIONS - len(fixed)) :]
+    parts = [REMINDER_HEADER]
+    for title, text in fixed + agents:
+        # trailing newline: the next "# title" must not glue onto this text
+        parts.append(f"# {title}\n{text}\n")
+    parts.append(REMINDER_FOOTER)
+    return Message(role="user", content="".join(parts))
 
 
 class _MissingTool:

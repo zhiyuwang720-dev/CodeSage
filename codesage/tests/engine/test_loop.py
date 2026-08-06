@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from codesage.ai import ContentBlock, StreamEvent
+from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent
 from codesage.core import Session, assistant_message, user_message
-from codesage.engine import AgentLoop
+from codesage.engine import AgentLoop, CompactionConfig
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 
@@ -14,16 +14,25 @@ from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 class FakeLLM:
     """Returns a scripted sequence of events; asserts nothing about the input."""
 
-    def __init__(self, script):
+    def __init__(self, script, summary_text="compacted summary", summary_error=None):
         # script: list of callables returning a list[StreamEvent]
         self.script = script
         self.calls = 0
         self.total_cost = [0.0]
         self.last_messages = None
+        self.summary_text = summary_text
+        self.summary_error = summary_error  # compaction path: raise instead of answering
+        self.complete_calls = []  # [(model, LLMRequest)] — the compaction path
 
     def stream(self, request, model="main"):
         self.last_messages = request.messages
         return self._gen()
+
+    async def complete(self, request, model="main"):
+        self.complete_calls.append((model, request))
+        if self.summary_error is not None:
+            raise self.summary_error
+        return LLMResponse(content=[ContentBlock(type="text", text=self.summary_text)])
 
     async def _gen(self):
         events = self.script[min(self.calls, len(self.script) - 1)](self.calls)
@@ -470,3 +479,253 @@ async def test_finalize_hook_rewrites_results():
     loop = _loop(llm, finalize=finalize)
     messages = await _collect(loop)
     assert messages[2].content[0].content == "rewritten:echo:x"
+
+
+# ---- phase 08 S4: context bundle → hoisted system-reminder ----
+
+def _bundle():
+    from codesage.engine import ContextBundle
+
+    return ContextBundle(
+        sections=[("currentDate", "Today's date is 2026-08-06."), ("agentsMd", "project rules")]
+    )
+
+
+async def test_context_bundle_hoisted_as_reminder_first():
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle())
+    await _collect(loop, "hi")
+    first = llm.last_messages[0]
+    assert first.role == "user"
+    assert first.content.startswith("<system-reminder>")
+    assert "# currentDate\nToday's date is 2026-08-06." in first.content
+    assert "# agentsMd\nproject rules" in first.content
+    assert "IMPORTANT: this context may or may not be relevant" in first.content
+    assert llm.last_messages[1].content == "hi"  # the real prompt follows the reminder
+
+
+async def test_no_bundle_no_reminder():
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm)
+    await _collect(loop, "hi")
+    assert llm.last_messages[0].content == "hi"
+
+
+async def test_reminder_never_persisted(tmp_path):
+    session = Session("s4-test", tmp_path)
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle(), session=session)
+    out = await _collect(loop, "hi")
+    assert not any(m.is_reminder for m in out)
+    assert not any(m.is_reminder for m in session.load())
+
+
+async def test_reminder_sections_capped_at_ten():
+    from codesage.engine import ContextBundle
+
+    llm = FakeLLM([lambda i: text_event("ok")])
+    many = [(f"sec{i}", f"content {i}") for i in range(15)]
+    loop = _loop(llm, context_bundle=ContextBundle(sections=many))
+    await _collect(loop)
+    assert "# sec9" in llm.last_messages[0].content
+    assert "# sec10" not in llm.last_messages[0].content  # capped at 10
+
+
+async def test_reminder_section_titles_not_glued(tmp_path):
+    """Each '# title' starts on its own line (text payloads end with \n)."""
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle())
+    await _collect(loop)
+    content = llm.last_messages[0].content
+    assert "\n# currentDate" in content
+    assert "2026-08-06.\n# agentsMd" in content
+    assert "# agentsMd\nproject rules\n" in content
+
+
+async def test_reminder_agents_sections_keep_nearest():
+    """At the 10-section cap, the NEAREST AGENTS.md survive, far ones drop."""
+    from codesage.engine import ContextBundle
+
+    llm = FakeLLM([lambda i: text_event("ok")])
+    sections = [("currentDate", "d"), ("gitStatus", "g")]
+    for i in range(12):
+        sections.append(("agentsMd", f"rules-{i}"))  # 0 is farthest, 11 nearest
+    loop = _loop(llm, context_bundle=ContextBundle(sections=sections))
+    await _collect(loop)
+    content = llm.last_messages[0].content
+    assert "# agentsMd\nrules-11\n" in content  # nearest kept
+    assert "rules-0" not in content  # farthest dropped
+    assert "rules-8" in content  # 2 fixed + 8 agents = 10 total
+    assert content.count("# agentsMd\n") == 8
+
+
+# ---- PI-05: auto-compaction (S6) ----
+
+def _big_history(n=6, size=400):
+    return [user_message(f"hist-{i} " + "x" * size) for i in range(n)]
+
+
+def _tiny_compaction():
+    # window/reserve/keep_recent small so ordinary test messages overflow it
+    return CompactionConfig(window=100, reserve=10, keep_recent=200)
+
+
+async def test_compact_triggers_when_over_threshold():
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert len(llm.complete_calls) == 1
+    model, request = llm.complete_calls[0]
+    assert model == "compact"
+    assert any(m.is_compaction_summary for m in messages)  # summary yielded to the stream
+    # the next model request starts with the summary, not the old history
+    assert llm.last_messages[0].content == "compacted"
+
+
+async def test_compact_debounce_holds_on_same_turn_retry():
+    """The thinking-only retry re-enters the turn-top checkpoint on the SAME
+    turn number — the debounce (last_compact_turn) must block a second
+    compaction even though the context is still over the threshold."""
+    llm = FakeLLM(
+        [lambda i: thinking_only_event(), lambda i: text_event("final")],
+        summary_text="s",
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert len(llm.complete_calls) == 1  # compacted once, not again on re-entry
+    assert messages[-1].content[0].text == "final"
+
+
+async def test_compact_breaker_after_two_failures():
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("final"),
+        ],
+        summary_error=LLMError("summary boom"),
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert len(llm.complete_calls) == 2  # two consecutive failures trip the breaker
+    assert loop.compaction.enabled is False
+    assert loop.last_stop_reason == "completed"  # the loop itself keeps running
+
+
+async def test_compact_persists_summary_message(tmp_path):
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    # append-only: the summary landed in the session file, history untouched
+    lines = (tmp_path / "s1.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"is_compaction_summary": true' in ln for ln in lines)
+    assert len(session.load()) == 3  # user + summary + assistant
+
+
+async def test_compact_resume_replay(tmp_path):
+    """--continue replays the persisted summary as the conversation start."""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    # replay: fresh loop seeded with the persisted messages; the summary
+    # survives the roundtrip and stays unmerged (specs/08 §3.1) — the old
+    # session history sits before it, the new input after
+    resumed = _loop(FakeLLM([lambda i: text_event("resumed")]), history=session.load())
+    await _collect(resumed, user_input="continue")
+    assert resumed.client.last_messages[1].content == "compacted"
+
+
+# ---- PI-05 §3.6/§3.7: recovery reminder + old-result cleanup (S7) ----
+
+def _edit_history(tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("file content v1", encoding="utf-8")
+    return [
+        user_message("edit x.txt"),
+        assistant_message(
+            [ContentBlock(type="tool_use", id="e1", name="Edit", input={"file_path": "x.txt"})]
+        ),
+        user_message([ContentBlock(type="tool_result", tool_use_id="e1", content="edited", is_error=False)]),
+        assistant_message("edited x.txt"),
+        user_message("long filler " + "x" * 500),
+    ]
+
+
+async def test_compact_injects_recovery_reminder(tmp_path):
+    """After compaction the next request carries the modified file's content."""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(
+        llm,
+        cwd=tmp_path,
+        history=_edit_history(tmp_path),
+        compaction=CompactionConfig(window=100, reserve=10, keep_recent=20),
+    )
+    await _collect(loop)
+    assert llm.complete_calls  # compaction happened
+    reminder = llm.last_messages[0].content
+    assert "Recently modified files:" in reminder
+    assert "# x.txt" in reminder
+    assert "file content v1" in reminder
+
+
+async def test_recovery_reminder_injected_once():
+    """The recovery reminder is one-shot: only the request right after
+    compaction carries it, later turns do not."""
+    seen = []
+
+    class RecordingLLM(FakeLLM):
+        async def _gen(self):
+            seen.append(self.last_messages)
+            async for ev in super()._gen():
+                yield ev
+
+    llm = RecordingLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("final"),
+        ],
+        summary_text="s",
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert "Recently modified files:" not in (seen[-1][0].content or "")  # second turn: gone
+
+
+async def test_cleanup_is_request_view_only(tmp_path):
+    """Old tool results are cleared in the request view; the session log
+    keeps the full payload (append-only invariant, specs/08 §3.7)."""
+    session = Session("s1", tmp_path)
+    history = []
+    for i in range(25):  # 75 messages > 60 threshold; Read is whitelisted
+        history += [
+            user_message(f"q{i}"),
+            assistant_message(
+                [ContentBlock(type="tool_use", id=f"e{i}", name="Read", input={"file_path": f"f{i}.py"})]
+            ),
+            user_message([ContentBlock(type="tool_result", tool_use_id=f"e{i}", content=f"out:{i}")]),
+        ]
+    for m in history:
+        session.append(m)  # the log already holds the full payloads
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(
+        llm, history=history, compaction=CompactionConfig(enabled=False), session=session
+    )
+    await _collect(loop)
+    # request view carries the placeholder for the oldest results
+    from codesage.engine.compaction import OLD_RESULT_PLACEHOLDER
+
+    placeholders = [
+        block.content
+        for msg in llm.last_messages
+        if isinstance(msg.content, list)
+        for block in msg.content
+        if block.type == "tool_result" and block.content == OLD_RESULT_PLACEHOLDER
+    ]
+    assert placeholders  # cleanup projection happened
+    # the session log still holds the original payloads
+    persisted = session.load()
+    assert any(
+        isinstance(m.content, list) and any(b.content == "out:0" for b in m.content)
+        for m in persisted
+    )
