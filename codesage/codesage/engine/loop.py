@@ -13,6 +13,7 @@ or abort (three checkpoints: loop top, after LLM call, tool batch).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,18 @@ from ..core import Session, SessionMessage, assistant_message, normalize_for_api
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
-from .compaction import CompactionConfig, CutPoint, find_cut_point, generate_summary, summary_message
+from .compaction import (
+    CompactionConfig,
+    CutPoint,
+    FileOps,
+    clean_old_tool_results,
+    extract_file_ops,
+    find_cut_point,
+    find_previous_summary,
+    generate_summary,
+    recovery_reminder_text,
+    summary_message,
+)
 from .context import ContextBundle
 from .tokens import estimate_context_tokens, should_compact
 from .tool_queue import ScheduledTool, ToolUseQueue
@@ -91,6 +103,11 @@ class AgentLoop:
         self.compaction = compaction
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
+        # §3.6: one-shot reminder with recently modified files, injected into
+        # the request right after a compaction (never persisted)
+        self._recovery_reminder: str | None = None
+        # §3.7: last time the request view cleared old tool results
+        self._last_result_clean = time.time()
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -244,26 +261,58 @@ class AgentLoop:
         cut = find_cut_point(messages, keep_recent=self.compaction.keep_recent)
         if cut is None:
             return None  # not a success — the failure streak stays intact (breaker)
+        compressed = messages[: cut.index]
+        prev_summary = find_previous_summary(compressed)
         try:
-            summary = await generate_summary(self.client, messages, cut=cut)
+            summary = await generate_summary(
+                self.client, messages, cut=cut, previous_summary=prev_summary
+            )
         except LLMError:
             self._compact_failures += 1
             if self._compact_failures >= 2:
                 self.compaction.enabled = False  # breaker (specs/08 §3.5)
             return None
         self._compact_failures = 0
-        summary_msg = summary_message(summary)
+        # fileOps merge across rounds (§3.6): previous summary's lists + what
+        # this compressed span touched; appended to the summary tail so the
+        # info survives --continue replays
+        ops: FileOps = FileOps.parse(prev_summary).merged_with(extract_file_ops(compressed))
+        summary_msg = summary_message(ops.append_to(summary))
+        self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
         await self._persist(summary_msg)  # append-only: compaction appends one summary
         return summary_msg, cut
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+        # §3.7 projection: old tool results cleared in the request view only —
+        # the session log stays append-only (specs/08 §3.7). Independent of
+        # compaction: it is most useful when compaction is off (messages only grow).
+        now = time.time()
+        cleaned, did = clean_old_tool_results(
+            messages, now=now, last_clean=self._last_result_clean
+        )
+        if did:
+            self._last_result_clean = now
+            messages = cleaned
         api_messages = normalize_for_api(messages)
+        prefix: list[Message] = []
         if self.context_bundle is not None:
             # context rides as a hoisted system-reminder user message, never
             # in `system` — the system prefix stays byte-stable for server
             # prefix caching (specs/08 §3.4); the reminder is request-only,
             # it never enters the session log
-            api_messages = [_render_reminder(self.context_bundle), *api_messages]
+            prefix.append(_render_reminder(self.context_bundle))
+        if self._recovery_reminder is not None:
+            # §3.6 restore: recently modified files, injected once right
+            # after the compaction that produced them
+            prefix.append(
+                Message(
+                    role="user",
+                    content=f"{REMINDER_HEADER}{self._recovery_reminder}{REMINDER_FOOTER}",
+                )
+            )
+            self._recovery_reminder = None
+        if prefix:
+            api_messages = [*prefix, *api_messages]
         request = LLMRequest(
             messages=api_messages,
             system=self.system_prompt,

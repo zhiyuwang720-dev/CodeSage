@@ -634,3 +634,98 @@ async def test_compact_resume_replay(tmp_path):
     resumed = _loop(FakeLLM([lambda i: text_event("resumed")]), history=session.load())
     await _collect(resumed, user_input="continue")
     assert resumed.client.last_messages[1].content == "compacted"
+
+
+# ---- PI-05 §3.6/§3.7: recovery reminder + old-result cleanup (S7) ----
+
+def _edit_history(tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("file content v1", encoding="utf-8")
+    return [
+        user_message("edit x.txt"),
+        assistant_message(
+            [ContentBlock(type="tool_use", id="e1", name="Edit", input={"file_path": "x.txt"})]
+        ),
+        user_message([ContentBlock(type="tool_result", tool_use_id="e1", content="edited", is_error=False)]),
+        assistant_message("edited x.txt"),
+        user_message("long filler " + "x" * 500),
+    ]
+
+
+async def test_compact_injects_recovery_reminder(tmp_path):
+    """After compaction the next request carries the modified file's content."""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(
+        llm,
+        cwd=tmp_path,
+        history=_edit_history(tmp_path),
+        compaction=CompactionConfig(window=100, reserve=10, keep_recent=20),
+    )
+    await _collect(loop)
+    assert llm.complete_calls  # compaction happened
+    reminder = llm.last_messages[0].content
+    assert "Recently modified files:" in reminder
+    assert "# x.txt" in reminder
+    assert "file content v1" in reminder
+
+
+async def test_recovery_reminder_injected_once():
+    """The recovery reminder is one-shot: only the request right after
+    compaction carries it, later turns do not."""
+    seen = []
+
+    class RecordingLLM(FakeLLM):
+        async def _gen(self):
+            seen.append(self.last_messages)
+            async for ev in super()._gen():
+                yield ev
+
+    llm = RecordingLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("final"),
+        ],
+        summary_text="s",
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert "Recently modified files:" not in (seen[-1][0].content or "")  # second turn: gone
+
+
+async def test_cleanup_is_request_view_only(tmp_path):
+    """Old tool results are cleared in the request view; the session log
+    keeps the full payload (append-only invariant, specs/08 §3.7)."""
+    session = Session("s1", tmp_path)
+    history = []
+    for i in range(25):  # 75 messages > 60 threshold; Read is whitelisted
+        history += [
+            user_message(f"q{i}"),
+            assistant_message(
+                [ContentBlock(type="tool_use", id=f"e{i}", name="Read", input={"file_path": f"f{i}.py"})]
+            ),
+            user_message([ContentBlock(type="tool_result", tool_use_id=f"e{i}", content=f"out:{i}")]),
+        ]
+    for m in history:
+        session.append(m)  # the log already holds the full payloads
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(
+        llm, history=history, compaction=CompactionConfig(enabled=False), session=session
+    )
+    await _collect(loop)
+    # request view carries the placeholder for the oldest results
+    from codesage.engine.compaction import OLD_RESULT_PLACEHOLDER
+
+    placeholders = [
+        block.content
+        for msg in llm.last_messages
+        if isinstance(msg.content, list)
+        for block in msg.content
+        if block.type == "tool_result" and block.content == OLD_RESULT_PLACEHOLDER
+    ]
+    assert placeholders  # cleanup projection happened
+    # the session log still holds the original payloads
+    persisted = session.load()
+    assert any(
+        isinstance(m.content, list) and any(b.content == "out:0" for b in m.content)
+        for m in persisted
+    )

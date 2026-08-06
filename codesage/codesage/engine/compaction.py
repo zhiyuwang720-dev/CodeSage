@@ -16,7 +16,9 @@ response to something.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message
 from ..core import SessionMessage, user_message
@@ -30,6 +32,26 @@ MAX_SERIALIZED_TOOL_CHARS = 2_000
 SUMMARY_MAX_TOKENS_FRACTION = 0.8
 #: Model pointer for summary requests (auxiliary — auto-falls back to main).
 COMPACT_MODEL_POINTER = "compact"
+
+# ---- §3.6 fileOps restore ----
+#: File ops tracked across compaction rounds (pi fileOps).
+FILE_OPS_TOOLS = {"Read": "read", "Write": "modified", "Edit": "modified"}
+#: Most recent modified files re-injected after compaction (CC: 5 files).
+RECOVERY_MAX_FILES = 5
+#: Per-file content cap ≈5K tokens (4 chars/token).
+RECOVERY_MAX_CHARS_PER_FILE = 20_000
+
+# ---- §3.7 old tool result cleanup ----
+#: Cleanup fires when the message list exceeds this (CC microcompact count path).
+MAX_RESULTS_BEFORE_CLEAN = 60
+#: Newest results kept intact.
+MAX_RESULTS_KEPT = 20
+#: ...or when the last cleanup is older than this.
+CLEAN_INTERVAL_SECONDS = 30 * 60
+#: Replacement text for cleared results (specs/08 §3.7).
+OLD_RESULT_PLACEHOLDER = "[Old tool result content cleared — see session log]"
+#: Whitelist: only these tools' results may be cleared (specs/08 §3.7).
+CLEANABLE_TOOLS = frozenset({"Read", "Bash", "Grep", "Glob"})
 
 SUMMARIZATION_PROMPT = """Summarize the conversation in <conversation>...</conversation>. This summary replaces that conversation in the next model call, so it must be self-contained: someone reading only the summary must know what was requested, what was done, and what remains.
 
@@ -187,7 +209,7 @@ def serialize_conversation(messages: list[SessionMessage]) -> str:
 
 # ---- summary generation ----
 
-def _find_previous_summary(messages: list[SessionMessage]) -> str | None:
+def find_previous_summary(messages: list[SessionMessage]) -> str | None:
     """The last existing summary in the compressed span (UPDATE iteration)."""
     for msg in reversed(messages):
         if msg.is_compaction_summary and isinstance(msg.content, str):
@@ -240,7 +262,7 @@ async def generate_summary(
         return ""
     max_tokens = max_tokens or int(DEFAULT_RESERVE_TOKENS * SUMMARY_MAX_TOKENS_FRACTION)
     compressed = messages[: cut.index]
-    prev = previous_summary if previous_summary is not None else _find_previous_summary(compressed)
+    prev = previous_summary if previous_summary is not None else find_previous_summary(compressed)
     summary = await _request_summary(
         client, _summary_prompt(serialize_conversation(compressed), prev), max_tokens
     )
@@ -257,3 +279,159 @@ async def generate_summary(
 def summary_message(text: str) -> SessionMessage:
     """The durable artifact of a compaction: a user message marked as summary."""
     return user_message(text, is_compaction_summary=True)
+
+
+# ---- §3.6 fileOps (pi fileOps: which files the compressed span touched) ----
+
+_TAG_RE = re.compile(r"<(read-files|modified-files)>(.*?)</\1>", re.S)
+
+
+@dataclass
+class FileOps:
+    """File operations extracted from a compressed span, merged across rounds.
+
+    Persisted as <read-files>/<modified-files> sections at the summary tail so
+    the info survives --continue replays; parse() recovers it for the next
+    round's merge (UPDATE iteration).
+    """
+
+    read: list[str] = field(default_factory=list)
+    modified: list[str] = field(default_factory=list)
+
+    @classmethod
+    def parse(cls, text: str | None) -> "FileOps":
+        read: list[str] = []
+        modified: list[str] = []
+        for tag, body in _TAG_RE.findall(text or ""):
+            items = [line.strip() for line in body.splitlines() if line.strip()]
+            if tag == "read-files":
+                read = items
+            else:
+                modified = items
+        return cls(read=read, modified=modified)
+
+    def merged_with(self, newer: "FileOps") -> "FileOps":
+        """Newly extracted paths first; dedupe preserving order."""
+
+        def _merge(new: list[str], old: list[str]) -> list[str]:
+            seen: set[str] = set()
+            out: list[str] = []
+            for path in [*new, *old]:
+                if path not in seen:
+                    seen.add(path)
+                    out.append(path)
+            return out
+
+        return FileOps(_merge(newer.read, self.read), _merge(newer.modified, self.modified))
+
+    def append_to(self, text: str) -> str:
+        if not self.read and not self.modified:
+            return text
+        parts = [text]
+        if self.read:
+            parts.append("<read-files>\n" + "\n".join(self.read) + "\n</read-files>")
+        if self.modified:
+            parts.append("<modified-files>\n" + "\n".join(self.modified) + "\n</modified-files>")
+        return "\n".join(parts)
+
+
+def extract_file_ops(messages: list[SessionMessage]) -> FileOps:
+    """Scan tool_use blocks in *messages* for Read/Write/Edit file paths.
+
+    Newest first (reverse message order) so recovery injects the most recent
+    edits. Only calls that actually EXECUTED successfully count: a denied or
+    failed tool (is_error result) must not record its path — recovery would
+    otherwise read back files the permission gates refused to touch. A
+    tool_use with no paired result (e.g. aborted mid-batch) is also skipped.
+    """
+    executed_ids = {
+        block.tool_use_id
+        for msg in messages
+        if isinstance(msg.content, list)
+        for block in msg.content
+        if block.type == "tool_result" and not block.is_error and block.tool_use_id
+    }
+    read: list[str] = []
+    modified: list[str] = []
+    for msg in reversed(messages):
+        content = msg.content
+        if not isinstance(content, list):
+            continue
+        for block in reversed(content):
+            if block.type != "tool_use" or block.id not in executed_ids:
+                continue
+            kind = FILE_OPS_TOOLS.get(block.name or "")
+            path = (block.input or {}).get("file_path") if isinstance(block.input, dict) else None
+            if kind and isinstance(path, str) and path:
+                (read if kind == "read" else modified).append(path)
+    return FileOps(read=read, modified=modified)
+
+
+def recovery_reminder_text(ops: FileOps, cwd: Path) -> str | None:
+    """Restore context after compaction: the most recent modified files,
+    content attached (specs/08 §3.6). Unreadable/oversized files are skipped.
+    """
+    if not ops.modified:
+        return None
+    parts = ["Recently modified files:"]
+    for path in ops.modified[:RECOVERY_MAX_FILES]:
+        try:
+            content = (cwd / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if len(content) > RECOVERY_MAX_CHARS_PER_FILE:
+            content = content[:RECOVERY_MAX_CHARS_PER_FILE] + "\n...(truncated)"
+        parts.append(f"# {path}\n{content}")
+    if len(parts) == 1:
+        return None  # no file was readable
+    return "\n\n".join(parts)
+
+
+# ---- §3.7 old tool result cleanup (request-view projection) ----
+
+def clean_old_tool_results(
+    messages: list[SessionMessage],
+    *,
+    max_results: int = MAX_RESULTS_BEFORE_CLEAN,
+    keep_recent: int = MAX_RESULTS_KEPT,
+    now: float | None = None,
+    last_clean: float | None = None,
+) -> tuple[list[SessionMessage], bool]:
+    """Projection: replace old whitelisted tool_result payloads with a
+    placeholder in the request view. Never touches the persisted log.
+
+    Fires when the message list exceeds *max_results*, or when the last
+    cleanup is older than CLEAN_INTERVAL_SECONDS (and anything is clearable).
+    The newest *keep_recent* results always stay intact.
+    """
+    tool_by_id: dict[str, str] = {}
+    results: list[tuple[int, str]] = []  # (message index, tool name)
+    for idx, msg in enumerate(messages):
+        content = msg.content
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.type == "tool_use" and block.id:
+                tool_by_id[block.id] = block.name or ""
+            elif block.type == "tool_result" and block.tool_use_id:
+                results.append((idx, tool_by_id.get(block.tool_use_id, "")))
+    if not results:
+        return messages, False
+    stale = now is not None and last_clean is not None and now - last_clean > CLEAN_INTERVAL_SECONDS
+    if len(messages) <= max_results and not stale:
+        return messages, False
+    # keep_recent=0 would slice results[:-0] == [] — clear everything instead
+    older = results if keep_recent <= 0 else results[:-keep_recent]
+    clearable = [idx for idx, name in older if name in CLEANABLE_TOOLS]
+    if not clearable:
+        return messages, False
+    out = list(messages)
+    for idx in clearable:
+        blocks = [
+            block.model_copy(update={"content": OLD_RESULT_PLACEHOLDER})
+            if block.type == "tool_result" and block.content
+            else block
+            for block in out[idx].content
+        ]
+        out[idx] = replace(out[idx], content=blocks)
+    return out, True
