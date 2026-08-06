@@ -204,6 +204,58 @@ user_message(summary_text, is_compaction_summary=True)
 
 **理由**:等价于 CC 的 microcompact 时间路径(缓存冷时的直接替换),不做 cache_edits 热路径(见裁剪决策 2)。作为**请求视图投影**而非持久化修改,是为了不破坏会话 append-only 与审计完整性——pi 也没有这层,属于 CC 独有增强的降级版。运行两处:turn 顶部检查点在 autocompact 决策**之前**(CC query.ts 注释 "Apply microcompact before autocompact")——阈值估算看清理后的视图,清理释放足够 token 时 LLM 摘要不触发;请求组装时再投影一次(压缩关闭时消息只增长,清理最有用)。估算不做 freed 修正,与 CC 一致(CC 只对 snip 做 snipTokensFreed 修正,usage 锚点看不到清理前的节省,倾向更早压缩,方向安全)。
 
+### 3.8 反应式压缩(PTL 恢复)
+
+主动压缩在大多数情况下应在阈值前拦截超限;但当单次工具结果异常大、或压缩被禁用时,请求仍可能触发 **Prompt-Too-Long(PTL)**。CC 以 `reactiveCompact` 作为最后手段;我们最小版:
+
+```
+LLMError(status_code=413 / 400+context_length_exceeded)
+        │
+        ├─ 已重试过 → 终止(现有错误路径,last_stop_reason="error")
+        │
+        └─ 首次 → 强制压缩(跳过 should_compact 阈值判断)→ 重试一次
+                │
+                └─ 压缩请求本身超限 → 丢弃最旧轮次(截断摘要输入)重试,最多 1 次
+```
+
+- **PTL 识别**:`LLMError` 已带 status_code;OpenAI 兼容端为 400 + error code `context_length_exceeded`,Anthropic 端为 400 `prompt_too_long` / 413。在 `ai/retry.py` 加 `is_ptl_error(exc)` 判定(客户端不分类,交给 loop 层——与现有"错误转消息"路径分离)
+- **归属**:PTL 分支放在 loop 的 `_ask_model` 调用点内部 try(而非外层 `except LLMError`——重试需要 `continue` 回循环),压缩失败计入熔断计数(连续 2 次 → 停,避免 PTL-压缩-再 PTL 死循环)
+- **摘要截断重试**:`_request_summary` 捕获 PTL 时,从压缩输入丢弃最旧完整轮次(到第二条真实 user 输入为止)重新序列化再请求一次;不足两个轮次(无可丢弃)→ 直接抛
+- **边界**:这是 CC-15 错误恢复阶梯的最小切面;完整恢复(升级重试、transition reason 对象)仍归 CC-15,本阶段只做 PTL→压缩→重试这一条链
+
+**理由**:PTL 是唯一"模型完全无法工作"的状态,而压缩是唯一能解除它的手段;不做反应式路径的话,一次异常大的工具结果就足以终结会话,主动压缩的阈值防线形同虚设。
+
+### 3.9 缓存稳定性(CC 四层防御映射)
+
+CC 的四层防御建立在 Anthropic 服务端缓存(显式 cache_control + TTL + beta header 锁存)之上;我们双 adapter,DeepSeek 前缀缓存是**自动的**(字节级),Anthropic 是显式的。映射:
+
+| CC 层 | 我们是否做 | 对应实现 |
+|---|---|---|
+| ① 系统提示词分割(静态/动态) | ✅ 实体已覆盖 | system base 静态 + reminder 动态前置(§3.4);无"全球共享"需求(本地单用户),分割收益 = 前缀稳定而非跨用户共享 |
+| ② 会话级锁存(beta header / TTL sticky) | ⛔ 不做 | 无 beta header 生态;TTL 是服务端策略,客户端无从锁存。**等效物**:摘要请求隔离(见下) |
+| ③ 工具/消息排列策略 | ✅ 部分 | 工具 specs 顺序固定(注册表确定,会话内不变);reminder 前置保证消息前缀稳定;MCP 延迟加载留阶段 15 |
+| ④ 缓存断裂检测(cache_read 对比) | ✅ 轻量版 | 每次响应 usage 已含 cache_read(cache 字段归一化于 ai/types.py);若连续响应 cache_read 从高位骤降为 0 → 记一条诊断日志(仅归因 TTL 过期/服务端驱逐,不做自动动作;完整归因版留后) |
+
+**被动配合原则**(与裁剪决策 2 一致):我们不为缓存做任何主动操作(不打断点、不锁存、不发 cache_edits),只保证"客户端不主动破坏前缀"——system 静态、reminder 前置、工具顺序固定、**摘要请求与主链隔离**(pi `cacheRetention: "none"` + 独立 sessionId 的等价:摘要请求走 compact 指针,响应 usage 不计入主链估算锚点以外的任何状态)。
+
+**理由**:DeepSeek 自动缓存下,客户端能做的只有"别自己打破缓存";四层防御中 ①③④ 的实体已被架构设计覆盖,无需额外机制,② 无对应物。轻量检测是 CC 工程正循环(先检测再防御)的种子,一行日志成本,为阶段 10 的完整检测留位。
+
+### 3.10 记忆预取(预留 + TODO)
+
+CC 在模型流式响应期间并行搜索记忆文件(`startRelevantMemoryPrefetch`),结果作为附件消息注入——用模型思考的时间掩盖磁盘检索延迟。我们**本阶段不做实现**,只留接口:
+
+```python
+# loop.__init__ 新增(缺省 None = 不启用):
+prefetch: Callable[[list[SessionMessage]], Awaitable[list[tuple[str, str]]]] | None = None
+# 语义:输入当前消息历史,返回要注入的 reminder 段落列表 [(title, 内容), ...]
+```
+
+- 执行时机:在 `_ask_model` 发起流式调用**前**启动 task,`collect` 完成后检查结果——已完成 → 注入本轮;未完成 → 保留 pending,下一轮注入(先到先注入,错过本轮的段落进下一轮);60s 超时保护(悬挂回调不阻塞主链)
+- 注入通道:与 §3.4 同一 reminder 机制(独立 prefix 消息,REMINDER_HEADER + `# title` 分段 + FOOTER;上限 10 段预留了记忆/技能/MCP 指令的扩展位,prefetch 段数不超该上限)
+- **TODO(阶段 17 记忆系统)**:实现检索(索引 MEMORY.md 常驻 + 主题文件按需取,见 tasks CC-17);`settledAt` 单次消费守卫 + 去重(`readFileState` 已读文件不重注入)届时在 prefetch 回调内实现
+
+**理由**:记忆预取的收益依赖记忆系统本体(阶段 17),但**注入通道必须在 08 就位**——§3.4 的 reminder 消息契约 + 上限 10 段的设计直接决定未来记忆注入的形态;接口先行,阶段 17 只填实现,不动契约。
+
 ## 4. 执行步骤(依赖序)
 
 | # | 步骤 | 内容                                                                | 依赖 | 验收(测试) |
@@ -216,8 +268,11 @@ user_message(summary_text, is_compaction_summary=True)
 | S6 | loop 压缩接线 | turn 顶部检查点 + 摘要替换 + 持久化 + 熔断                                      | S4, S5 | `tests/engine/test_loop.py`:小窗口触发、防抖、熔断、resume 重放 |
 | S7 | 恢复 + 清理 | fileOps 提取注入最近文件;旧结果清理                                            | S5 | 恢复注入单测;清理投影单测 |
 | S8 | 收尾 | 常量收敛、memoize 失效/说明、docs/modules/08-context.md、todo 勾选             | S6, S7 | 全量回归 |
+| S9 | PTL 反应式压缩 | is_ptl_error + loop 强制压缩重试 + 摘要截断重试(§3.8)                     | S5 | `tests/engine/test_loop.py`:PTL→压缩→重试、已重试过终止、截断重试;`tests/ai/test_retry.py`(或 loop):is_ptl_error 判定 |
+| S10 | 缓存断裂检测 | 轻量诊断日志(§3.9④)                                                     | — | `tests/engine/test_loop.py`:cache_read 骤降记日志、无骤降不记 |
+| S11 | 记忆预取接口 | prefetch 参数 + 注入接线 + 超时保护(§3.10)                                | S4 | `tests/engine/test_loop.py`:先到先注入、错过进下轮、超时不阻塞 |
 
-**依赖图**:S1 → S4;S2 → S5 → S6;S3 → S4;S5 → S7;S6+S7 → S8。(S1/S2/S3 可并行)
+**依赖图**:S1 → S4;S2 → S5 → S6;S3 → S4;S5 → S7;S6+S7 → S8;S5 → S9;S4 → S11。(S1/S2/S3、S9/S10/S11 可并行)
 
 ## 5. 风险与边界
 
