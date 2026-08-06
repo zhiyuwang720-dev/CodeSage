@@ -23,14 +23,15 @@
 - [x] **07 cli CLI REPL** (`feat/07-cli`)
   - 验收:交互循环;权限询问(文本);信号处理;流式输出 → **V1 闭环验收**
   - 验证:端到端小任务;V1 验收清单(见 plan.md)
-- [ ] **08 context 上下文管理** (`feat/08-context`)
-  - 验收:AGENTS.md 逐层收集 + 32KB 截断 + override;system prompt 分层组装;system-reminder(上限 10)
-  - 验证:上下文组装单测
+- [ ] **08 context 上下文工程** (`feat/08-context`)(规格:`docs/specs/08-context.md`)
+  - 验收:AGENTS.md 逐层收集 + 32KB 截断 + override;system prompt 分层组装(静态 base + reminder 注入);system-reminder(上限 10);git 快照(CC-14);上下文 memoize(CC-13);token 预算(usage 锚点);结构化 auto-compact(PI-05:turn 边界 + split-turn 前缀摘要 + fileOps);旧工具结果清理;压缩后最近文件恢复
+  - 验证:上下文组装单测 + 压缩边界单测 + VCR 集成
+  - 步骤:S1 消息契约(is_reminder/is_compaction_summary + normalize)→ S2 tokens.py → S3 context.py → S4 注入接线 → S5 compaction 核心 → S6 loop 接线 → S7 恢复/清理 → S8 收尾
 - [ ] **09 hooks 钩子系统** (`feat/09-hooks`)
   - 验收:PreToolUse(汇入权限)/PostToolUse/Stop/UserPromptSubmit/SessionStart;命令 + 提示双执行体;JSON 解析;exit 2 硬阻断
   - 验证:每事件类型单测
-- [ ] **10 compact 上下文压缩** (`feat/10-compact`)
-  - 验收:token 预算;auto-compact(LLM 摘要);micro-compact(超大结果 → 400 字符 + 落盘)
+- [ ] **10 compact 上下文压缩增强** (`feat/10-compact`)(核心已并入 08,见 `docs/specs/08-context.md`)
+  - 验收:手动 /compact 命令;多级阈值(硬阻塞预留手动空间);boundary 消息模式;CC 熔断增强(硬阻塞上限)
   - 验证:压缩边界单测
 - [ ] **11 tasks 任务系统** (`feat/11-tasks`)
   - 验收:Task CRUD;blocks/blockedBy 环检测;todo
@@ -85,9 +86,7 @@
 
 ### 阶段 08(context)增强
 
-- [ ] **CC-12 context 改 reminder 注入**:context 从 system prompt 挪到请求时 system-reminder 用户消息(system 字节稳定利于 prompt cache,可中途追加;`is_meta` 已备好)
-- [ ] **CC-13 上下文 memoize + 失效**:每会话组装一次,按 AGENTS.md mtime/会话边界失效(现每轮重建,git status 类子进程每轮跑)
-- [ ] **CC-14 git status 快照**(可选层):branch + 最近提交 + status 截断,标注「快照不更新」
+> CC-12/13/14 已全部并入阶段 08 规格(`docs/specs/08-context.md` 3.1/3.3/3.4),随 08 实施,不再单列。
 
 ### 新阶段(建议插入路线图)
 
@@ -97,7 +96,7 @@
 
 ### 既有阶段需求补充
 
-- [ ] **compact(10)**:熔断器(连续 3 次失败停止重试)+ 多级阈值(硬阻塞预留手动 /compact 空间)+ boundary 消息模式
+- [ ] **compact(10)**:熔断器已入 08 规格(§3.5,连续 2 次失败停);10 保留:硬阻塞预留手动 /compact 空间 + boundary 消息模式
 - [ ] **Bash 安全(16)**:denial-tracking(连续 3 次/累计 20 次拒绝回退人工)+ classifier 不可用 iron-gate fail-closed(照抄 CC 整套)
 - [ ] **hooks(09)**:钩子先于权限引擎(deny 优先/allow 短路/updatedInput 透传)+ safetyCheck bypass-免疫位
 
@@ -117,7 +116,7 @@
 
 ### 归属:后续阶段(具体阶段)
 
-- [ ] **PI-05 结构化 compaction 管线**【阶段 10 compact 需求增强】:usage 优先估算 + turn 边界切割 + split-turn 前缀单独摘要 + 文件操作清单随摘要 → 新 engine/compaction.py
+- [ ] **PI-05 结构化 compaction 管线**【已并入阶段 08,见 specs/08-context.md §3.5】:usage 优先估算 + turn 边界切割 + split-turn 前缀单独摘要 + 文件操作清单随摘要 → 新 engine/compaction.py
 - [ ] **PI-07 会话操作日志 + 恢复**【阶段 12 会话生命周期】:Record(operation_started/tool_started/step_attempt)+ findOpenOperations → --continue 从中断点恢复而非消息末尾 → core/session
 - [ ] **PI-08 模型/思考级别/活动工具作为 entry**【阶段 12 会话生命周期】:会话自描述,审计/恢复不用猜当时配置 → core/session
 - [ ] **PI-09 树状会话**【阶段 12 会话生命周期升级,重点思想】:entry 链 + lane 指针,分支/fork 是追加指针;单文件多分支;/**tree 导航至任何先前位置继续**;按消息类型筛选;条目标记为书签 → core/session
