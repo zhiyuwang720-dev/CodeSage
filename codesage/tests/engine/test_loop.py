@@ -14,7 +14,7 @@ from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 class FakeLLM:
     """Returns a scripted sequence of events; asserts nothing about the input."""
 
-    def __init__(self, script, summary_text="compacted summary", summary_error=None):
+    def __init__(self, script, summary_text="compacted summary", summary_error=None, summary_errors=None):
         # script: list of callables returning a list[StreamEvent]
         self.script = script
         self.calls = 0
@@ -22,6 +22,7 @@ class FakeLLM:
         self.last_messages = None
         self.summary_text = summary_text
         self.summary_error = summary_error  # compaction path: raise instead of answering
+        self.summary_errors = list(summary_errors) if summary_errors else None  # per-call raises
         self.complete_calls = []  # [(model, LLMRequest)] — the compaction path
 
     def stream(self, request, model="main"):
@@ -30,13 +31,18 @@ class FakeLLM:
 
     async def complete(self, request, model="main"):
         self.complete_calls.append((model, request))
+        if self.summary_errors:
+            raise self.summary_errors.pop(0)
         if self.summary_error is not None:
             raise self.summary_error
         return LLMResponse(content=[ContentBlock(type="text", text=self.summary_text)])
 
     async def _gen(self):
-        events = self.script[min(self.calls, len(self.script) - 1)](self.calls)
+        # increment BEFORE invoking: a raising script entry (e.g. a PTL
+        # stream error) must still consume its slot, not replay forever
+        idx = min(self.calls, len(self.script) - 1)
         self.calls += 1
+        events = self.script[idx](self.calls)
         for ev in events:
             yield ev
 
@@ -804,3 +810,63 @@ async def test_compact_summarizes_raw_span_not_cleaned_view():
     prompt = llm.complete_calls[0][1].messages[0].content
     assert "truncated, 10000 chars" in prompt  # the raw payload reached the summary
     assert OLD_RESULT_PLACEHOLDER not in prompt
+
+
+# ---- PI-05 §3.8: reactive compaction on Prompt-Too-Long ----
+
+def _ptl_stream(i):
+    raise LLMError("HTTP 400: context_length_exceeded", status_code=400)
+
+
+async def test_ptl_forces_compact_and_retries():
+    """A PTL on the main query forces a compact (skipping the threshold
+    check) and retries once — the session survives an oversized turn."""
+    llm = FakeLLM([_ptl_stream, lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert llm.complete_calls  # forced compaction ran
+    assert any(m.is_compaction_summary for m in messages)
+    assert messages[-1].content[0].text == "answer"
+    assert loop.last_stop_reason == "completed"
+
+
+async def test_ptl_recovers_once_then_terminates():
+    """The second PTL is not recovered: the loop exits on the normal
+    provider-error path (last_stop_reason="error"), not an infinite loop."""
+    llm = FakeLLM([_ptl_stream, _ptl_stream], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    messages = await _collect(loop)
+    assert loop.last_stop_reason == "error"
+    assert messages[-1].is_error
+
+
+async def test_ptl_without_compaction_enabled_still_errors():
+    """Compaction disabled (config None) must not crash the recovery path —
+    _compact is None-guarded, the PTL propagates to the error message."""
+    llm = FakeLLM([_ptl_stream], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=None)
+    messages = await _collect(loop)
+    assert loop.last_stop_reason == "error"
+
+
+async def test_summary_ptl_truncates_head_and_retries_once():
+    """The summary request itself can hit PTL on a huge conversation: drop
+    the oldest turn, re-serialize, retry exactly once (specs/08 §3.8)."""
+    ptl = LLMError("HTTP 400: context_length_exceeded", status_code=400)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_errors=[ptl])
+    # 6 turns; keep_recent=60 lands the cut on the 5th turn's user message,
+    # so the compressed span holds 4 full turns (no split-turn prefix request)
+    history = []
+    for n in range(1, 7):
+        history += [user_message(f"turn-{n} " + "x" * 183), assistant_message(f"a{n}")]
+    loop = _loop(
+        llm,
+        history=history,
+        compaction=CompactionConfig(window=100, reserve=10, keep_recent=60),
+    )
+    messages = await _collect(loop)
+    assert len(llm.complete_calls) == 2  # PTL attempt + head-trimmed retry
+    assert any(m.is_compaction_summary for m in messages)
+    first, second = llm.complete_calls[0][1].messages[0].content, llm.complete_calls[1][1].messages[0].content
+    assert "turn-1" not in second and "turn-2" in second  # oldest turn dropped
+    assert "turn-1" in first  # the original attempt carried everything

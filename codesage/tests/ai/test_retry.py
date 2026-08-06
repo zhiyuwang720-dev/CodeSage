@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from codesage.ai import LLMError
-from codesage.ai.retry import with_retry
+from codesage.ai.retry import cancelled_error, is_ptl_error, with_retry
 
 
 def _fake_sleep(monkeypatch, sleeps):
@@ -110,3 +110,21 @@ async def test_retry_sleep_cancelled():
     assert exc_info.value.cancelled
     assert not exc_info.value.retryable
     assert len(calls) == 1  # no retry attempt after cancel
+
+
+# ---- PTL classification (specs/08 §3.8) ----
+
+def test_is_ptl_error_classification():
+    assert is_ptl_error(LLMError("HTTP 413: prompt too long", status_code=413))
+    assert is_ptl_error(
+        LLMError("HTTP 400: context_length_exceeded", status_code=400)
+    )
+    assert is_ptl_error(LLMError("HTTP 400: prompt_too_long", status_code=400))
+    assert is_ptl_error(LLMError("400 context length exceeded", status_code=400))
+    # 400 without a context-length code is NOT a PTL
+    assert not is_ptl_error(LLMError("HTTP 400: invalid request", status_code=400))
+    # other statuses are not PTL (429 retryable, 500, None)
+    assert not is_ptl_error(LLMError("HTTP 429", status_code=429))
+    assert not is_ptl_error(LLMError("HTTP 500", status_code=500))
+    assert not is_ptl_error(LLMError("network error", status_code=None))
+    assert not is_ptl_error(cancelled_error())

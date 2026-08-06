@@ -29,6 +29,23 @@ def cancelled_error() -> LLMError:
     return LLMError("cancelled", retryable=False, cancelled=True)
 
 
+def is_ptl_error(exc: LLMError) -> bool:
+    """True for Prompt-Too-Long: HTTP 413, or 400 with a context-length
+    error code (OpenAI-compatible `context_length_exceeded`, Anthropic
+    `prompt_too_long`). with_retry never retries these (non-retryable 4xx);
+    the loop's reactive-compaction path owns them (specs/08 §3.8)."""
+    if exc.cancelled:
+        return False
+    if exc.status_code == 413:
+        return True
+    if exc.status_code != 400:
+        return False
+    msg = str(exc).lower()
+    return any(
+        k in msg for k in ("context_length_exceeded", "prompt_too_long", "context length")
+    )
+
+
 async def with_cancel(awaitable: Awaitable, cancel_event: asyncio.Event | None) -> Any:
     """Await *awaitable*, aborting early once *cancel_event* is set.
 

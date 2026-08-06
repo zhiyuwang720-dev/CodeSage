@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
+from ..ai.retry import is_ptl_error
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
@@ -108,6 +109,8 @@ class AgentLoop:
         self._recovery_reminder: str | None = None
         # §3.7: last time the request view cleared old tool results
         self._last_result_clean = time.time()
+        # §3.8: reactive compaction — one PTL recovery per loop run
+        self._ptl_retried = False
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -200,7 +203,24 @@ class AgentLoop:
                         messages.append(steer_msg)
 
                 # LLM call (checkpoint 1: abort before and after)
-                assistant = await self._ask_model(messages)
+                try:
+                    assistant = await self._ask_model(messages)
+                except LLMError as exc:
+                    if is_ptl_error(exc) and not self._ptl_retried and self.compaction is not None:
+                        # §3.8 reactive compaction: PTL is the one state a
+                        # threshold-triggered compact can't prevent (huge
+                        # tool result, compaction disabled). Force a compact
+                        # (skip should_compact) and retry once; a failing
+                        # compact falls through to the outer error path and
+                        # counts into the breaker (no PTL-compact-PTL loop).
+                        self._ptl_retried = True
+                        compacted = await self._compact(messages)
+                        if compacted is not None:
+                            summary_msg, cut = compacted
+                            yield summary_msg
+                            messages = [summary_msg, *messages[cut.index :]]
+                            continue
+                    raise
                 if assistant is None:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return

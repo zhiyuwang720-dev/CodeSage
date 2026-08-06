@@ -21,6 +21,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message
+from ..ai.retry import is_ptl_error
 from ..core import SessionMessage, user_message
 from .tokens import DEFAULT_CONTEXT_WINDOW, DEFAULT_RESERVE_TOKENS, estimate_message_tokens
 
@@ -225,16 +226,53 @@ def _summary_prompt(conversation: str, previous_summary: str | None) -> str:
     return SUMMARIZATION_PROMPT.format(conversation=conversation)
 
 
+def _drop_oldest_turn(messages: list[SessionMessage]) -> list[SessionMessage] | None:
+    """Trim the oldest full turn for a PTL retry (specs/08 §3.8): everything
+    up to the second real user input is dropped. None when fewer than two
+    user turns exist (nothing meaningful to drop — propagate instead)."""
+    users = [
+        i
+        for i, msg in enumerate(messages)
+        if msg.role == "user" and not _is_tool_result_carrier(msg)
+    ]
+    if len(users) < 2:
+        return None
+    return messages[users[1] :]
+
+
 async def _request_summary(
-    client: LLMClient, prompt: str, max_tokens: int
+    client: LLMClient,
+    prompt: str,
+    max_tokens: int,
+    *,
+    retry_messages: list[SessionMessage] | None = None,
+    previous_summary: str | None = None,
 ) -> str:
-    response = await client.complete(
-        LLMRequest(
-            messages=[Message(role="user", content=prompt)],
-            max_tokens=max_tokens,
-        ),
-        model=COMPACT_MODEL_POINTER,
-    )
+    """One summary request; on PTL, re-serialize with the oldest turn dropped
+    and retry exactly once (the request itself can exceed the window when the
+    conversation is already enormous)."""
+    try:
+        response = await client.complete(
+            LLMRequest(
+                messages=[Message(role="user", content=prompt)],
+                max_tokens=max_tokens,
+            ),
+            model=COMPACT_MODEL_POINTER,
+        )
+    except LLMError as exc:
+        if not is_ptl_error(exc) or retry_messages is None:
+            raise
+        trimmed = _drop_oldest_turn(retry_messages)
+        if trimmed is None:
+            raise
+        retry_prompt = _summary_prompt(serialize_conversation(trimmed), previous_summary)
+        response = await client.complete(
+            LLMRequest(
+                messages=[Message(role="user", content=retry_prompt)],
+                max_tokens=max_tokens,
+            ),
+            model=COMPACT_MODEL_POINTER,
+        )
     if response.is_error or not response.text.strip():
         raise LLMError(
             response.error_message or "summary request returned no text",
@@ -264,13 +302,19 @@ async def generate_summary(
     compressed = messages[: cut.index]
     prev = previous_summary if previous_summary is not None else find_previous_summary(compressed)
     summary = await _request_summary(
-        client, _summary_prompt(serialize_conversation(compressed), prev), max_tokens
+        client,
+        _summary_prompt(serialize_conversation(compressed), prev),
+        max_tokens,
+        retry_messages=compressed,
+        previous_summary=prev,
     )
     if cut.turn_prefix:
         prefix = await _request_summary(
             client,
             _summary_prompt(serialize_conversation(cut.turn_prefix), None),
             max_tokens,
+            retry_messages=cut.turn_prefix,
+            previous_summary=None,
         )
         summary = f"{summary}\n\n{prefix}"
     return summary
