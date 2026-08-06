@@ -1,7 +1,13 @@
-"""Engine (phase 06): the Agent Runtime — main loop, tool queue, system prompt."""
+"""Engine (phase 06): the Agent Runtime — main loop, tool queue, context bundle."""
 
+from .context import ContextBundle, build_context_bundle
 from .loop import AgentLoop
-from .system_prompt import build_system_prompt
 from .tool_queue import ScheduledTool, ToolUseQueue
 
-__all__ = ["AgentLoop", "ScheduledTool", "ToolUseQueue", "build_system_prompt"]
+__all__ = [
+    "AgentLoop",
+    "ContextBundle",
+    "ScheduledTool",
+    "ToolUseQueue",
+    "build_context_bundle",
+]

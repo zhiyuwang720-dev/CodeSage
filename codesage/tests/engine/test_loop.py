@@ -470,3 +470,53 @@ async def test_finalize_hook_rewrites_results():
     loop = _loop(llm, finalize=finalize)
     messages = await _collect(loop)
     assert messages[2].content[0].content == "rewritten:echo:x"
+
+
+# ---- phase 08 S4: context bundle → hoisted system-reminder ----
+
+def _bundle():
+    from codesage.engine import ContextBundle
+
+    return ContextBundle(
+        sections=[("currentDate", "Today's date is 2026-08-06."), ("agentsMd", "project rules")]
+    )
+
+
+async def test_context_bundle_hoisted_as_reminder_first():
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle())
+    await _collect(loop, "hi")
+    first = llm.last_messages[0]
+    assert first.role == "user"
+    assert first.content.startswith("<system-reminder>")
+    assert "# currentDate\nToday's date is 2026-08-06." in first.content
+    assert "# agentsMd\nproject rules" in first.content
+    assert "IMPORTANT: this context may or may not be relevant" in first.content
+    assert llm.last_messages[1].content == "hi"  # the real prompt follows the reminder
+
+
+async def test_no_bundle_no_reminder():
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm)
+    await _collect(loop, "hi")
+    assert llm.last_messages[0].content == "hi"
+
+
+async def test_reminder_never_persisted(tmp_path):
+    session = Session("s4-test", tmp_path)
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle(), session=session)
+    out = await _collect(loop, "hi")
+    assert not any(m.is_reminder for m in out)
+    assert not any(m.is_reminder for m in session.load())
+
+
+async def test_reminder_sections_capped_at_ten():
+    from codesage.engine import ContextBundle
+
+    llm = FakeLLM([lambda i: text_event("ok")])
+    many = [(f"sec{i}", f"content {i}") for i in range(15)]
+    loop = _loop(llm, context_bundle=ContextBundle(sections=many))
+    await _collect(loop)
+    assert "# sec9" in llm.last_messages[0].content
+    assert "# sec10" not in llm.last_messages[0].content  # capped at 10

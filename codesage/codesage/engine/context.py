@@ -4,11 +4,15 @@ Built ONCE per session (memoize = the CLI calls this once and holds the
 bundle; nothing here runs per turn). Sections are fixed-order tuples the
 renderer turns into system-reminder payloads (S4): date → git snapshot →
 AGENTS.md (far → near, so the near file lands last — recency bias).
+
+Synchronous on purpose: the composition root (build_loop) is sync; the git
+queries still run in parallel via a thread pool.
 """
 
 from __future__ import annotations
 
-import asyncio
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -85,30 +89,27 @@ def _read_override(override_file: Path) -> list[str]:
     return [content[:MAX_AGENTS_CHARS]]
 
 
-async def _git_snapshot(cwd: Path) -> str | None:
+def _git_run(cwd: Path, args: list[str]) -> str:
+    try:
+        out = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):  # git missing / hung
+        return ""
+    return out.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _git_snapshot(cwd: Path) -> str | None:
     """branch + recent commits + short status (capped), or None outside a repo."""
-
-    async def _run(args: list[str]) -> str:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "git",
-                *args,
-                cwd=str(cwd),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-        except OSError:  # git not installed
-            return ""
-        out, _ = await proc.communicate()
-        return out.decode("utf-8", errors="replace").strip()
-
-    if await _run(["rev-parse", "--is-inside-work-tree"]) != "true":
+    if _git_run(cwd, ["rev-parse", "--is-inside-work-tree"]) != "true":
         return None
-    branch, log, status = await asyncio.gather(
-        _run([*_GIT_FLAGS, "branch", "--show-current"]),
-        _run([*_GIT_FLAGS, "log", "--oneline", "-n", "5"]),
-        _run([*_GIT_FLAGS, "status", "--short"]),
-    )
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        branch = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "branch", "--show-current"]).result()
+        log = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "log", "--oneline", "-n", "5"]).result()
+        status = pool.submit(_git_run, cwd, [*_GIT_FLAGS, "status", "--short"]).result()
     if len(status) > MAX_STATUS_CHARS:
         status = status[:MAX_STATUS_CHARS] + f"\n... (truncated beyond {MAX_STATUS_CHARS} chars)"
     return "\n\n".join(
@@ -121,12 +122,12 @@ async def _git_snapshot(cwd: Path) -> str | None:
     )
 
 
-async def build_context_bundle(cwd: Path, *, override_file: Path | None = None) -> ContextBundle:
+def build_context_bundle(cwd: Path, *, override_file: Path | None = None) -> ContextBundle:
     """Assemble the session context once (memoize semantics live at the caller)."""
     sections: list[tuple[str, str]] = [
         ("currentDate", f"Today's date is {date.today().isoformat()}.")
     ]
-    snapshot = await _git_snapshot(cwd)
+    snapshot = _git_snapshot(cwd)
     if snapshot is not None:
         sections.append(("gitStatus", snapshot))
     agents = _read_override(override_file) if override_file is not None else _apply_budget(_collect_agents_files(cwd))

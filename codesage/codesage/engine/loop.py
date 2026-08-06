@@ -17,18 +17,27 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, StreamEvent
+from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
-from .system_prompt import build_system_prompt
+from .context import ContextBundle
 from .tool_queue import ScheduledTool, ToolUseQueue
 
 #: Synthesized messages (is_meta — filtered by normalize_for_api).
 INTERRUPT_TEXT = "(interrupted by user)"
 MAX_TURNS_TEXT = "Stopped: maximum turn count reached."
 MAX_BUDGET_TEXT = "Stopped: maximum budget reached."
+#: system-reminder section cap (todo.md acceptance: system-reminder 上限 10).
+MAX_REMINDER_SECTIONS = 10
+
+#: system-reminder wrapper (Claude Code prependUserContext shape).
+REMINDER_HEADER = (
+    "<system-reminder>\n"
+    "As you answer the user's questions, you can use the following context:\n"
+)
+REMINDER_FOOTER = "\n\nIMPORTANT: this context may or may not be relevant to your tasks.\n</system-reminder>"
 #: Injected when the model replies with only internal reasoning (bounded retries).
 THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
 THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
@@ -55,7 +64,7 @@ class AgentLoop:
         permissions: PermissionEngine | None = None,
         request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
         system_prompt: str = "",
-        context: dict[str, str] | None = None,
+        context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
         model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
         max_turns: int = 100,
@@ -75,7 +84,7 @@ class AgentLoop:
         self.permissions = permissions or PermissionEngine()
         self.request_permission = request_permission
         self.system_prompt = system_prompt
-        self.context = context
+        self.context_bundle = context_bundle
         self.model = model
         self.mode = mode
         self.max_turns = max_turns if isinstance(max_turns, int) and max_turns > 0 else 100
@@ -207,9 +216,16 @@ class AgentLoop:
     # ---- internals ----
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+        api_messages = normalize_for_api(messages)
+        if self.context_bundle is not None:
+            # context rides as a hoisted system-reminder user message, never
+            # in `system` — the system prefix stays byte-stable for server
+            # prefix caching (specs/08 §3.4); the reminder is request-only,
+            # it never enters the session log
+            api_messages = [_render_reminder(self.context_bundle), *api_messages]
         request = LLMRequest(
-            messages=normalize_for_api(messages),
-            system=build_system_prompt(self.system_prompt, self.context),
+            messages=api_messages,
+            system=self.system_prompt,
             tools=self.tools.specs(),
         )
         stream = self.client.stream(request, model=self.model)
@@ -318,6 +334,20 @@ class AgentLoop:
     async def _persist(self, message: SessionMessage) -> None:
         if self.session is not None:
             self.session.append(message)
+
+
+def _render_reminder(bundle: ContextBundle) -> Message:
+    """Render the context bundle as one system-reminder user message.
+
+    A plain ai.Message: it is already hoisted at the front, so it does not
+    need the normalize_for_api reminder pass (and must not be a
+    SessionMessage — LLMRequest.messages is list[Message]).
+    """
+    parts = [REMINDER_HEADER]
+    for title, text in bundle.sections[:MAX_REMINDER_SECTIONS]:
+        parts.append(f"# {title}\n{text}")
+    parts.append(REMINDER_FOOTER)
+    return Message(role="user", content="".join(parts))
 
 
 class _MissingTool:
