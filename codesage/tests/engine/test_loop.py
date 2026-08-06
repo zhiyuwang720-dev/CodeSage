@@ -520,3 +520,31 @@ async def test_reminder_sections_capped_at_ten():
     await _collect(loop)
     assert "# sec9" in llm.last_messages[0].content
     assert "# sec10" not in llm.last_messages[0].content  # capped at 10
+
+
+async def test_reminder_section_titles_not_glued(tmp_path):
+    """Each '# title' starts on its own line (text payloads end with \n)."""
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, context_bundle=_bundle())
+    await _collect(loop)
+    content = llm.last_messages[0].content
+    assert "\n# currentDate" in content
+    assert "2026-08-06.\n# agentsMd" in content
+    assert "# agentsMd\nproject rules\n" in content
+
+
+async def test_reminder_agents_sections_keep_nearest():
+    """At the 10-section cap, the NEAREST AGENTS.md survive, far ones drop."""
+    from codesage.engine import ContextBundle
+
+    llm = FakeLLM([lambda i: text_event("ok")])
+    sections = [("currentDate", "d"), ("gitStatus", "g")]
+    for i in range(12):
+        sections.append(("agentsMd", f"rules-{i}"))  # 0 is farthest, 11 nearest
+    loop = _loop(llm, context_bundle=ContextBundle(sections=sections))
+    await _collect(loop)
+    content = llm.last_messages[0].content
+    assert "# agentsMd\nrules-11\n" in content  # nearest kept
+    assert "rules-0" not in content  # farthest dropped
+    assert "rules-8" in content  # 2 fixed + 8 agents = 10 total
+    assert content.count("# agentsMd\n") == 8

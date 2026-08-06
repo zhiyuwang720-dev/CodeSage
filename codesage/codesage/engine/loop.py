@@ -341,11 +341,24 @@ def _render_reminder(bundle: ContextBundle) -> Message:
 
     A plain ai.Message: it is already hoisted at the front, so it does not
     need the normalize_for_api reminder pass (and must not be a
-    SessionMessage — LLMRequest.messages is list[Message]).
+    SessionMessage — LLMRequest.messages is list[Message]). Session history
+    never carries is_reminder messages, so normalize_for_api sees none.
+
+    Section budget: date/git always stay; AGENTS.md sections (far → near in
+    the bundle) keep the NEAREST ones within the cap — the recency-priority
+    files must not be the ones dropped at the 10-section limit.
     """
+    fixed = [s for s in bundle.sections if s[0] != "agentsMd"]
+    agents = [s for s in bundle.sections if s[0] == "agentsMd"]
+    if len(fixed) >= MAX_REMINDER_SECTIONS:
+        fixed = fixed[:MAX_REMINDER_SECTIONS]
+        agents = []
+    else:
+        agents = agents[-(MAX_REMINDER_SECTIONS - len(fixed)) :]
     parts = [REMINDER_HEADER]
-    for title, text in bundle.sections[:MAX_REMINDER_SECTIONS]:
-        parts.append(f"# {title}\n{text}")
+    for title, text in fixed + agents:
+        # trailing newline: the next "# title" must not glue onto this text
+        parts.append(f"# {title}\n{text}\n")
     parts.append(REMINDER_FOOTER)
     return Message(role="user", content="".join(parts))
 
