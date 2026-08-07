@@ -208,7 +208,10 @@ def _shell_argv(command: str) -> tuple[list[str], str] | None:
             if git_bash.is_file():
                 return [str(git_bash), "-c", command], "bash"
         bash = shutil.which("bash")
-        if bash and "System32" not in Path(bash).parts:
+        # 大小写不敏感:PATH 里 System32 常写作 `%SystemRoot%\system32`(小写),
+        # which() 返回原样路径 —— 之前按 "System32" 精确匹配会漏掉小写变体,
+        # shim 照常被选中(WSL execvpe /bin/bash failed 复发)。
+        if bash and "system32" not in {p.lower() for p in Path(bash).parts}:
             return [bash, "-c", command], "bash"
     return None
 

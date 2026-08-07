@@ -160,6 +160,19 @@ def test_shell_argv_skips_wsl_shim_bash(monkeypatch):
     assert bash_mod._shell_argv("dir") is None
 
 
+def test_shell_argv_skips_wsl_shim_lowercase_system32(monkeypatch):
+    """PATH 里 System32 常写作 `%SystemRoot%\\system32`(小写 s)——
+    which() 返回原样路径,排除判断必须大小写不敏感,否则 shim 漏网复发。"""
+    import codesage.tools.builtin.shell.bash as bash_mod
+
+    monkeypatch.setattr(bash_mod.sys, "platform", "win32")
+    monkeypatch.setattr(bash_mod.os.environ, "get", lambda k, d="": "")
+    monkeypatch.setattr(
+        bash_mod.shutil, "which", lambda name: r"C:\Windows\system32\bash.exe"
+    )
+    assert bash_mod._shell_argv("dir") is None
+
+
 def test_shell_argv_posix_uses_default_shell(monkeypatch):
     import codesage.tools.builtin.shell.bash as bash_mod
 
