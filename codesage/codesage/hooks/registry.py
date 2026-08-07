@@ -401,9 +401,11 @@ class HookManager:
 
         outcome = classify_exit_code(hook_result.exit_code)
         if outcome == "success":
-            logger.debug(
-                "hook executed: event=%s exit=%s duration=%sms outcome=%s",
-                event, hook_result.exit_code, hook_result.duration_ms, outcome,
+            # 成功 hook 的 stderr 摘要 INFO 可见(--verbose):§4.1 约定 stderr 是
+            # 给人类看的摘要;默认(无日志级别)不刷屏,显式开启后逐工具可见
+            logger.info(
+                "hook exit %s (outcome=%s): %s",
+                hook_result.exit_code, outcome, hook_result.stderr[:200],
             )
         else:
             logger.warning(
