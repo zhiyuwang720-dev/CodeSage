@@ -169,9 +169,10 @@ async def repl_loop(
     print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt, Ctrl+O to expand)", CYAN))
     bar.move_to_input()
 
-    # 通知消费(阶段 09 §2.5):状态行走 bar.print_below(滚动区一行);无头模式
-    # (--output-format json)不建 bar → on_notification 保持 None,通知仅进
-    # hooks.jsonl + 日志
+    # 通知消费(阶段 09 §2.5):状态行走 bar.print_below(滚动区一行)。本函数只被
+    # 交互 REPL 调用(cli/__init__.py:201)——无头/单次模式走 single-shot 分支
+    # (cli/__init__.py:182-193)根本不进 repl_loop,故 bar 恒已装配;无头模式下
+    # 通知仅进 hooks.jsonl + 日志
     loop.on_notification = lambda ntype, message, data: bar.print_below(
         _render_notification(ntype, message)
     )

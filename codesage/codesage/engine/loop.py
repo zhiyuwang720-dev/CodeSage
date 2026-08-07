@@ -362,27 +362,28 @@ class AgentLoop:
                 # PI-04: terminate semantics — the turn stops only when EVERY
                 # tool in the batch asks to stop. Checked AFTER the tool results
                 # were yielded so the model/user still see what the tools did.
-                if scheduled and all(
-                    item.result is not None and item.result.terminate for item in scheduled
-                ):
-                    # Stop 钩子(§6.4):tool_terminated 分支(_stop 前);结果已在上面
-                    # yield,钩子拦下后模型仍看得到工具做了什么
-                    result = await self._dispatch_stop("tool_terminated", assistant)
-                    if result is not None and result.stop:
-                        yield await self._stop(
-                            "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
-                        )
+                if scheduled:
+                    if all(
+                        item.result is not None and item.result.terminate for item in scheduled
+                    ):
+                        # Stop 钩子(§6.4):tool_terminated 分支(_stop 前);结果已在上面
+                        # yield,钩子拦下后模型仍看得到工具做了什么
+                        result = await self._dispatch_stop("tool_terminated", assistant)
+                        if result is not None and result.stop:
+                            yield await self._stop(
+                                "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
+                            )
+                            return
+                        if result is not None and result.stop_feedback is not None and self._allow_stop_feedback():
+                            # m3/§6.4 澄清:feedback 必须普通 user_message(is_meta 被过滤,
+                            # 模型不可见);下一轮计为一次 turn(n2)
+                            feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
+                            yield feedback
+                            await self._persist(feedback)
+                            messages.append(feedback)
+                            continue
+                        yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
                         return
-                    if result is not None and result.stop_feedback is not None and self._allow_stop_feedback():
-                        # m3/§6.4 澄清:feedback 必须普通 user_message(is_meta 被过滤,
-                        # 模型不可见);下一轮计为一次 turn(n2)
-                        feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
-                        yield feedback
-                        await self._persist(feedback)
-                        messages.append(feedback)
-                        continue
-                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
-                    return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
             self.last_stop_reason = "error"

@@ -791,21 +791,27 @@ async def test_notify_matches_notification_type():
 
 
 async def test_notify_default_timeout_10s_override():
-    """通知事件默认超时 10s 覆盖执行体默认(§4.2);逐钩子显式 timeout 仍生效。"""
+    """通知事件默认超时 10s 覆盖执行体默认(§4.2);逐钩子显式 timeout 仍生效。
+
+    S5 m3:显式配 60(== 执行体默认)不得被误降为 10 —— 经 timeout_explicit 判定。
+    """
     ex_default = FakeExecutor("d")
     ex_explicit = FakeExecutor("e")
+    ex_sixty = FakeExecutor("f")
     mgr = build_manager(
         {
             "Notification": [
                 {"hooks": [{"type": "command", "command": "d"}]},  # 默认 timeout 60 → 覆盖为 10
                 {"hooks": [{"type": "command", "command": "e", "timeout": 5}]},  # 显式 5 → 生效
+                {"hooks": [{"type": "command", "command": "f", "timeout": 60}]},  # 显式 60 == 默认 → 仍生效
             ]
         },
-        {"d": ex_default, "e": ex_explicit},
+        {"d": ex_default, "e": ex_explicit, "f": ex_sixty},
     )
     await mgr.notify("permission_request", "approve?")
     assert ex_default.timeouts == [NOTIFICATION_TIMEOUT]
     assert ex_explicit.timeouts == [5.0]
+    assert ex_sixty.timeouts == [60.0]
     assert DEFAULT_TIMEOUTS["command"] == 60  # 执行体默认未被破坏
 
 

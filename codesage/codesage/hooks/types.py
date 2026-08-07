@@ -255,6 +255,7 @@ class HookSpec:
     prompt: str | None = None  # type=prompt 必填
     url: str | None = None  # type=http 必填
     timeout: int = 60  # §4.2 默认:command/http 60,prompt 30;正数
+    timeout_explicit: bool = False  # 配置中显式声明 timeout(§4.2:通知默认 10s 覆盖仅限未显式配置,S5 m3)
     if_: str | None = None  # hook 级二级过滤(§2.4),权限规则语法 "Tool(content)"
     model: str | None = None  # 仅 prompt;默认 "quick" 指针,失败自动回退 main
     headers: dict[str, str] | None = None  # 仅 http;值 $VAR 插值仅限 allowedEnvVars(§4.9)
@@ -357,6 +358,7 @@ class HookSpec:
             prompt=data.get("prompt"),
             url=data.get("url"),
             timeout=timeout,
+            timeout_explicit="timeout" in data,
             if_=if_,
             model=model,
             headers=headers,

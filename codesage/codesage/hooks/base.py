@@ -35,8 +35,8 @@ class HookExecutor(Protocol):
         """执行一次钩子调用。input_json 为 HookInput 的惰性序列化结果(§4.10.4)。"""
 
 
-class HookManager(Protocol):
-    """事件分发器(§4.10 执行引擎管线)。具体实现在 S5(registry.py)。"""
+class HookManagerProtocol(Protocol):
+    """事件分发器协议(§4.10 执行引擎管线)。具体实现在 S5(registry.py 的 HookManager)。"""
 
     def has_hooks_for_event(self, event: str) -> bool:
         """快速存在性检查(§4.10.1):索引空 → 零路径,不进管线。"""

@@ -1,15 +1,19 @@
 # 阶段 09:Hook 系统(理解文档)
 
-> 权威设计:`docs/specs/09-hooks.md`(实现时逐字执行)。本文是设计摘要 + 决策记录;实现完成后由实现者补充实现细节。
+> 权威设计:`docs/specs/09-hooks.md`(实现时逐字执行)。本文是设计摘要 + 决策记录 + 实现期关键裁决(S1-S11 全部交付,793 测试全绿,2026-08-07)。
 
 ## 设计摘要
 
 配置驱动的外部钩子系统:settings 三层声明钩子(事件 + matcher + command/prompt/http 执行体),八个生命周期事件(SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop / PreCompact / PostCompact / Notification)调用钩子,输出经严格校验后汇入权限决策链与消息改写。
 
-- **结构**(镜像目录规范):`codesage/hooks/` = 契约层(types.py/base.py)+ 实现层(command.py/prompt.py/http.py)+ 入口层(registry.py)+ `_common.py`;测试镜像 `tests/hooks/test_*.py`。
-- **执行**:子进程命令钩子(POSIX sh / Windows Git Bash,复用 `tools/builtin/shell/bash.py:187-200` 的 _shell_argv 模式)+ 单轮 LLM 提示钩子(quick 指针,{ok,reason} 契约)+ HTTP 钩子(httpx 既有依赖零新增;URL 白名单默认 `[]` 全禁 + SSRF 矩阵 + header 白名单插值 + CRLF 消毒,§4.9)。同步顺序执行,无异步、无 agent 钩子。
-- **接线**:PreToolUse/PostToolUse 挂 tool_queue.py:161-162/167-168/202-203 的休眠 pre/post_hook 位(经 loop.py:534-539 传参接通);UserPromptSubmit 在 loop.py:160/224;Stop 在 completed 与 tool_terminated 分支;SessionStart 在 run() 首部(门闩一次);PreCompact/PostCompact 封装进 `_compact`(loop.py:205-207 auto 主路径 + :246 PTL 路径一处覆盖,PreCompact exit 2 阻止压缩、stdout 注入摘要 prompt,PostCompact 纯观察型);Notification 四 emit 位(loop.py:555-557/558/309-317、tool_queue.py:183-184)。
-- **审计**:权限决策走 audit.jsonl(source=`hook:PreToolUse`,与引擎事件互斥,每工具恰好一条);钩子执行走 hooks.jsonl(每钩子一次 HookAuditEvent)。
+- **结构**(镜像目录规范):`codesage/hooks/` = 契约层(types.py/base.py)+ 实现层(command.py/prompt.py/http.py)+ 入口层(registry.py)+ `_common.py`;测试镜像 `tests/hooks/test_*.py`(八文件:types/registry/command/prompt/http/manager/if_rules/notification)。
+- **执行**:子进程命令钩子(POSIX sh / Windows Git Bash,复用 `tools/builtin/shell/bash.py:187-200` 的 _shell_argv 模式)+ 单轮 LLM 提示钩子(quick 指针,{ok,reason} 契约,§4.8 落地差异见裁决 26-27)+ HTTP 钩子(httpx 既有依赖零新增;URL 白名单默认 `[]` 全禁 + SSRF 矩阵 + header 白名单插值 + CRLF 消毒,§4.9)。同步顺序执行,无异步、无 agent 钩子。
+- **执行引擎**(registry.py HookManager,§4.10):事件→钩子数索引零开销短路 → matcher 组级 → if hook 级(spawn 前)→ 执行层去重 → 顺序执行(超时按 §4.2)→ 输出解析(stdout 256KB 限额 + UTF-8 replace)→ 聚合传递链 → 双流审计。
+- **接线**:PreToolUse/PostToolUse 挂 tool_queue.py 的休眠 pre/post_hook 位(经 loop.py 传参接通);UserPromptSubmit 在 loop.py 首条/steer 两处;Stop 在 completed 与 tool_terminated 分支(门控表 §6.4);SessionStart 在 run() 首部(门闩一次);PreCompact/PostCompact 封装进 `_compact`(auto 主路径 + PTL 路径一处覆盖,PreCompact exit 2 阻止压缩、stdout 注入摘要 prompt,PostCompact 纯观察型);Notification 四 emit 位(permission_request/permission_denied 在 loop.py 权限流程、tool_error 在 tool_queue.py、llm_error 在 loop.py 非流式 LLMError catch)。
+- **审计**:权限决策走 audit.jsonl(source=`hook:PreToolUse`,与引擎事件互斥,每工具恰好一条);钩子执行走 hooks.jsonl(每钩子一次 HookAuditEvent)。通知不产生权限审计事件。
+- **装配**(assemble.py):load_hook_manager 解析一次(快照语义)+ hooks.jsonl 路径;S10 起 client 缺省 None → prompt 钩子运行期 fail-closed。
+
+## 设计决策记录
 
 ## 设计决策记录
 
@@ -33,3 +37,12 @@
 18. **事件→钩子数索引短路** — 配置解析期构建「事件 → 钩子数」索引,事件索引空 → 直接返回不进管线(零开销短路径,无钩子部署零侵入);过度近似设计(不查 matcher/if 只问有无配置),随快照冻结(spec §4.10.1)。
 19. **聚合传递链** — additionalContext/updatedSystemReminder 多钩子输出**顺序 join('\n\n')**(对齐 PreCompact §7.4 先例);updatedInput last-wins(决策 6);prompt 钩子 `ok:false` 即阻塞信号,消费动作同 exit 2;逐事件消费总表见 spec §4.10.6。
 20. **stdout 限额与解码** — stdout 捕获上限 256KB 超限截断(截断 JSON → 解析失败 → fail-closed);stderr 保持 2000 字符截断(§4.5);子进程输出 UTF-8 `errors=replace` 解码(Windows GBK 输出不抛错不中断,GBK 原文进 JSON 解析 → 校验失败,无「乱码当合法 JSON」路径)(spec §4.10.5)。
+
+## 实现期关键裁决(S1-S11,review 驱动落地)
+
+21. **M1:exit 127 = spawn 失败(fail-closed)** — shell 中介下 `exit 127` 是命令不存在的标志:command.py run() 在退出码分类前拦截,按 spawn 失败处理(§4.6 表,PreToolUse → deny);钩子脚本显式 `exit 127` 一并同判(与 CC 非阻塞取向刻意分歧,安全取向优先)。**M1:Bash 地板扩展** — floor_check 对 Bash 复用 analyze_bash_command 的 deny 判定(引擎必拒的 `rm -rf ~` 类命令不得被钩子 allow 绕过),并以 bash_rules.py 新增的 `rm_protected_targets` 补查 rm/rmdir 目标是否命中写保护组件(`rm -rf .git` 类);任一命中 → 降级 ask(requires_explicit_approval)。**M1:Stop 注入上限** — `MAX_STOP_HOOK_ATTEMPTS = 5`(对齐 CC 同名单),loop 层按 run() 生命周期计数,达限后不再注入 feedback、按普通 completed/tool_terminated 停止,不报错(防「永远 exit 2」的钩子拖出无限循环)。
+22. **S5 m3:timeout_explicit 显式标志** — Notification 上显式配 60s(== command 默认)曾被「以等于 DEFAULT_TIMEOUTS 视为默认」近似误降为 10s;HookSpec 新增 `timeout_explicit`(仿 if_evaluable 模式,from_dict 落位),`_timeout_for` 改为「未显式配置才覆盖 10s」(S11 落地,test_manager 补显式 60 断言)。**S5 m2:continue:false 优先于 exit 2 feedback** — Stop 钩子同批既出 continue:false 又 exit 2 时,停止优先(loop.py 注释明示)。
+23. **S10:json_schema 落地差异(如实回写 spec §4.8)** — LLMRequest 无 json_schema/response_format 通道(adapter 不支持),「强制 JSON」以系统提示(SYSTEM_PROMPT,只输出 `{ok: bool}` / `{ok: false, reason}` 两形)+ 客户端严格校验(parse_hook_output:unknown field → additionalProperties:false 语义)落地——安全语义不缩水,仅缺 provider 侧 schema 强制。**S10:{ok,reason} 经退出码通道映射** — 不是 HookJSONOutput 字段(unknown field → 校验失败),故不落 stdout:ok:true → exit 0 + 空 stdout(plainText 无决策);ok:false → exit 2 + stderr=reason,消费动作同 exit 2 行由 S5 按事件区分,S5 零新增合并逻辑。
+24. **S9:llm_error 边界** — 仅非流式 LLMError catch emit(spec §2.5 表补注):流式非 PTL provider error 走 is_error 消息路径(completed 分支的 is_error 消息),不 emit llm_error。
+25. **免疫位审计落位** — ToolAuditEvent 无 immune 字段(audit.py 零改动),allow 事件 reason 追加 ` [immune=true]` 标记(§5.5 约束 4 可追溯)。**SessionStart 禁用的 http 钩子**在收集期剔除,不产生审计事件(从未被调用)。**exit 2 聚合只取首个**(顺序模型首个阻塞信号,仅 PreToolUse deny 短路)。**通知基础三字段**经 notify 的 **data 传入,缺省空字符串(§2.5 HookInput 字段清单)。
+26. **S11:HookManagerProtocol 改名** — hooks/__init__.py 里 base 的 `HookManager` 协议被 registry 同名实现遮蔽成为死导出,改名 `HookManagerProtocol`(base.py + __init__.py 导出 + test_types 协议断言同步)。**S11:engine.py 注释统一中文**(09 分支约定,floor_check 的中文 docstring 与同文件英文注释混排问题,整文件注释翻译,零行为改动)。**S11:new_messages 弃用标注落地**(tools/base.py:68,spec §7.3)。**S11:repl.py 注释修正** — 「无头模式不建 bar」实际无头模式走 cli/__init__.py single-shot 分支根本不进 repl_loop,注释改准确。

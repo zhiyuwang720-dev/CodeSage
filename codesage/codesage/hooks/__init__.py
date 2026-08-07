@@ -6,7 +6,7 @@ S4 HTTP 执行体(http.py)、S5 HookManager 执行引擎(registry.py)、S10 prom
 """
 
 from ._common import HookJsonlSink
-from .base import HookExecutor, HookManager, HookResult
+from .base import HookExecutor, HookManagerProtocol, HookResult
 from .prompt import PromptHookExecutor
 from .registry import HookDispatchResult, HookManager, load_hook_manager
 from .types import (
@@ -42,6 +42,7 @@ __all__ = [
     "HookJSONOutput",
     "HookJsonlSink",
     "HookManager",
+    "HookManagerProtocol",
     "HookResult",
     "HookSpec",
     "HookValidationError",

@@ -11,7 +11,7 @@ from codesage.hooks import (
     HookExecutor,
     HookInput,
     HookJSONOutput,
-    HookManager,
+    HookManagerProtocol,
     HookResult,
     HookSpec,
     HookValidationError,
@@ -482,11 +482,11 @@ def test_hook_result_defaults():
 
 
 def test_protocols_exist():
-    """HookExecutor/HookManager 是协议;具体实现(S3/S4/S10/S5)后续步骤落地。"""
+    """HookExecutor/HookManagerProtocol 是协议;具体实现(S3/S4/S10/S5)后续步骤落地。"""
     assert hasattr(HookExecutor, "run")
-    assert hasattr(HookManager, "dispatch")
-    assert hasattr(HookManager, "notify")
-    assert hasattr(HookManager, "has_hooks_for_event")
+    assert hasattr(HookManagerProtocol, "dispatch")
+    assert hasattr(HookManagerProtocol, "notify")
+    assert hasattr(HookManagerProtocol, "has_hooks_for_event")
 
 
 def test_events_constant():

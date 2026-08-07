@@ -27,7 +27,7 @@
   - 验收:AGENTS.md 逐层收集 + 32KB 截断 + override;system prompt 分层组装(静态 base + reminder 注入);system-reminder(上限 10);git 快照(CC-14);上下文 memoize(CC-13);token 预算(usage 锚点);结构化 auto-compact(PI-05:turn 边界 + split-turn 前缀摘要 + fileOps);旧工具结果清理;压缩后最近文件恢复
   - 验证:上下文组装单测 + 压缩边界单测 + VCR 集成;**471 passed, 9 skipped**
   - 步骤:S1 消息契约(is_reminder/is_compaction_summary + normalize)→ S2 tokens.py → S3 context.py → S4 注入接线 → S5 compaction 核心 → S6 loop 接线 → S7 恢复/清理 → S8 收尾
-- [ ] **09 hooks 钩子系统** (`feat/09-hooks`)(规格:`docs/specs/09-hooks.md`)
+- [x] **09 hooks 钩子系统** (`feat/09-hooks`)(规格:`docs/specs/09-hooks.md`)✅ 2026-08-07
   - 验收:八事件(SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/PreCompact/PostCompact/Notification);钩子先于权限引擎(deny 优先/allow 短路/updatedInput 透传 + 写保护地板);safetyCheck bypass-免疫位(仅 hook allow 可设);命令+提示+HTTP 三执行体;if 条件(hook 级,复用权限规则语法,仅 PreToolUse/PostToolUse 可求值,工具不存在/校验失败恒 false,matcher 先 if 后);compact 事件(封装进 `_compact`:auto 主路径 + PTL 路径一处覆盖;PreCompact exit 2 阻止压缩、stdout 多钩子 join 注入摘要 prompt、fail-open;PostCompact 纯观察型);Notification 四通知源(permission_request/permission_denied/tool_error/llm_error,全 fail-open + 默认 10s,statusbar 消费,不产生权限审计事件);JSON 结果解析;fail-closed(PreToolUse 超时/JSON 失败 → deny);双流审计(权限 audit.jsonl + hooks.jsonl);执行引擎管线(§4.10:无钩子零开销短路(事件→钩子数索引)/执行层去重(同批只执行/审计一次)/stdout 限额(256KB 截断 + UTF-8 errors=replace)/聚合输出传递链(逐事件消费总表))
   - 验证:决策合并矩阵单测 + 执行器单测(test_command/test_prompt/test_http)+ 事件接线单测(test_compact_events/test_notification)+ if 单测(test_if_rules);**515 全绿 + 09 新增**
   - 步骤:S1 契约层(types/base)→ S2 匹配与解析+if 过滤(_common)→ S3 命令执行体 → S4 HTTP 执行体(http.py)→ S5 HookManager(含 notify)→ S6 引擎接线(floor_check)→ S7 事件接线 → S8 compact 事件接线 → S9 通知 emit → S10 提示执行体+装配 → S11 收尾

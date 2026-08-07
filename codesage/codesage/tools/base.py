@@ -65,7 +65,7 @@ class ToolResult:
 
     content: str | list[ContentBlock]
     is_error: bool = False
-    new_messages: list[Message] | None = None  # injected into the conversation (phase 06)
+    new_messages: list[Message] | None = None  # deprecated (phase 09): use hooks channels; retained for compatibility, remove in a later phase
     metadata: dict[str, Any] = field(default_factory=dict)
     terminate: bool = False  # request turn stop; all siblings must agree
 

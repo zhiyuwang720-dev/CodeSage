@@ -43,7 +43,6 @@ from .command import (
 from .http import HttpHookExecutor
 from .prompt import PromptHookExecutor
 from .types import (
-    DEFAULT_TIMEOUTS,
     MATCHER_IGNORED_EVENTS,
     NOTIFICATION_TYPES,
     HookAuditEvent,
@@ -54,8 +53,8 @@ from .types import (
 
 logger = logging.getLogger("codesage.hooks")
 
-#: 通知事件整体超时覆盖(§4.2 表):默认 10s,逐钩子显式 timeout 仍覆盖。
-#: HookSpec 无法区分「显式配 60」与「默认 60」,以等于 DEFAULT_TIMEOUTS 视为默认 → 覆盖。
+#: 通知事件整体超时覆盖(§4.2 表):默认 10s,逐钩子显式 timeout 仍覆盖
+#: (经 HookSpec.timeout_explicit 区分「显式配 60」与「默认 60」,不再以相等近似)。
 NOTIFICATION_TIMEOUT = 10.0
 
 #: 每事件 matcher 匹配值取法(§2.2 事件表匹配值列;UserPromptSubmit/Stop 不匹配,§2.3)
@@ -129,7 +128,7 @@ def _dedup_key(spec: HookSpec) -> tuple[str, str, str | None]:
 
 
 class HookManager:
-    """事件分发器(实现 base.py 的 HookManager 协议,§4.10 统一管线)。
+    """事件分发器(实现 base.py 的 HookManagerProtocol 协议,§4.10 统一管线)。
 
     构造:parse_hook_config 产物(事件 → 组 → 钩子)+ 执行体工厂(事件 → 执行体实例
     映射,构造期一次装配)。快照语义(§3.2):构造后配置不热载。
@@ -390,6 +389,9 @@ class HookManager:
             logger.warning("hook output validation failed (fail-closed, §4.6): %s", exc)
             return "validation_error", None, str(exc)[:200], None
         except HookExecutionError as exc:
+            # §4.6:spawn 失败/执行体失败。outcome 记 non_blocking_error,但 PreToolUse
+            # 下实际效果是 deny(failed 位由 S5 转 §4.6 表 fail-closed)——审计标签与
+            # 决策效果分离是 S5 既有行为(r-s10 Nit,仅注释澄清,不改语义)
             logger.warning("hook execution failed (§4.6): %s", exc)
             return "non_blocking_error", None, str(exc)[:200], None
         except Exception as exc:
@@ -509,8 +511,11 @@ class HookManager:
         # SessionStart/PostToolUse/PostCompact/Notification:exit 2 与非阻塞等同(§4.3/§2.5)
 
     def _timeout_for(self, event: str, spec: HookSpec) -> float:
-        """逐钩子超时(§4.2):Notification 事件默认 10s 覆盖执行体默认,显式配置仍生效。"""
-        if event == "Notification" and spec.timeout == DEFAULT_TIMEOUTS.get(spec.type):
+        """逐钩子超时(§4.2):Notification 事件默认 10s 覆盖执行体默认,显式 timeout 仍生效。
+
+        显式与否经 HookSpec.timeout_explicit 判定(「显式配 60」不被误降为 10,S5 m3)。
+        """
+        if event == "Notification" and not spec.timeout_explicit:
             return NOTIFICATION_TIMEOUT
         return float(spec.timeout)
 
