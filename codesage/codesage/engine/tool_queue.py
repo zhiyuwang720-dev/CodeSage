@@ -82,6 +82,7 @@ class ToolUseQueue:
         post_hook: Any | None = None,  # async (ScheduledTool, ToolResult) -> None (阶段 09 §6.1)
         finalize: Any | None = None,  # async (ScheduledTool, ToolResult) -> ToolResult (PI-02)
         on_tool_event: Any | None = None,  # (event, tool_name, payload) lifecycle (PI-01)
+        notify: Any | None = None,  # async (notification_type, message, **data) — 阶段 09 §2.5 通知 emit
     ):
         self._tools = tools
         self._permission_check = permission_check
@@ -89,6 +90,7 @@ class ToolUseQueue:
         self._post_hook = post_hook
         self._finalize = finalize
         self._on_tool_event = on_tool_event
+        self._notify = notify
 
     def _emit_tool_event(self, event: str, tool_name: str, payload: dict) -> None:
         """Fire a lifecycle event; a misbehaving callback must never break tools."""
@@ -191,6 +193,14 @@ class ToolUseQueue:
                     )
         except ToolError as exc:
             result = ToolResult(str(exc), is_error=True, metadata={"error_code": exc.code} if exc.code else {})
+            # 通知(§2.5):tool_error fail-open emit —— 失败仅日志,不拖累工具错误路径
+            if self._notify is not None:
+                await self._notify(
+                    "tool_error",
+                    f"Tool error: {item.tool.name}: {exc}",
+                    tool_name=item.tool.name,
+                    error_code=exc.code if exc.code else None,  # 与 ToolResult metadata 同策略
+                )
         finally:
             self._emit_tool_event("end", item.tool.name, {"tool_use_id": item.tool_use_id})
         if result is None:

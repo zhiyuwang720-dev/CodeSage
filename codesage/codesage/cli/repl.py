@@ -169,6 +169,13 @@ async def repl_loop(
     print(_c("CodeSage — V1 (type /help for commands, Ctrl+C to interrupt, Ctrl+O to expand)", CYAN))
     bar.move_to_input()
 
+    # 通知消费(阶段 09 §2.5):状态行走 bar.print_below(滚动区一行);无头模式
+    # (--output-format json)不建 bar → on_notification 保持 None,通知仅进
+    # hooks.jsonl + 日志
+    loop.on_notification = lambda ntype, message, data: bar.print_below(
+        _render_notification(ntype, message)
+    )
+
     def _bar_redraw() -> None:
         # "thinking" reflects the /show-thinking mode switch (transcript
         # expansion), not live model activity — no engine event feeds that
@@ -211,6 +218,11 @@ async def repl_loop(
             bar.move_to_input()  # back to the fixed prompt line
     finally:
         bar.disable()
+
+
+def _render_notification(notification_type: str, message: str) -> str:
+    """通知状态行(阶段 09 §2.5):滚动区一行灰字,bar.print_below 的输入。"""
+    return _c(f"[{notification_type}] {message}", GREY)
 
 
 def _model_display_name(loop: AgentLoop) -> str:

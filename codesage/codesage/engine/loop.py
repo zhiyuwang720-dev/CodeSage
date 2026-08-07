@@ -104,6 +104,7 @@ class AgentLoop:
         on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
+        on_notification: Callable[[str, str, dict], None] | None = None,  # 通知 UI 消费(§2.5:statusbar)
         finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
         hooks: HookManager | None = None,  # 阶段 09:事件钩子管理器(None = 禁用;S10 装配传入)
     ):
@@ -145,6 +146,7 @@ class AgentLoop:
         self.on_stream = on_stream
         self.steer_queue = steer_queue
         self.on_tool_event = on_tool_event
+        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
         self.finalize = finalize
         self.hooks = hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
@@ -384,6 +386,8 @@ class AgentLoop:
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
             self.last_stop_reason = "error"
+            # 通知(§2.5):llm_error —— provider error 消息位;fail-open
+            await self._notify("llm_error", f"LLM error: {exc}", status_code=exc.status_code)
             failed = assistant_message(
                 f"(provider error: {exc})",
                 is_error=True,
@@ -648,8 +652,33 @@ class AgentLoop:
             post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
             finalize=self.finalize,
+            notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
         )
         return await queue.run()
+
+    async def _notify(
+        self, notification_type: str, message: str, *, title: str | None = None, **data: Any
+    ) -> None:
+        """通知 emit(阶段 09 §2.5):hooks.notify(fail-open)+ UI 回调,均不抛错。
+
+        通知源处于 UI 关键路径(权限弹窗/错误路径),任何失败仅日志 —— 不拖慢
+        权限询问/错误路径。基础三字段(session_id/cwd/session_path)在此补齐。
+        """
+        data.setdefault("session_id", self.session.session_id if self.session else "")
+        data.setdefault("cwd", str(self.cwd))
+        data.setdefault("session_path", str(self.session.path) if self.session else "")
+        try:
+            if self.hooks is not None:
+                await self.hooks.notify(notification_type, message, title=title, **data)
+        except Exception:
+            # fail-open(§2.5):通知失败/超时仅日志+审计,不拖慢调用方
+            logger.exception("hooks.notify failed (fail-open, §2.5)")
+        try:
+            if self.on_notification is not None:
+                self.on_notification(notification_type, message, dict(data))
+        except Exception:
+            # UI 回调独立 try:hook 失败不得连带跳过权限弹窗这类关键状态行
+            logger.exception("on_notification callback failed (best-effort)")
 
     async def _permission_check(self, item: ScheduledTool) -> ToolResult | None:
         """Return a denial ToolResult, or None to allow execution."""
@@ -665,8 +694,29 @@ class AgentLoop:
         if decision.allowed:
             return None
         if decision.mode == "ask" and self.request_permission is not None:
+            # 通知(§2.5):permission_request —— 进入 request_permission 前 emit;
+            # fail-open:通知 hook 失败不影响权限弹窗
+            await self._notify(
+                "permission_request",
+                f"Permission requested: {item.tool.name}",
+                title=item.tool.name,
+                tool_name=item.tool.name,
+                tool_input=item.input,
+                mode=decision.mode,
+                reason=decision.reason,
+            )
             if await self.request_permission(decision, item.tool, item.input):
                 return None
+        # 通知(§2.5):permission_denied —— ask 被拒 / 非 ask 硬拒统一位;fail-open
+        await self._notify(
+            "permission_denied",
+            f"Permission denied: {item.tool.name}",
+            title=item.tool.name,
+            tool_name=item.tool.name,
+            tool_input=item.input,
+            mode=decision.mode,
+            reason=decision.reason,
+        )
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
 
     async def _pre_tool_use_hook(self, item: ScheduledTool) -> ToolResult | None:
