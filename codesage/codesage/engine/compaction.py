@@ -218,12 +218,20 @@ def find_previous_summary(messages: list[SessionMessage]) -> str | None:
     return None
 
 
-def _summary_prompt(conversation: str, previous_summary: str | None) -> str:
+def _summary_prompt(
+    conversation: str, previous_summary: str | None, extra_instructions: str | None = None
+) -> str:
     if previous_summary:
-        return UPDATE_SUMMARIZATION_PROMPT.format(
+        prompt = UPDATE_SUMMARIZATION_PROMPT.format(
             previous_summary=previous_summary, conversation=conversation
         )
-    return SUMMARIZATION_PROMPT.format(conversation=conversation)
+    else:
+        prompt = SUMMARIZATION_PROMPT.format(conversation=conversation)
+    if extra_instructions:
+        # 阶段 09 §7.4:PreCompact 钩子 custom instructions —— 追加在 conversation
+        # 标签之后(指令在会话外,不混入会话内容);请求视图内一次性构造,不落会话
+        prompt = f"{prompt}\n\n# Custom Instructions\n{extra_instructions}"
+    return prompt
 
 
 def _drop_oldest_turn(messages: list[SessionMessage]) -> list[SessionMessage] | None:
@@ -252,6 +260,7 @@ async def _request_summary(
     *,
     retry_messages: list[SessionMessage] | None = None,
     previous_summary: str | None = None,
+    extra_instructions: str | None = None,  # 阶段 09 §7.4:PreCompact custom instructions
 ) -> str:
     """One summary request; on PTL, re-serialize with the oldest turn dropped
     and retry exactly once (the request itself can exceed the window when the
@@ -270,7 +279,9 @@ async def _request_summary(
         trimmed = _drop_oldest_turn(retry_messages)
         if trimmed is None:
             raise
-        retry_prompt = _summary_prompt(serialize_conversation(trimmed), previous_summary)
+        retry_prompt = _summary_prompt(
+            serialize_conversation(trimmed), previous_summary, extra_instructions=extra_instructions
+        )
         response = await client.complete(
             LLMRequest(
                 messages=[Message(role="user", content=retry_prompt)],
@@ -293,6 +304,7 @@ async def generate_summary(
     cut: CutPoint | None = None,
     max_tokens: int | None = None,
     previous_summary: str | None = None,
+    extra_instructions: str | None = None,  # 阶段 09 §7.4:PreCompact custom instructions
 ) -> str:
     """Summarize the compressed span (messages[:cut.index]).
 
@@ -308,18 +320,26 @@ async def generate_summary(
     prev = previous_summary if previous_summary is not None else find_previous_summary(compressed)
     summary = await _request_summary(
         client,
-        _summary_prompt(serialize_conversation(compressed), prev),
+        _summary_prompt(
+            serialize_conversation(compressed), prev, extra_instructions=extra_instructions
+        ),
         max_tokens,
         retry_messages=compressed,
         previous_summary=prev,
+        extra_instructions=extra_instructions,
     )
     if cut.turn_prefix:
         prefix = await _request_summary(
             client,
-            _summary_prompt(serialize_conversation(cut.turn_prefix), None),
+            _summary_prompt(
+                serialize_conversation(cut.turn_prefix),
+                None,
+                extra_instructions=extra_instructions,
+            ),
             max_tokens,
             retry_messages=cut.turn_prefix,
             previous_summary=None,
+            extra_instructions=extra_instructions,
         )
         summary = f"{summary}\n\n{prefix}"
     return summary

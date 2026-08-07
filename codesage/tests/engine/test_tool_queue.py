@@ -235,3 +235,78 @@ async def test_abort_event_skips_unstarted_siblings():
     for r in results[1:]:
         assert r.result.is_error
         assert "(interrupted by user)" in str(r.result.content)
+
+
+# ---- 阶段 09 S6:pre_hook/post_hook 接线(§5.1 队列流程改造) ----
+
+def _deny(msg="Permission denied by hook fake: no"):
+    return ToolResult(msg, is_error=True)
+
+
+async def test_pre_hook_deny_blocks_tool():
+    """钩子 deny → 工具不执行、引擎不跑、error_code=permission_blocked、post_hook 拿到拒绝结果。"""
+    ran = []
+    permission_calls = []
+    seen = []
+
+    class RanTool(FastTool):
+        async def _run(self, input, ctx):
+            ran.append(True)
+            return ToolResult("ran")
+
+    async def deny(item):
+        seen.append(("pre", item.tool.name))
+        return _deny()
+
+    async def post(item, result):
+        seen.append(("post", item.tool.name, result.is_error))
+
+    async def perm(item):
+        permission_calls.append(item.tool.name)
+        return None
+
+    items = _schedule([RanTool()])
+    await ToolUseQueue(items, permission_check=perm, pre_hook=deny, post_hook=post).run()
+    assert ran == []  # 工具从未执行
+    assert permission_calls == []  # 引擎决策链不运行
+    assert ("pre", "Fast") in seen and ("post", "Fast", True) in seen
+    assert items[0].result.is_error
+    assert items[0].result.metadata.get("error_code") == "permission_blocked"
+
+
+async def test_pre_hook_allow_shortcircuits_permission_check():
+    """钩子 allow → item.hook_allowed=True,引擎决策链不运行,工具照常执行。"""
+    permission_calls = []
+
+    async def pre(item):
+        item.hook_allowed = True
+        return None
+
+    async def perm(item):
+        permission_calls.append(item.tool.name)
+        return _deny()
+
+    items = _schedule([FastTool()])
+    await ToolUseQueue(items, permission_check=perm, pre_hook=pre).run()
+    assert permission_calls == []
+    assert items[0].result.content == "fast"
+
+
+async def test_pre_hook_deny_does_not_poison_siblings():
+    """钩子 deny 复用 permission_blocked 语义:被拒工具不株连同批 sibling(§5.1/既有豁免)。"""
+    ran = []
+
+    class RanTool(FastTool):
+        async def _run(self, input, ctx):
+            ran.append(input.get("tag"))
+            return ToolResult(f"ok:{input.get('tag')}")
+
+    async def pre(item):
+        return _deny() if item.tool_use_id == "t0" else None
+
+    items = _schedule([RanTool(), RanTool()], inputs=[{"tag": "a"}, {"tag": "b"}])
+    await ToolUseQueue(items, pre_hook=pre).run()
+    assert ran == ["b"]  # sibling 照常执行
+    assert items[0].result.is_error
+    assert items[0].result.metadata.get("error_code") == "permission_blocked"
+    assert items[1].result.content == "ok:b"

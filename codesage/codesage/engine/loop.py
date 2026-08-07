@@ -23,8 +23,9 @@ logger = logging.getLogger("codesage.engine")
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from ..ai.retry import is_ptl_error, is_ptl_text
+from ..hooks import HookDispatchResult, HookInput, HookManager  # 阶段 09:事件钩子(HookManager 协议/实现)
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
-from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
+from ..permissions import PermissionDecision, PermissionEngine, PermissionMode, ToolAuditEvent
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
 from .compaction import (
@@ -62,6 +63,10 @@ REMINDER_FOOTER = "\n\nIMPORTANT: this context may or may not be relevant to you
 THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
 THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
 THINKING_ONLY_MAX_RETRIES = 3
+#: Stop feedback 注入上限(M1,09 补,对齐 CC MAX_STOP_HOOK_ATTEMPTS=5):
+#: 达限后不再注入 feedback、按普通 completed/tool_terminated 停止,不报错——
+#: 防「永远 exit 2」的钩子拖出无限循环(§6.4)。
+MAX_STOP_HOOK_ATTEMPTS = 5
 
 
 def _is_thinking_only(message: SessionMessage) -> bool:
@@ -99,7 +104,9 @@ class AgentLoop:
         on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
+        on_notification: Callable[[str, str, dict], None] | None = None,  # 通知 UI 消费(§2.5:statusbar)
         finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
+        hooks: HookManager | None = None,  # 阶段 09:事件钩子管理器(None = 禁用;S10 装配传入)
     ):
         self.client = client
         self.tools = tools
@@ -139,7 +146,17 @@ class AgentLoop:
         self.on_stream = on_stream
         self.steer_queue = steer_queue
         self.on_tool_event = on_tool_event
+        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
         self.finalize = finalize
+        self.hooks = hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
+        self._session_started = False
+        #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
+        #: 一次性 prefix,注入后清除(与 _recovery_reminder 同款模式)
+        self._hook_reminder: str | None = None
+        #: Stop feedback 注入计数(M1,§6.4):run() 生命周期,达 MAX_STOP_HOOK_ATTEMPTS
+        #: 后不再注入(与 turn 同生命周期,run() 入口重置)
+        self._stop_feedback_count = 0
         #: Termination reason of the last run(): "completed" | "max_turns" |
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
@@ -157,6 +174,18 @@ class AgentLoop:
         self._ptl_retried = False
         self._last_cache_read = 0
         self._active_messages = None
+        self._stop_feedback_count = 0  # M1:feedback 计数与 turn 同生命周期(§6.4)
+        # SessionStart 钩子(§6.2):run() 入口,门闩一次 —— 首个 run() 派发后置位,
+        # 生命周期内不再触发;非阻塞(§4.6 表:非 PreToolUse 事件 fail-open)
+        if not self._session_started:
+            self._session_started = True
+            await self._dispatch_session_start()
+        # UserPromptSubmit 钩子(§6.2):首条输入,user_message() 之前;exit 2 →
+        # 阻止提交(输入擦除),钩子 stderr 作为终结消息
+        user_input, blocked = await self._dispatch_user_prompt(user_input)
+        if blocked is not None:
+            yield await self._stop("hook_blocked", blocked, meta=True)
+            return
         first = user_message(user_input)
         yield first
         await self._persist(first)
@@ -204,7 +233,9 @@ class AgentLoop:
                     estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
                         self._last_compact_turn = turn  # debounce: no second pass this turn
-                        compacted = await self._compact(messages)  # RAW span: summary keeps full detail
+                        # PreCompact 的 context_tokens = 压缩检查点的请求视图估算
+                        # (cleaned 视图,§6.2);PTL 路径无此变量,_compact 内回退估算
+                        compacted = await self._compact(messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
                         if compacted is not None:
                             summary_msg, cut = compacted
                             yield summary_msg
@@ -221,7 +252,15 @@ class AgentLoop:
                         except asyncio.QueueEmpty:
                             break
                     for text in steers:
-                        steer_msg = user_message(text)
+                        # UserPromptSubmit 钩子(§6.2):steer 输入,user_message() 之前;
+                        # blocked → 静默丢弃 + 日志,只影响该条输入,不中断运行
+                        submitted, blocked = await self._dispatch_user_prompt(text)
+                        if blocked is not None:
+                            logger.warning(
+                                "UserPromptSubmit hook blocked a steer input (§6.2): dropped"
+                            )
+                            continue
+                        steer_msg = user_message(submitted)
                         yield steer_msg
                         await self._persist(steer_msg)
                         messages.append(steer_msg)
@@ -275,6 +314,28 @@ class AgentLoop:
                     # an is_error response (provider failure with no text) is
                     # NOT a completed turn — stop reason must say so (P3-7)
                     self.last_stop_reason = "error" if assistant.is_error else "completed"
+                    if assistant.is_error:
+                        return
+                    # Stop 钩子(§6.4):completed 分支(门控表:error 不触发)。钩子可
+                    # 拦下停止(continue:false)或注入 feedback 让模型再决策一轮
+                    result = await self._dispatch_stop("completed", assistant)
+                    if result is not None:
+                        if result.stop:
+                            # S5 m2:显式 continue:false 优先级 > exit 2 feedback;
+                            # 钩子自产的停止不再触发 Stop 钩子(§2.2 防递归:直接 return)
+                            yield await self._stop(
+                                "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
+                            )
+                            return
+                        if result.stop_feedback is not None and self._allow_stop_feedback():
+                            # m3/§6.4 澄清:feedback 必须是普通 user_message —— is_meta
+                            # 会被 normalize_for_api 过滤,模型不可见;注入后下一轮
+                            # 计为一次 turn(n2)
+                            feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
+                            yield feedback
+                            await self._persist(feedback)
+                            messages.append(feedback)
+                            continue
                     return
 
                 # execute tools (checkpoint 2: abort before the batch)
@@ -301,14 +362,33 @@ class AgentLoop:
                 # PI-04: terminate semantics — the turn stops only when EVERY
                 # tool in the batch asks to stop. Checked AFTER the tool results
                 # were yielded so the model/user still see what the tools did.
-                if scheduled and all(
-                    item.result is not None and item.result.terminate for item in scheduled
-                ):
-                    yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
-                    return
+                if scheduled:
+                    if all(
+                        item.result is not None and item.result.terminate for item in scheduled
+                    ):
+                        # Stop 钩子(§6.4):tool_terminated 分支(_stop 前);结果已在上面
+                        # yield,钩子拦下后模型仍看得到工具做了什么
+                        result = await self._dispatch_stop("tool_terminated", assistant)
+                        if result is not None and result.stop:
+                            yield await self._stop(
+                                "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
+                            )
+                            return
+                        if result is not None and result.stop_feedback is not None and self._allow_stop_feedback():
+                            # m3/§6.4 澄清:feedback 必须普通 user_message(is_meta 被过滤,
+                            # 模型不可见);下一轮计为一次 turn(n2)
+                            feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
+                            yield feedback
+                            await self._persist(feedback)
+                            messages.append(feedback)
+                            continue
+                        yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
+                        return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
             self.last_stop_reason = "error"
+            # 通知(§2.5):llm_error —— provider error 消息位;fail-open
+            await self._notify("llm_error", f"LLM error: {exc}", status_code=exc.status_code)
             failed = assistant_message(
                 f"(provider error: {exc})",
                 is_error=True,
@@ -323,22 +403,44 @@ class AgentLoop:
 
     # ---- internals ----
 
-    async def _compact(self, messages: list[SessionMessage]) -> tuple[SessionMessage, CutPoint] | None:
+    async def _compact(
+        self,
+        messages: list[SessionMessage],
+        *,
+        trigger: str = "auto",  # 阶段 09 §2.2:阶段 10 manual 预留,v1 恒 "auto"
+        context_tokens: int | None = None,  # 压缩检查点的估算值(auto 路径传入;PTL 路径回退估算)
+    ) -> tuple[SessionMessage, CutPoint] | None:
         """Summarize the history span and persist the summary (append-only).
 
         Returns (summary_message, cut) on success, None when there is nothing
         to compress or the request failed. Two consecutive failures trip the
         breaker (specs/08 §3.5): the feature disables itself instead of
         burning a summary call every turn.
+
+        阶段 09 §6.2:PreCompact/PostCompact 钩子封装在本函数内,一处覆盖
+        auto 主路径与 PTL 反应式两个调用点。PreCompact exit 2 → 阻止本轮
+        压缩(防抖已占位,下轮 turn+1 恢复);钩子失败/超时/无输出 → fail-open
+        (压缩照常无指令);两者都不计入 _compact_failures(R1 §5,熔断只由
+        generate_summary 的 LLMError 驱动)。PostCompact 纯观察型。
         """
         cut = find_cut_point(messages, keep_recent=self.compaction.keep_recent)
         if cut is None:
             return None  # not a success — the failure streak stays intact (breaker)
+        # PreCompact 钩子(§6.2/§7.4):find_cut_point 后、generate_summary 前
+        if context_tokens is None:
+            context_tokens = estimate_context_tokens(messages).tokens
+        blocked, instructions = await self._dispatch_pre_compact(trigger, context_tokens)
+        if blocked:
+            return None  # 与 cut is None 同语义:调用方不替换消息;熔断计数不动
         compressed = messages[: cut.index]
         prev_summary = find_previous_summary(compressed)
         try:
             summary = await generate_summary(
-                self.client, messages, cut=cut, previous_summary=prev_summary
+                self.client,
+                messages,
+                cut=cut,
+                previous_summary=prev_summary,
+                extra_instructions=instructions,  # §7.4:custom instructions 注入摘要 prompt
             )
         except LLMError:
             self._compact_failures += 1
@@ -353,6 +455,8 @@ class AgentLoop:
         summary_msg = summary_message(ops.append_to(summary))
         self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
         await self._persist(summary_msg)  # append-only: compaction appends one summary
+        # PostCompact 钩子(§6.2):成功返回前,纯观察型(exit 2 与非阻塞等同)
+        await self._dispatch_post_compact(trigger, summary_msg, cut)
         return summary_msg, cut
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
@@ -396,6 +500,17 @@ class AgentLoop:
                 )
             )
             self._recovery_reminder = None
+        if self._hook_reminder is not None:
+            # §7.2:钩子注入的 updatedSystemReminder/additionalContext 作为第三位
+            # prefix 消息(context bundle + recovery 之后、历史之前);一次性消费。
+            # 内容变化主动打破前缀缓存,§3.9 检测器只记日志(§7.2 预期行为)
+            prefix.append(
+                Message(
+                    role="user",
+                    content=f"{REMINDER_HEADER}{self._hook_reminder}{REMINDER_FOOTER}",
+                )
+            )
+            self._hook_reminder = None
         if prefix:
             api_messages = [*prefix, *api_messages]
         request = LLMRequest(
@@ -534,10 +649,37 @@ class AgentLoop:
         queue = ToolUseQueue(
             scheduled,
             permission_check=self._permission_check,
+            pre_hook=self._pre_tool_use_hook,  # PreToolUse 钩子(阶段 09 §5.1,先于权限引擎)
+            post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
             finalize=self.finalize,
+            notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
         )
         return await queue.run()
+
+    async def _notify(
+        self, notification_type: str, message: str, *, title: str | None = None, **data: Any
+    ) -> None:
+        """通知 emit(阶段 09 §2.5):hooks.notify(fail-open)+ UI 回调,均不抛错。
+
+        通知源处于 UI 关键路径(权限弹窗/错误路径),任何失败仅日志 —— 不拖慢
+        权限询问/错误路径。基础三字段(session_id/cwd/session_path)在此补齐。
+        """
+        data.setdefault("session_id", self.session.session_id if self.session else "")
+        data.setdefault("cwd", str(self.cwd))
+        data.setdefault("session_path", str(self.session.path) if self.session else "")
+        try:
+            if self.hooks is not None:
+                await self.hooks.notify(notification_type, message, title=title, **data)
+        except Exception:
+            # fail-open(§2.5):通知失败/超时仅日志+审计,不拖慢调用方
+            logger.exception("hooks.notify failed (fail-open, §2.5)")
+        try:
+            if self.on_notification is not None:
+                self.on_notification(notification_type, message, dict(data))
+        except Exception:
+            # UI 回调独立 try:hook 失败不得连带跳过权限弹窗这类关键状态行
+            logger.exception("on_notification callback failed (best-effort)")
 
     async def _permission_check(self, item: ScheduledTool) -> ToolResult | None:
         """Return a denial ToolResult, or None to allow execution."""
@@ -553,9 +695,318 @@ class AgentLoop:
         if decision.allowed:
             return None
         if decision.mode == "ask" and self.request_permission is not None:
+            # 通知(§2.5):permission_request —— 进入 request_permission 前 emit;
+            # fail-open:通知 hook 失败不影响权限弹窗
+            await self._notify(
+                "permission_request",
+                f"Permission requested: {item.tool.name}",
+                title=item.tool.name,
+                tool_name=item.tool.name,
+                tool_input=item.input,
+                mode=decision.mode,
+                reason=decision.reason,
+            )
             if await self.request_permission(decision, item.tool, item.input):
                 return None
+        # 通知(§2.5):permission_denied —— ask 被拒 / 非 ask 硬拒统一位;fail-open
+        await self._notify(
+            "permission_denied",
+            f"Permission denied: {item.tool.name}",
+            title=item.tool.name,
+            tool_name=item.tool.name,
+            tool_input=item.input,
+            mode=decision.mode,
+            reason=decision.reason,
+        )
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
+
+    async def _pre_tool_use_hook(self, item: ScheduledTool) -> ToolResult | None:
+        """PreToolUse 钩子接线(阶段 09 §5.1/§5.2/§5.4/§5.3),先于权限引擎。
+
+        dispatch 决策合并后落位:updatedInput 改写 item.input(引擎与执行读同一
+        字段)、hook_allowed/immune 落位(§5.2/§5.5);deny → 拒绝 ToolResult。
+        allow 短路引擎决策链,唯一例外 = 写保护地板(§5.3):降级为
+        request_permission 人工确认。返回 None = 继续(引擎照常或 allow 放行)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PreToolUse"):
+            return None  # 零路径(§4.10.1):未配置钩子 → 引擎照常
+        try:
+            result = await hooks.dispatch(
+                "PreToolUse",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "tool_name": item.tool.name,
+                        "tool_input": item.input,
+                        "tool_use_id": item.tool_use_id,
+                    },
+                ),
+                abort_event=self.abort,  # §6.3:钩子批次 abort 感知
+            )
+        except Exception:
+            # §6.3:钩子层自身 bug 不拖垮主循环;PreToolUse 下 fail-closed
+            # (§4.6 原则:钩子没能说话 → 安全门关闭,拒绝经 permission_blocked
+            # 豁免不株连 sibling)。§8.1「每决策恰一条」:异常 deny 也记一条审计。
+            logger.exception("PreToolUse hook dispatch failed (fail-closed)")
+            self.permissions.audit.emit(
+                ToolAuditEvent(
+                    tool_name=item.tool.name,
+                    decision="deny",
+                    reason="PreToolUse hook dispatch error (fail-closed)",
+                    source="hook:PreToolUse",
+                    mode="default",
+                    input_summary=None,  # 钩子输入内容不落审计(§8.1)
+                )
+            )
+            return ToolResult("Permission denied by hook: dispatch error", is_error=True)
+        if result.updated_input is not None:
+            # §5.4:改写先于引擎求值,引擎与执行读同一字段。deny 终局下改写也已
+            # 并入此字段——但工具不执行、会话不落盘,改写无消费面,无害(m3)
+            item.input = result.updated_input
+        item.hook_allowed = result.hook_allowed  # §5.2:allow 短路位
+        item.immune = result.immune  # §5.5:免疫位仅携带 + 审计(v1 无消费面)
+        if result.permission_decision == "deny":
+            return ToolResult(result.deny_reason or "Permission denied by hook", is_error=True)
+        if result.hook_allowed:
+            # §5.3:写保护地板是 allow 短路的唯一例外 —— 降级为人工确认
+            # (审计 source=write-protection 由 floor_check 经 _decide 既有路径发出)
+            floor = self.permissions.floor_check(
+                tool_name=item.tool.name, tool_input=item.input, cwd=self.cwd, mode=self.mode
+            )
+            if floor is not None:
+                if self.request_permission is not None and await self.request_permission(
+                    floor, item.tool, item.input
+                ):
+                    return None  # 人工确认 → 放行(引擎不跑:钩子已决策)
+                return ToolResult(f"Permission denied: {floor.reason}", is_error=True)
+        return None
+
+    async def _post_tool_use_hook(self, item: ScheduledTool, result: ToolResult) -> None:
+        """PostToolUse 钩子接线(阶段 09 §6.1):成功与拒绝路径都触发,观察型(§4.10.6)。
+
+        tool_response = 序列化 ToolResult(content + is_error)。钩子失败仅日志,
+        不改变工具结果(§6.3 best-effort,不拖垮主循环)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PostToolUse"):
+            return
+        try:
+            await hooks.dispatch(
+                "PostToolUse",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "tool_name": item.tool.name,
+                        "tool_input": item.input,
+                        "tool_use_id": item.tool_use_id,
+                        "tool_response": {"content": result.content, "is_error": result.is_error},
+                    },
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            logger.exception("PostToolUse hook dispatch failed")
+
+    async def _dispatch_session_start(self) -> None:
+        """SessionStart 钩子(§6.2):run() 入口,门闩一次(调用方已判位)。
+
+        HookInput 独有字段(§2.2):source(startup/resume,history 非空即 resume)、
+        model。非阻塞(§4.6 表):exit 2 忽略(§4.3),异常仅日志,不拖垮启动。
+        additionalContext 累积进一次性 _hook_reminder(§7.1)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("SessionStart"):
+            return
+        try:
+            result = await hooks.dispatch(
+                "SessionStart",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "source": "resume" if self.history else "startup",
+                        "model": self.model,
+                    },
+                ),
+                abort_event=self.abort,  # §6.3:钩子批次 abort 感知
+            )
+        except Exception:
+            logger.exception("SessionStart hook dispatch failed (non-blocking, §4.6)")
+            return
+        self._accumulate_hook_reminder(result.additional_context)
+
+    async def _dispatch_user_prompt(
+        self, user_input: str | list[ContentBlock]
+    ) -> tuple[str | list[ContentBlock] | None, str | None]:
+        """UserPromptSubmit 钩子(§6.2):每条用户输入,user_message() 之前(fail-open)。
+
+        返回 (改写后输入, blocking_error):blocking_error 非 None = exit 2 阻止提交
+        (§4.3 输入擦除,调用方终结运行或静默丢弃);updatedPrompt 改写输入文本(§7.1);
+        updatedSystemReminder/additionalContext 累积进一次性 _hook_reminder(§7.2)。
+        thinking-only 恢复消息不是用户输入,不触发(§2.2 边界)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("UserPromptSubmit"):
+            return user_input, None
+        # 原文进 HookInput.prompt(§2.2);块输入序列化为 dict(ContentBlock 不可直接 JSON)
+        prompt = (
+            user_input
+            if isinstance(user_input, str)
+            else [b.model_dump() for b in user_input]
+        )
+        try:
+            result = await hooks.dispatch(
+                "UserPromptSubmit",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={"prompt": prompt},
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            # 非阻塞(§4.6 表:非 PreToolUse 事件 fail-open);输入照常进入循环
+            logger.exception("UserPromptSubmit hook dispatch failed (non-blocking)")
+            return user_input, None
+        self._accumulate_hook_reminder(result.updated_system_reminder)
+        self._accumulate_hook_reminder(result.additional_context)
+        if result.blocking_error is not None:
+            return None, result.blocking_error
+        if result.updated_prompt is not None:
+            return result.updated_prompt, None  # §7.1:改写后文本即为本次对话真实输入
+        return user_input, None
+
+    async def _dispatch_stop(
+        self, reason: str, assistant: SessionMessage
+    ) -> HookDispatchResult | None:
+        """Stop 钩子(§6.4 门控):completed/tool_terminated 两分支,return/_stop 之前。
+
+        None = 未配置 Stop 钩子或 dispatch 异常(fail-open,照常停止,CC 同款)。
+        HookInput 独有字段(§2.2):reason、last_assistant_message(文本/块序列化)。
+        消费方(§6.4 + S5 m2):result.stop(显式 continue:false)优先于
+        result.stop_feedback(exit 2);两字段并存时按显式指令停止。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("Stop"):
+            return None
+        content = (
+            assistant.content
+            if isinstance(assistant.content, str)
+            else [b.model_dump() for b in assistant.content]
+        )
+        try:
+            return await hooks.dispatch(
+                "Stop",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={"reason": reason, "last_assistant_message": content},
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            # §6.4:钩子层自身异常 → 只警告 + 日志,不影响停止(CC fail-open)
+            logger.exception("Stop hook dispatch failed (fail-open, §6.4)")
+            return None
+
+    async def _dispatch_pre_compact(
+        self, trigger: str, context_tokens: int
+    ) -> tuple[bool, str | None]:
+        """PreCompact 钩子(§6.2/§7.4):_compact 内 generate_summary 前(fail-open)。
+
+        返回 (blocked, instructions):blocked = exit 2 阻止本轮压缩;instructions =
+        exit 0 stdout 多钩子 join('\n\n')(None = 无指令,压缩照常)。钩子失败/超时/
+        abort → (False, None):压缩照常、无指令,且不计入熔断(R1 §5)。abort 置位时
+        dispatch 跳过整批(§6.3),与 fail-open 同一收敛面。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PreCompact"):
+            return False, None
+        try:
+            result = await hooks.dispatch(
+                "PreCompact",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "trigger": trigger,
+                        "context_tokens": context_tokens,
+                        "window": self.compaction.window,
+                        "reserve": self.compaction.reserve,
+                        "keep_recent": self.compaction.keep_recent,
+                    },
+                ),
+                abort_event=self.abort,  # §6.3:钩子批次 abort 感知
+            )
+        except Exception:
+            # §6.2:钩子层自身 bug → fail-open(压缩不是安全门,损失一条指令而已)
+            logger.exception("PreCompact hook dispatch failed (fail-open, §6.2)")
+            return False, None
+        if result.block_compact:
+            return True, None
+        return False, result.compact_instructions
+
+    async def _dispatch_post_compact(
+        self, trigger: str, summary_msg: SessionMessage, cut: CutPoint
+    ) -> None:
+        """PostCompact 钩子(§6.2):_compact 成功返回前,纯观察型。
+
+        HookInput 字段(§2.2):trigger、compact_summary(summary 文本,含 fileOps
+        尾段)、cut_index(被压消息数)、keep_recent。exit 2 与非阻塞等同(§4.3
+        PostToolUse 同款);失败仅日志,不拖垮压缩(R1 §5)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PostCompact"):
+            return
+        try:
+            await hooks.dispatch(
+                "PostCompact",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "trigger": trigger,
+                        "compact_summary": summary_msg.content,
+                        "cut_index": cut.index,
+                        "keep_recent": self.compaction.keep_recent,
+                    },
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            logger.exception("PostCompact hook dispatch failed (non-blocking, §6.2)")
+
+    def _allow_stop_feedback(self) -> bool:
+        """M1(§6.4 补):Stop feedback 注入上限 —— 达 MAX_STOP_HOOK_ATTEMPTS(5)
+        后不再注入,按普通 completed/tool_terminated 停止,不报错。
+
+        计数按 run() 生命周期(run() 入口重置);只在真正注入时递增,
+        防「永远 exit 2」的钩子拖出无限循环(对齐 CC MAX_STOP_HOOK_ATTEMPTS)。
+        """
+        if self._stop_feedback_count >= MAX_STOP_HOOK_ATTEMPTS:
+            return False
+        self._stop_feedback_count += 1
+        return True
+
+    def _accumulate_hook_reminder(self, text: str | None) -> None:
+        """§7.1/§7.2:additionalContext/updatedSystemReminder 累积进一次性 prefix。
+
+        多钩子/多事件输出顺序 join('\n\n')(§4.10.6 聚合传递链);注入后由
+        _ask_model 消费并清除。
+        """
+        if not text:
+            return
+        self._hook_reminder = f"{self._hook_reminder}\n\n{text}" if self._hook_reminder else text
 
     async def _stop(self, reason: str, text: str, *, meta: bool = False) -> SessionMessage:
         """Termination point: record the stop reason, then emit the final message."""
