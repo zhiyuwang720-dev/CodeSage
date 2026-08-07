@@ -1202,13 +1202,30 @@ async def test_permission_denial_does_not_void_siblings():
 
 
 class FakeHooks:
-    """脚本化 HookManager 假件:pre_result 决定 PreToolUse 决策,记录 dispatch 调用。"""
+    """脚本化 HookManager 假件:按事件路由,记录 dispatch 调用(阶段 09 S6/S7)。
 
-    def __init__(self, pre_result=None, events=("PreToolUse", "PostToolUse")):
+    S7 事件(SessionStart/UserPromptSubmit/Stop)的结果按列表逐个消费,耗尽后
+    返回空结果(无决策 → 流程照常),便于「feedback 一次后放行」类脚本。
+    """
+
+    def __init__(
+        self,
+        pre_result=None,
+        events=("PreToolUse", "PostToolUse"),
+        session_results=None,
+        submit_results=None,
+        stop_results=None,
+    ):
         self.pre_result = pre_result  # HookDispatchResult 或 None(无决策 → 引擎照常)
         self.events = list(events)  # 已配置事件(has_hooks_for_event 依据,§4.10.1)
+        self.session_results = list(session_results) if session_results else []
+        self.submit_results = list(submit_results) if submit_results else []
+        self.stop_results = list(stop_results) if stop_results else []
         self.pre_calls = 0
         self.post_calls = 0
+        self.session_calls = 0
+        self.submit_calls = 0
+        self.stop_calls = 0
         self.last_input = None
         self.abort_event = None
 
@@ -1221,8 +1238,22 @@ class FakeHooks:
         if event == "PreToolUse":
             self.pre_calls += 1
             return self.pre_result if self.pre_result is not None else HookDispatchResult(event="PreToolUse")
-        self.post_calls += 1
-        return HookDispatchResult(event="PostToolUse")
+        if event == "PostToolUse":
+            self.post_calls += 1
+            return HookDispatchResult(event="PostToolUse")
+        if event == "SessionStart":
+            self.session_calls += 1
+            r = self.session_results.pop(0) if self.session_results else None
+            return r if r is not None else HookDispatchResult(event="SessionStart")
+        if event == "UserPromptSubmit":
+            self.submit_calls += 1
+            r = self.submit_results.pop(0) if self.submit_results else None
+            return r if r is not None else HookDispatchResult(event="UserPromptSubmit")
+        if event == "Stop":
+            self.stop_calls += 1
+            r = self.stop_results.pop(0) if self.stop_results else None
+            return r if r is not None else HookDispatchResult(event="Stop")
+        raise AssertionError(f"unexpected event {event}")
 
 
 def pre_allow(updated_input=None, immune=False):
@@ -1652,3 +1683,444 @@ async def test_passthrough_updated_input_reaches_engine():
     loop = _loop(llm, tools=[PermTool()], hooks=hooks, request_permission=request_permission)
     await _collect(loop)
     assert seen == [{"text": "rewritten"}]  # 引擎 ask 决策(含 reason)看到的是改写后输入
+
+
+# ---- 阶段 09 S7:事件接线测试(SessionStart/UserPromptSubmit/Stop + prefix 注入) ----
+# 语义锚点:docs/specs/09-hooks.md §6.2(逐事件接线表)/§6.4(Stop 门控)/§7.1-7.2(改写通道)。
+
+
+class RecordingLLM(FakeLLM):
+    """记录每次请求的 messages 列表(prefix 注入断言用)。"""
+
+    def __init__(self, script, **kw):
+        super().__init__(script, **kw)
+        self.requests = []
+
+    def stream(self, request, model="main"):
+        self.requests.append(request.messages)
+        return super().stream(request, model=model)
+
+
+def session_context(text):
+    """SessionStart additionalContext(§7.1):注入一次性 reminder。"""
+    r = HookDispatchResult(event="SessionStart")
+    r.additional_context = text
+    return r
+
+
+def submit_blocked(text="input violates policy"):
+    """UserPromptSubmit exit 2(§4.3):阻止提交,输入擦除。"""
+    r = HookDispatchResult(event="UserPromptSubmit")
+    r.blocking_error = text
+    return r
+
+
+def submit_rewrite(prompt=None, reminder=None, context=None):
+    """UserPromptSubmit 消息改写(§7.1/§7.2)。"""
+    r = HookDispatchResult(event="UserPromptSubmit")
+    r.updated_prompt = prompt
+    r.updated_system_reminder = reminder
+    r.additional_context = context
+    return r
+
+
+def stop_continue_false(reason="stop now"):
+    """Stop 钩子显式 continue:false(§6.4):停止 + stopReasonOverride。"""
+    r = HookDispatchResult(event="Stop")
+    r.stop = True
+    r.stop_reason = reason
+    return r
+
+
+def stop_feedback(text="one more thing"):
+    """Stop 钩子 exit 2(§6.4):注入 feedback 继续循环。"""
+    r = HookDispatchResult(event="Stop")
+    r.stop_feedback = text
+    return r
+
+
+class TermStopTool(Tool):
+    """terminate=True 的工具(区别于既有 TerminateTool,不遮蔽 PI-04 测试)。"""
+
+    name = "TermStop"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return False
+
+    async def _run(self, input, ctx):
+        return ToolResult("terminated", terminate=True)
+
+
+async def test_session_start_fires_once_with_source():
+    """SessionStart 门闩(§6.2):AgentLoop 生命周期只触发一次;source 按 history 判定。"""
+    hooks = FakeHooks(events=("SessionStart",), session_results=[session_context("hi")])
+    llm = FakeLLM([lambda i: text_event("a"), lambda i: text_event("b")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    await _collect(loop)
+    assert hooks.session_calls == 1  # 门闩:第二个 run() 不再触发
+    assert hooks.last_input.extra["source"] == "startup"
+    assert hooks.last_input.extra["model"] == "main"
+
+
+async def test_session_start_source_resume_with_history():
+    """history 非空 → source="resume"(§2.2)。"""
+    hooks = FakeHooks(events=("SessionStart",), session_results=[session_context("hi")])
+    llm = FakeLLM([lambda i: text_event("a")])
+    loop = _loop(llm, hooks=hooks, history=[user_message("prior turn")])
+    await _collect(loop)
+    assert hooks.last_input.extra["source"] == "resume"
+
+
+async def test_session_start_context_injected_first_request_only():
+    """SessionStart additionalContext → 第一次请求的 prefix,一次性(§7.1/§7.2)。"""
+    hooks = FakeHooks(
+        events=("SessionStart",),
+        session_results=[session_context("startup context")],
+    )
+    llm = RecordingLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert len(llm.requests) == 2
+    first = [str(m.content) for m in llm.requests[0] if "startup context" in str(m.content)]
+    assert len(first) == 1  # 以独立 reminder 消息注入(REMINDER_HEADER 包裹)
+    assert "startup context" in first[0]
+    assert not any("startup context" in str(m.content) for m in llm.requests[1])  # 一次性
+
+
+async def test_session_start_fail_open_on_dispatch_error():
+    """SessionStart 非阻塞(§4.6):dispatch 异常 → 仅日志,run() 照常。"""
+
+    class RaisingSessionHooks(FakeHooks):
+        async def dispatch(self, event, *, input, abort_event=None):
+            if event == "SessionStart":
+                raise RuntimeError("hook manager bug")
+            return await super().dispatch(event, input=input, abort_event=abort_event)
+
+    hooks = RaisingSessionHooks(events=("SessionStart",))
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert [m.role for m in messages] == ["user", "assistant"]
+
+
+async def test_user_prompt_submit_blocked_first_input():
+    """exit 2 → 阻止提交(§6.2):输入擦除,钩子 stderr 作为终结消息,模型不调用。"""
+    hooks = FakeHooks(events=("UserPromptSubmit",), submit_results=[submit_blocked("no")])
+    llm = FakeLLM([lambda i: text_event("should not run")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop, user_input="bad request")
+    assert len(messages) == 1  # 原始用户消息不进入循环
+    assert messages[0].is_meta and messages[0].content == "no"
+    assert loop.last_stop_reason == "hook_blocked"
+    assert llm.calls == 0
+    assert hooks.submit_calls == 1
+
+
+async def test_user_prompt_submit_blocked_steer_dropped():
+    """steer 输入被 blocked → 静默丢弃 + 日志,不影响运行(§6.2)。"""
+    hooks = FakeHooks(
+        events=("UserPromptSubmit",),
+        submit_results=[None, submit_blocked("steer rejected"), None],  # 首条放行,第一条 steer 被拦
+    )
+    llm = FakeLLM([lambda i: text_event("after steer")])
+    steer = asyncio.Queue()
+    steer.put_nowait("bad steer")
+    steer.put_nowait("good steer")
+    loop = _loop(llm, hooks=hooks, steer_queue=steer)
+    messages = await _collect(loop, user_input="do something")
+    assert not any("bad steer" in str(m.content) for m in messages)  # 被丢弃
+    assert any("good steer" in str(m.content) for m in messages)  # 其余 steer 照常
+    assert messages[-1].content[0].text == "after steer"
+    assert hooks.submit_calls == 3  # 首条 + 两条 steer
+
+
+async def test_user_prompt_submit_updated_prompt(tmp_path):
+    """updatedPrompt 替换输入文本,会话记改写后文本(§7.1)。"""
+    session = Session("s1", tmp_path)
+    hooks = FakeHooks(
+        events=("UserPromptSubmit",),
+        submit_results=[submit_rewrite(prompt="rewritten question")],
+    )
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks, session=session)
+    messages = await _collect(loop, user_input="original question")
+    assert messages[0].content == "rewritten question"  # 流中即改写后文本
+    loaded = session.load()
+    assert loaded[0].content == "rewritten question"
+
+
+async def test_user_prompt_submit_reminder_join_and_one_shot():
+    """updatedSystemReminder/additionalContext join('\n\n') 注入第一次请求,第二次无残留(§7.2)。"""
+    hooks = FakeHooks(
+        events=("UserPromptSubmit",),
+        submit_results=[submit_rewrite(reminder="reminder A", context="context B")],
+    )
+    llm = RecordingLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert len(llm.requests) == 2
+    injected = [str(m.content) for m in llm.requests[0] if "reminder A" in str(m.content)]
+    assert len(injected) == 1
+    assert "reminder A\n\ncontext B" in injected[0]  # 多钩子顺序 join('\n\n')(§4.10.6)
+    assert not any("reminder A" in str(m.content) for m in llm.requests[1])  # 一次性消费
+
+
+async def test_reminder_join_order_session_then_submit():
+    """m4(a):SessionStart 与 UserPromptSubmit 混合累积,join 顺序保持触发序
+    (SessionStart 在前,§6.2 接线顺序 / §4.10.6 聚合链)。"""
+    hooks = FakeHooks(
+        events=("SessionStart", "UserPromptSubmit"),
+        session_results=[session_context("from session")],
+        submit_results=[submit_rewrite(reminder="from submit")],
+    )
+    llm = RecordingLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    injected = [str(m.content) for m in llm.requests[0] if "from session" in str(m.content)]
+    assert len(injected) == 1
+    assert "from session\n\nfrom submit" in injected[0]
+
+
+async def test_hook_reminder_survives_blocked_first_run():
+    """m4(b):SessionStart 的 reminder 在首 run 被 blocked 提前终止(无 LLM 请求)
+    后残留,第二次 run 的首次请求注入(一次性)。"""
+    hooks = FakeHooks(
+        events=("SessionStart", "UserPromptSubmit"),
+        session_results=[session_context("from session")],
+        submit_results=[submit_blocked("no")],
+    )
+    llm = RecordingLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop, user_input="bad")  # run 1:blocked,无请求
+    assert loop.last_stop_reason == "hook_blocked"
+    assert llm.requests == []
+    await _collect(loop, user_input="good")  # run 2:正常
+    injected = [str(m.content) for m in llm.requests[0] if "from session" in str(m.content)]
+    assert len(injected) == 1
+
+
+async def test_user_prompt_submit_fail_open_on_dispatch_error():
+    """UserPromptSubmit 非阻塞(§4.6):dispatch 异常 → 输入照常进入循环。"""
+
+    class RaisingSubmitHooks(FakeHooks):
+        async def dispatch(self, event, *, input, abort_event=None):
+            if event == "UserPromptSubmit":
+                raise RuntimeError("hook manager bug")
+            return await super().dispatch(event, input=input, abort_event=abort_event)
+
+    hooks = RaisingSubmitHooks(events=("UserPromptSubmit",))
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop, user_input="hi")
+    assert messages[0].content == "hi"
+    assert messages[-1].content[0].text == "ok"
+
+
+async def test_stop_fires_on_completed():
+    """completed 分支触发 Stop 钩子;无输出 → 照常停止(§6.4)。"""
+    hooks = FakeHooks(events=("Stop",))
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert hooks.stop_calls == 1
+    assert hooks.last_input.extra["reason"] == "completed"
+    # 最后一条 assistant 消息:文本块序列化为 dict 列表(§2.2 字段清单)
+    blocks = hooks.last_input.extra["last_assistant_message"]
+    assert isinstance(blocks, list) and blocks[0]["type"] == "text"
+    assert loop.last_stop_reason == "completed"
+    assert [m.role for m in messages] == ["user", "assistant"]
+
+
+@pytest.mark.parametrize(
+    "reason,kwargs,script,llm_error,abort_first",
+    [
+        ("max_turns", {"max_turns": 1}, [lambda i: tool_use_event("Echo", "t1", '{"text": "x"}')], False, False),
+        ("max_budget", {"max_budget_usd": 0.0}, [], False, False),
+        ("interrupted", {}, [], False, True),
+        ("error", {}, [], True, False),
+        ("thinking_only_exhausted", {}, [lambda i: thinking_only_event()] * 3, False, False),
+    ],
+)
+async def test_stop_not_fired_on_control_stops(reason, kwargs, script, llm_error, abort_first):
+    """门控表(§6.4):控制流终止一律不触发 Stop 钩子(钩子不得复活循环)。"""
+
+    class BoomLLM(FakeLLM):
+        def stream(self, request, model="main"):
+            raise LLMError("provider down", status_code=500)
+
+    llm = BoomLLM(script) if llm_error else FakeLLM(script)
+    hooks = FakeHooks(events=("Stop",))
+    loop = _loop(llm, hooks=hooks, **kwargs)
+    if abort_first:
+        loop.abort.set()
+    await _collect(loop)
+    assert loop.last_stop_reason == reason
+    assert hooks.stop_calls == 0
+
+
+async def test_stop_feedback_continues_loop(tmp_path):
+    """exit 2 feedback → 注入消息继续循环,模型看到反馈再决策(§6.4)。"""
+    session = Session("s1", tmp_path)
+    hooks = FakeHooks(events=("Stop",), stop_results=[stop_feedback("one more thing")])
+    llm = FakeLLM([lambda i: text_event("first"), lambda i: text_event("second")])
+    loop = _loop(llm, hooks=hooks, session=session)
+    messages = await _collect(loop)
+    assert llm.calls == 2  # feedback 后模型再决策一轮
+    assert hooks.stop_calls == 2  # 第二轮 completed 再次触发(结果耗尽 → 放行)
+    feedbacks = [m for m in messages if m.role == "user" and "Stop hook feedback:" in str(m.content)]
+    assert len(feedbacks) == 1
+    assert "one more thing" in str(feedbacks[0].content)
+    assert loop.last_stop_reason == "completed"
+    # 反馈进入消息流 = 普通历史:会话日志同样落盘(§6.4)
+    loaded = session.load()
+    assert any("Stop hook feedback:" in str(m.content) for m in loaded)
+
+
+async def test_stop_feedback_capped_at_max_attempts():
+    """M1(§6.4 补):永远 exit 2 的 Stop 钩子 → 最多 5 次 feedback 后按普通
+    completed 停止(对齐 CC MAX_STOP_HOOK_ATTEMPTS=5),不报错、不无限循环。"""
+    hooks = FakeHooks(events=("Stop",), stop_results=[stop_feedback("again")] * 10)
+    llm = FakeLLM([lambda i: text_event("answer")])  # 脚本耗尽后重复最后一条
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert llm.calls == 6  # 首轮 + 5 轮 feedback,无第 7 轮
+    assert hooks.stop_calls == 6  # 第 6 次 dispatch 时达限放行
+    feedbacks = [m for m in messages if m.role == "user" and "Stop hook feedback:" in str(m.content)]
+    assert len(feedbacks) == 5
+    assert loop.last_stop_reason == "completed"
+
+
+async def test_stop_feedback_counter_resets_per_run():
+    """M1:计数按 run() 生命周期 —— 复用实例第二次 run 重新计数(仍 5 次)。"""
+    hooks = FakeHooks(events=("Stop",), stop_results=[stop_feedback("again")] * 20)
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)  # run 1:5 次 feedback 后达限停止
+    assert llm.calls == 6
+    assert loop.last_stop_reason == "completed"
+    await _collect(loop)  # run 2:计数器已重置,再 5 次
+    assert llm.calls == 12
+    assert hooks.stop_calls == 12
+    assert loop.last_stop_reason == "completed"
+
+
+async def test_thinking_only_recovery_not_user_prompt():
+    """m1(§2.2 边界):thinking-only 恢复消息不是用户输入,不触发 UserPromptSubmit。"""
+    hooks = FakeHooks(events=("UserPromptSubmit",))
+    llm = FakeLLM([lambda i: thinking_only_event(), lambda i: text_event("ok")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert hooks.submit_calls == 1  # 仅首条真实输入;恢复消息零派发
+    assert messages[-1].content[0].text == "ok"
+
+
+async def test_stop_continue_false_stops_with_reason():
+    """continue:false + stopReason → _stop("hook", reason)(§6.4)。"""
+    hooks = FakeHooks(events=("Stop",), stop_results=[stop_continue_false("task complete")])
+    llm = FakeLLM([lambda i: text_event("answer"), lambda i: text_event("never")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert loop.last_stop_reason == "hook"
+    assert llm.calls == 1  # 不再有第二轮
+    assert hooks.stop_calls == 1
+    last = messages[-1]
+    assert last.is_meta and "task complete" in str(last.content)
+
+
+async def test_stop_mixed_signals_continue_false_wins():
+    """S5 m2:exit 2 feedback 与显式 continue:false 并存 → 显式指令优先,循环停止。"""
+    r = HookDispatchResult(event="Stop")
+    r.stop = True
+    r.stop_reason = "stop now"
+    r.stop_feedback = "one more thing"
+    hooks = FakeHooks(events=("Stop",), stop_results=[r])
+    llm = FakeLLM([lambda i: text_event("first"), lambda i: text_event("never")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert llm.calls == 1  # feedback 未注入 → 无第二轮
+    assert loop.last_stop_reason == "hook"
+    assert "one more thing" not in str(messages[-1].content)
+    assert "stop now" in str(messages[-1].content)
+
+
+async def test_stop_fires_on_tool_terminated():
+    """tool_terminated 分支触发 Stop 钩子;feedback → 继续循环(§6.4)。"""
+    hooks = FakeHooks(events=("Stop",), stop_results=[stop_feedback("not yet")])
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("TermStop", "t1", "{}"),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[TermStopTool()], hooks=hooks)
+    messages = await _collect(loop)
+    assert hooks.stop_calls == 2  # 第一轮 tool_terminated 被拦下,第二轮 completed 放行
+    assert loop.last_stop_reason == "completed"
+    assert messages[-1].content[0].text == "ok"
+
+
+async def test_stop_tool_terminated_default_when_no_hook_output():
+    """tool_terminated + Stop 钩子无输出 → 照常 _stop("tool_terminated")。"""
+    hooks = FakeHooks(events=("Stop",))
+    llm = FakeLLM([lambda i: tool_use_event("TermStop", "t1", "{}")])
+    loop = _loop(llm, tools=[TermStopTool()], hooks=hooks)
+    messages = await _collect(loop)
+    assert hooks.stop_calls == 1
+    assert loop.last_stop_reason == "tool_terminated"
+    assert messages[-1].is_meta and "tools requested termination" in str(messages[-1].content)
+
+
+async def test_stop_dispatch_error_fail_open():
+    """钩子层异常 → 只警告 + 日志,照常停止(§6.4 CC fail-open)。"""
+
+    class RaisingStopHooks(FakeHooks):
+        async def dispatch(self, event, *, input, abort_event=None):
+            if event == "Stop":
+                raise RuntimeError("hook manager bug")
+            return await super().dispatch(event, input=input, abort_event=abort_event)
+
+    hooks = RaisingStopHooks(events=("Stop",))
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert loop.last_stop_reason == "completed"
+    assert [m.role for m in messages] == ["user", "assistant"]
+
+
+async def test_hook_blocked_does_not_fire_stop():
+    """§2.2 防递归:钩子自产的终止(hook_blocked)不再次触发 Stop 钩子。"""
+    hooks = FakeHooks(
+        events=("UserPromptSubmit", "Stop"),
+        submit_results=[submit_blocked("blocked by policy")],
+    )
+    llm = FakeLLM([lambda i: text_event("never")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert loop.last_stop_reason == "hook_blocked"
+    assert hooks.stop_calls == 0
+
+
+async def test_s7_events_receive_abort_event():
+    """§6.3:三个新事件 dispatch 都收到 loop 的 abort_event。"""
+    hooks = FakeHooks(
+        events=("SessionStart", "UserPromptSubmit", "Stop"),
+        session_results=[session_context("hi")],
+        submit_results=[submit_rewrite(prompt="rewritten")],
+        stop_results=[stop_continue_false("done")],
+    )
+    llm = FakeLLM([lambda i: text_event("answer")])
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert hooks.abort_event is loop.abort
