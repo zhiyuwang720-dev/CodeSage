@@ -12,8 +12,9 @@
   产生决策时一条。
 
 与 spec 的偏差/取舍(向 lead 如实汇报):
-1. prompt 执行体 S10 交付;本步工厂注册占位执行体,任何调用抛 HookExecutionError
-   → 按 §4.6 fail-closed(PreToolUse → deny,其他事件 → 非阻塞),不会静默跳过。
+1. prompt 执行体 S10 交付:load_hook_manager 工厂注册 PromptHookExecutor
+   (hooks/prompt.py);client 缺省 None → 运行期 fail-closed(HookExecutionError,
+   §4.6 表 spawn 失败同档),不会静默跳过。
 2. 免疫位审计(§5.5 约束 4):ToolAuditEvent 无 immune 字段(audit.py 不改),allow
    事件 reason 追加 ` [immune=true]` 标记。
 3. SessionStart 禁用的 http 钩子(§4.9)在收集期剔除,不产生审计事件(从未被调用)。
@@ -40,6 +41,7 @@ from .command import (
     parse_hook_stdout,
 )
 from .http import HttpHookExecutor
+from .prompt import PromptHookExecutor
 from .types import (
     DEFAULT_TIMEOUTS,
     MATCHER_IGNORED_EVENTS,
@@ -124,21 +126,6 @@ def _dedup_key(spec: HookSpec) -> tuple[str, str, str | None]:
     """执行层去重 key(§4.10.3):(type, command|prompt|url, if)。"""
     payload = spec.command or spec.prompt or spec.url or ""
     return (spec.type, payload, spec.if_)
-
-
-class _PromptUnavailableExecutor:
-    """prompt 执行体占位(S10 交付前):调用即 fail-closed(§4.6),不静默放行。
-
-    S10 交付 prompt.py 后,load_hook_manager 的默认工厂替换为 PromptHookExecutor。
-    """
-
-    def __init__(self, prompt: str):
-        self.prompt = prompt
-
-    async def run(self, input_json: str, *, timeout: float) -> HookResult:
-        raise HookExecutionError(
-            f"prompt executor not implemented until phase 10 (S10): hook {self.prompt!r}"
-        )
 
 
 class HookManager:
@@ -566,8 +553,9 @@ def load_hook_manager(
     """装配入口(§3.2):settings.hooks(已三层合并)→ 解析 → 执行体实例映射。
 
     快照语义:此处解析一次,会话中 settings.json 修改不生效(§3.2)。hooks.jsonl
-    路径 = paths.config_dir() / "hooks.jsonl",由 assemble.py(S10)传入 hooks_sink。
-    client 仅 prompt 执行体使用(S10 交付后接管默认工厂)。
+    路径 = paths.config_dir() / "hooks.jsonl",由 assemble.py 传入 hooks_sink。
+    client 仅 prompt 执行体使用(S10 交付后已接管默认工厂);None → prompt 钩子
+    运行期 fail-closed(§4.6)。
     """
     groups = parse_hook_config(hooks_cfg, http_hook_urls=http_hook_urls)
     if registry is None:
@@ -584,8 +572,9 @@ def load_hook_manager(
                 allowed_env_vars=spec.allowedEnvVars,
                 urls_whitelist=whitelist,
             )
-        # prompt:S10 交付 PromptHookExecutor(spec.prompt, client=client, model=spec.model)
-        return _PromptUnavailableExecutor(spec.prompt or "")
+        # prompt:单轮 LLM 调用(§4.8);model 缺省 "quick" 指针,失败自动回退 main
+        # 由 LLMClient.complete 的既有辅助请求回退承担(hooks/prompt.py)
+        return PromptHookExecutor(spec.prompt or "", client=client, model=spec.model)
 
     return HookManager(
         groups,

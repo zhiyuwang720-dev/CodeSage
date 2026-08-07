@@ -13,6 +13,7 @@ from ..ai import LLMClient
 from ..config import GlobalConfig, load_settings, paths
 from ..core import Session
 from ..engine import AgentLoop, CompactionConfig, build_context_bundle
+from ..hooks import HookJsonlSink, load_hook_manager
 from ..permissions import JsonlAuditSink, PermissionEngine
 from ..permissions.store import load_permission_rules
 from ..tools import ToolRegistry, get_builtin_tools
@@ -45,6 +46,17 @@ def build_loop(
     audit = JsonlAuditSink(paths.config_dir() / "audit.jsonl")
     permissions = PermissionEngine(audit_sink=audit)
     registry = ToolRegistry(get_builtin_tools())
+    # 阶段 09:事件钩子 —— 快照语义(§3.2:此处解析一次,会话中 settings.json 修改
+    # 不生效);hooks.jsonl = 执行流审计(§8.1);http_hook_urls 为 settings 顶层
+    # 白名单字段(extra=allow,缺省 None = 全禁,§4.9)
+    hooks = load_hook_manager(
+        settings.hooks,
+        client=client,
+        audit=audit,
+        hooks_sink=HookJsonlSink(paths.config_dir() / "hooks.jsonl"),
+        http_hook_urls=getattr(settings, "http_hook_urls", None),
+        registry=registry,
+    )
     if session is None:
         session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
 
@@ -64,6 +76,7 @@ def build_loop(
         session=session,
         settings=settings,
         history=history,
+        hooks=hooks,  # 阶段 09:事件钩子管理器(无配置事件走索引零路径,§4.10.1)
     )
 
 
