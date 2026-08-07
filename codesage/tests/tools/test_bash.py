@@ -147,6 +147,19 @@ def test_shell_argv_falls_back_when_no_bash(monkeypatch):
     assert bash_mod._shell_argv("dir") is None
 
 
+def test_shell_argv_skips_wsl_shim_bash(monkeypatch):
+    """System32\\bash.exe 是 WSL 启动器 shim 不是真 bash —— which 命中它时
+    回退平台默认(create_subprocess_shell),否则报 execvpe /bin/bash failed。"""
+    import codesage.tools.builtin.shell.bash as bash_mod
+
+    monkeypatch.setattr(bash_mod.sys, "platform", "win32")
+    monkeypatch.setattr(bash_mod.os.environ, "get", lambda k, d="": "")
+    monkeypatch.setattr(
+        bash_mod.shutil, "which", lambda name: "C:/Windows/System32/bash.exe"
+    )
+    assert bash_mod._shell_argv("dir") is None
+
+
 def test_shell_argv_posix_uses_default_shell(monkeypatch):
     import codesage.tools.builtin.shell.bash as bash_mod
 

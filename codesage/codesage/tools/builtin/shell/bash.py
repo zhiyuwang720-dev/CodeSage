@@ -194,8 +194,21 @@ def _shell_argv(command: str) -> tuple[list[str], str] | None:
     model produces actually work.
     """
     if sys.platform == "win32":
+        # C:\\Windows\\System32\\bash.exe 是 WSL 启动器 shim(转发 `wsl bash`),
+        # 不是真 bash —— PATH 里 System32 通常排在 Git 之前,`which("bash")`
+        # 会先命中它,子进程报 `execvpe /bin/bash failed`(WSL 里无 /bin/bash)。
+        # 优先显式探测 Git for Windows 标准路径,再回退 PATH 并排除 shim。
+        for git_bash in (
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Git"
+            / "bin"
+            / "bash.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "bin" / "bash.exe",
+        ):
+            if git_bash.is_file():
+                return [str(git_bash), "-c", command], "bash"
         bash = shutil.which("bash")
-        if bash:
+        if bash and "System32" not in Path(bash).parts:
             return [bash, "-c", command], "bash"
     return None
 
