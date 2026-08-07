@@ -192,6 +192,9 @@ class AgentLoop:
         #: active message list exposed for the CLI status bar's ctx meter
         #: (对外投影:run() 内随 state.messages 更新,loop 内自身不读)
         self._active_messages: list["SessionMessage"] | None = None
+        #: 最近一次 run() 的权限拒绝清单(与 last_stop_reason 同模式:run() 是
+        #: AsyncIterator 无法返回值,结果经 finally 投影到这里供 submit 读取)
+        self.last_permission_denials: list[str] = []
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
         self._session_started = False
         #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
@@ -436,6 +439,9 @@ class AgentLoop:
             yield failed
             await self._persist(failed)
         finally:
+            # per-run 结果投影到实例(与 last_stop_reason 同模式);state 在
+            # try 之前创建,所有出口(return/异常/GeneratorExit)都经过这里
+            self.last_permission_denials = list(state.permission_denials)
             # a prefetch still in flight must not dangle past the loop
             task = self._prefetch_task
             if task is not None and not task.done():
@@ -759,6 +765,9 @@ class AgentLoop:
             mode=decision.mode,
             reason=decision.reason,
         )
+        # 收集(对齐 CC permission_denials):ask 被拒 / 非 ask 硬拒统一入账,
+        # run() 结束由 finally 投影到 last_permission_denials
+        state.permission_denials.append(f"{item.tool.name}: {decision.reason}")
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
 
     async def _pre_tool_use_hook(self, item: ScheduledTool) -> ToolResult | None:

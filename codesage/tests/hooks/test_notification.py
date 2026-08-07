@@ -140,7 +140,8 @@ async def test_permission_denied_emitted():
 
     hooks = RecordingHooks()
     llm = FakeLLM([lambda i: tool_use_event("Perm", "t1", '{"text": "x"}'), lambda i: text_event()])
-    messages = await _collect(_loop(llm, hooks, request_permission=decline))
+    loop = _loop(llm, hooks, request_permission=decline)
+    messages = await _collect(loop)
 
     assert messages[2].content[0].is_error
     assert [e[0] for e in hooks.events] == ["permission_request", "permission_denied"]
@@ -148,6 +149,8 @@ async def test_permission_denied_emitted():
     assert message == "Permission denied: Perm"
     assert title == "Perm"
     assert data["reason"] is not None
+    # RunSummary 数据源:拒绝清单投影到实例(run() 结束经 finally 落实例)
+    assert loop.last_permission_denials == [f"Perm: {data['reason']}"]
 
 
 async def test_permission_denied_without_request_permission():
