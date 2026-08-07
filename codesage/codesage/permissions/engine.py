@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit import AuditSink, NullAuditSink, ToolAuditEvent
-from .bash_rules import analyze_bash_command
+from .bash_rules import analyze_bash_command, rm_protected_targets
 from .modes import (
     READ_ONLY_TOOLS,
     REQUIRES_EXPLICIT_APPROVAL,
@@ -161,6 +161,51 @@ class PermissionEngine:
 
         # 9. default: ask (never default-allow unknown tools)
         return self._decide(False, "ask", "default", f"no rule for {tool_name}", tool_name, tool_input, mode_enum)
+
+    def floor_check(
+        self,
+        *,
+        tool_name: str,
+        tool_input: dict[str, Any] | None = None,
+        cwd: Path | None = None,
+        mode: str | PermissionMode = PermissionMode.DEFAULT,
+    ) -> PermissionDecision | None:
+        """写保护地板(阶段 09 §5.3):仅含第 4 步逻辑(写保护路径)。
+
+        钩子 allow 不得突破写保护(本类第 4 步是硬地板):命中返回
+        requires_explicit_approval=True 的 ask 决策,由 loop 侧按既有 ask 流程
+        (request_permission)人工确认;审计经 _decide 既有路径(source=write-protection,
+        §8.1 的 floor 降级第二条事件)。未命中返回 None。决策链本方法外一行不改。
+
+        Bash 分支(与 FILE_TOOLS 同等地板):analyze_bash_command 的 deny 判定
+        (rm/rmdir 保护路径,如 `rm -rf ~`)不得被钩子 allow 绕过;rm/rmdir 目标
+        命中写保护组件(`rm -rf .git` 类,rm_protected_targets)同款降级。
+        """
+        tool_input = tool_input or {}
+        cwd = cwd or Path.cwd()
+        if tool_name == "Bash":
+            command = str(tool_input.get("command") or "")
+            analysis = analyze_bash_command(command, working_dirs=[cwd], cwd=cwd)
+            if analysis.decision == "deny":
+                return self._decide(
+                    False, "ask", "write-protection", f"bash: {analysis.reason}",
+                    tool_name, tool_input, normalize_mode(mode), requires_explicit_approval=True,
+                )
+            hits = rm_protected_targets(command, cwd)
+            if hits:
+                return self._decide(
+                    False, "ask", "write-protection",
+                    f"bash writes protected path(s): {', '.join(hits)}",
+                    tool_name, tool_input, normalize_mode(mode), requires_explicit_approval=True,
+                )
+            return None
+        target_path = self._target_path(tool_name, tool_input, cwd)
+        if tool_name in FILE_TOOLS and target_path is not None and is_write_protected(target_path):
+            return self._decide(
+                False, "ask", "write-protection", f"{target_path} is write-protected",
+                tool_name, tool_input, normalize_mode(mode), requires_explicit_approval=True,
+            )
+        return None
 
     # ---- helpers ----
 

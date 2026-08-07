@@ -23,8 +23,9 @@ logger = logging.getLogger("codesage.engine")
 
 from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamEvent
 from ..ai.retry import is_ptl_error, is_ptl_text
+from ..hooks import HookInput, HookManager  # 阶段 09:事件钩子(HookManager 协议/实现)
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
-from ..permissions import PermissionDecision, PermissionEngine, PermissionMode
+from ..permissions import PermissionDecision, PermissionEngine, PermissionMode, ToolAuditEvent
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
 from .compaction import (
@@ -100,6 +101,7 @@ class AgentLoop:
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
         finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
+        hooks: HookManager | None = None,  # 阶段 09:事件钩子管理器(None = 禁用;S10 装配传入)
     ):
         self.client = client
         self.tools = tools
@@ -140,6 +142,7 @@ class AgentLoop:
         self.steer_queue = steer_queue
         self.on_tool_event = on_tool_event
         self.finalize = finalize
+        self.hooks = hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
         #: Termination reason of the last run(): "completed" | "max_turns" |
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
@@ -534,6 +537,8 @@ class AgentLoop:
         queue = ToolUseQueue(
             scheduled,
             permission_check=self._permission_check,
+            pre_hook=self._pre_tool_use_hook,  # PreToolUse 钩子(阶段 09 §5.1,先于权限引擎)
+            post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
             finalize=self.finalize,
         )
@@ -556,6 +561,98 @@ class AgentLoop:
             if await self.request_permission(decision, item.tool, item.input):
                 return None
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
+
+    async def _pre_tool_use_hook(self, item: ScheduledTool) -> ToolResult | None:
+        """PreToolUse 钩子接线(阶段 09 §5.1/§5.2/§5.4/§5.3),先于权限引擎。
+
+        dispatch 决策合并后落位:updatedInput 改写 item.input(引擎与执行读同一
+        字段)、hook_allowed/immune 落位(§5.2/§5.5);deny → 拒绝 ToolResult。
+        allow 短路引擎决策链,唯一例外 = 写保护地板(§5.3):降级为
+        request_permission 人工确认。返回 None = 继续(引擎照常或 allow 放行)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PreToolUse"):
+            return None  # 零路径(§4.10.1):未配置钩子 → 引擎照常
+        try:
+            result = await hooks.dispatch(
+                "PreToolUse",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "tool_name": item.tool.name,
+                        "tool_input": item.input,
+                        "tool_use_id": item.tool_use_id,
+                    },
+                ),
+                abort_event=self.abort,  # §6.3:钩子批次 abort 感知
+            )
+        except Exception:
+            # §6.3:钩子层自身 bug 不拖垮主循环;PreToolUse 下 fail-closed
+            # (§4.6 原则:钩子没能说话 → 安全门关闭,拒绝经 permission_blocked
+            # 豁免不株连 sibling)。§8.1「每决策恰一条」:异常 deny 也记一条审计。
+            logger.exception("PreToolUse hook dispatch failed (fail-closed)")
+            self.permissions.audit.emit(
+                ToolAuditEvent(
+                    tool_name=item.tool.name,
+                    decision="deny",
+                    reason="PreToolUse hook dispatch error (fail-closed)",
+                    source="hook:PreToolUse",
+                    mode="default",
+                    input_summary=None,  # 钩子输入内容不落审计(§8.1)
+                )
+            )
+            return ToolResult("Permission denied by hook: dispatch error", is_error=True)
+        if result.updated_input is not None:
+            # §5.4:改写先于引擎求值,引擎与执行读同一字段。deny 终局下改写也已
+            # 并入此字段——但工具不执行、会话不落盘,改写无消费面,无害(m3)
+            item.input = result.updated_input
+        item.hook_allowed = result.hook_allowed  # §5.2:allow 短路位
+        item.immune = result.immune  # §5.5:免疫位仅携带 + 审计(v1 无消费面)
+        if result.permission_decision == "deny":
+            return ToolResult(result.deny_reason or "Permission denied by hook", is_error=True)
+        if result.hook_allowed:
+            # §5.3:写保护地板是 allow 短路的唯一例外 —— 降级为人工确认
+            # (审计 source=write-protection 由 floor_check 经 _decide 既有路径发出)
+            floor = self.permissions.floor_check(
+                tool_name=item.tool.name, tool_input=item.input, cwd=self.cwd, mode=self.mode
+            )
+            if floor is not None:
+                if self.request_permission is not None and await self.request_permission(
+                    floor, item.tool, item.input
+                ):
+                    return None  # 人工确认 → 放行(引擎不跑:钩子已决策)
+                return ToolResult(f"Permission denied: {floor.reason}", is_error=True)
+        return None
+
+    async def _post_tool_use_hook(self, item: ScheduledTool, result: ToolResult) -> None:
+        """PostToolUse 钩子接线(阶段 09 §6.1):成功与拒绝路径都触发,观察型(§4.10.6)。
+
+        tool_response = 序列化 ToolResult(content + is_error)。钩子失败仅日志,
+        不改变工具结果(§6.3 best-effort,不拖垮主循环)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PostToolUse"):
+            return
+        try:
+            await hooks.dispatch(
+                "PostToolUse",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "tool_name": item.tool.name,
+                        "tool_input": item.input,
+                        "tool_use_id": item.tool_use_id,
+                        "tool_response": {"content": result.content, "is_error": result.is_error},
+                    },
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            logger.exception("PostToolUse hook dispatch failed")
 
     async def _stop(self, reason: str, text: str, *, meta: bool = False) -> SessionMessage:
         """Termination point: record the stop reason, then emit the final message."""

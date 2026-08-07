@@ -64,6 +64,10 @@ class ScheduledTool:
     context: ToolUseContext
     status: str = "queued"  # queued | executing | completed | yielded
     result: ToolResult | None = None
+    # 阶段 09 §5.2/§5.5:PreToolUse 钩子决策落位 —— allow 短路位(引擎决策链
+    # 不运行)与 safetyCheck bypass 免疫位(v1 仅携带 + 审计,无消费面)
+    hook_allowed: bool = False
+    immune: bool = False
 
 
 class ToolUseQueue:
@@ -74,8 +78,8 @@ class ToolUseQueue:
         tools: list[ScheduledTool],
         *,
         permission_check: Any | None = None,  # async (ScheduledTool) -> ToolResult | None
-        pre_hook: Any | None = None,  # async (ScheduledTool) -> None (phase 09)
-        post_hook: Any | None = None,  # async (ScheduledTool, ToolResult) -> None (phase 09)
+        pre_hook: Any | None = None,  # async (ScheduledTool) -> ToolResult | None (阶段 09 §5.1:拒绝返回 ToolResult,否则 None)
+        post_hook: Any | None = None,  # async (ScheduledTool, ToolResult) -> None (阶段 09 §6.1)
         finalize: Any | None = None,  # async (ScheduledTool, ToolResult) -> ToolResult (PI-02)
         on_tool_event: Any | None = None,  # (event, tool_name, payload) lifecycle (PI-01)
     ):
@@ -154,13 +158,18 @@ class ToolUseQueue:
         return self._tools
 
     async def _execute(self, item: ScheduledTool) -> ToolResult:
-        # ---- prepare: abort / permission gate (PI-02 first phase) ----
+        # ---- prepare: abort / 钩子层 / permission gate (阶段 09 §5.1) ----
         if item.context.abort_event is not None and item.context.abort_event.is_set():
             return ToolResult("(interrupted by user)", is_error=True)
         item.status = "executing"
         if self._pre_hook is not None:
-            await self._pre_hook(item)
-        if self._permission_check is not None:
+            denied = await self._pre_hook(item)  # 钩子层:决策合并 + updatedInput/immune 落位
+            if denied is not None:  # 钩子 deny → 直接拒绝(复用 permission_blocked 豁免)
+                denied.metadata.setdefault("error_code", "permission_blocked")
+                if self._post_hook is not None:
+                    await self._post_hook(item, denied)
+                return denied
+        if not item.hook_allowed and self._permission_check is not None:  # allow 短路:跳过引擎
             denied = await self._permission_check(item)
             if denied is not None:
                 denied.metadata.setdefault("error_code", "permission_blocked")

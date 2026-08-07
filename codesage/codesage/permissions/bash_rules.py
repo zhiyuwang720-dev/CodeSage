@@ -15,6 +15,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .paths import is_write_protected
+
 #: Write verbs analyzed per subcommand (rm/rmdir also get deny protection).
 _WRITE_VERBS = frozenset({"rm", "rmdir", "mv", "cp", "mkdir"})
 
@@ -204,3 +206,30 @@ def analyze_bash_command(
         return BashAnalysis("ask", "cd compound with a write operation")
 
     return BashAnalysis("allow", "no bash rules matched")
+
+
+def rm_protected_targets(command: str, cwd: Path) -> list[str]:
+    """rm/rmdir 目标中命中写保护组件的路径(阶段 09 §5.3:floor_check 的 Bash 分支用)。
+
+    analyze_bash_command 的 deny 只覆盖 _RM_PROTECTED(/,~ 等字面值);写保护组件
+    (.git/.ssh/settings.json 等,paths.py)与文件工具同等地板,这里补查,返回命中列表。
+    """
+    hits: list[str] = []
+    for sub in split_commands(command):
+        for verb, operands in _write_targets(_tokens(sub)):
+            if verb not in ("rm", "rmdir"):
+                continue
+            for op in operands:
+                t = _strip_quotes(op)
+                if not t or t in _RM_PROTECTED:
+                    continue
+                try:
+                    p = Path(t).expanduser()
+                    if not p.is_absolute():
+                        p = cwd / p
+                    protected = is_write_protected(p)
+                except OSError:
+                    protected = True  # unresolvable — conservative
+                if protected:
+                    hits.append(t)
+    return hits

@@ -8,6 +8,7 @@ import pytest
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
 from codesage.core import Session, assistant_message, user_message
 from codesage.engine import AgentLoop, CompactionConfig
+from codesage.hooks import HookDispatchResult
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 
@@ -1195,3 +1196,459 @@ async def test_permission_denial_does_not_void_siblings():
     assert by_id["a1"].is_error  # the denied one reports the denial
     assert not by_id["b1"].is_error  # the sibling ran with a real result
     assert by_id["b1"].content == "ran:allow"
+
+
+# ---- 阶段 09 S6:引擎接线测试(mock HookManager 注入,不真跑钩子) ----
+
+
+class FakeHooks:
+    """脚本化 HookManager 假件:pre_result 决定 PreToolUse 决策,记录 dispatch 调用。"""
+
+    def __init__(self, pre_result=None, events=("PreToolUse", "PostToolUse")):
+        self.pre_result = pre_result  # HookDispatchResult 或 None(无决策 → 引擎照常)
+        self.events = list(events)  # 已配置事件(has_hooks_for_event 依据,§4.10.1)
+        self.pre_calls = 0
+        self.post_calls = 0
+        self.last_input = None
+        self.abort_event = None
+
+    def has_hooks_for_event(self, event):
+        return event in self.events
+
+    async def dispatch(self, event, *, input, abort_event=None):
+        self.abort_event = abort_event  # §6.3:abort 感知接线(断言用)
+        self.last_input = input
+        if event == "PreToolUse":
+            self.pre_calls += 1
+            return self.pre_result if self.pre_result is not None else HookDispatchResult(event="PreToolUse")
+        self.post_calls += 1
+        return HookDispatchResult(event="PostToolUse")
+
+
+def pre_allow(updated_input=None, immune=False):
+    r = HookDispatchResult(event="PreToolUse")
+    r.permission_decision = "allow"
+    r.allow_hook = "fake"
+    r.hook_allowed = True
+    r.immune = immune
+    r.updated_input = updated_input
+    return r
+
+
+def pre_deny(reason="no"):
+    r = HookDispatchResult(event="PreToolUse")
+    r.permission_decision = "deny"
+    r.deny_hook = "fake"
+    r.deny_reason = f"Permission denied by hook fake: {reason}"
+    return r
+
+
+def pre_passthrough(updated_input=None):
+    """无决策(passthrough)钩子:仅改写输入,引擎照常求值(§5.4)。"""
+    r = HookDispatchResult(event="PreToolUse")
+    r.updated_input = updated_input
+    return r
+
+
+class PermTool(Tool):
+    """需权限工具:引擎默认 ask 且无 request_permission → 无钩子时必被拒。"""
+
+    name = "Perm"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return True
+
+    async def _run(self, input, ctx):
+        return ToolResult(f"perm ok:{input['text']}")
+
+
+class WriteTool(Tool):
+    """FILE_TOOLS 成员(名字 = Write):配合写保护地板测试(§5.3)。"""
+
+    name = "Write"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return True
+
+    async def _run(self, input, ctx):
+        return ToolResult("wrote:" + input["file_path"])
+
+
+async def test_hook_deny_blocks_tool_and_fires_post():
+    """钩子 deny → 工具不执行,拒绝结果进消息流,PostToolUse 仍触发(§6.1 denied 分支)。"""
+    hooks = FakeHooks(pre_result=pre_deny("no"))
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    tool_round = messages[2]
+    assert tool_round.content[0].is_error
+    assert "Permission denied by hook fake: no" in str(tool_round.content[0].content)
+    assert hooks.pre_calls == 1
+    assert hooks.post_calls == 1  # 拒绝结果也触发 PostToolUse(§6.1)
+    assert hooks.last_input.extra["tool_response"]["is_error"] is True
+
+
+async def test_hook_allow_shortcircuits_engine():
+    """钩子 allow → 引擎决策链不运行(本例引擎必拒),工具照常执行(§5.2)。"""
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Perm", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[PermTool()], hooks=hooks)
+    loop.request_permission = None  # 引擎 ask 无人确认 → 引擎路径必拒
+    messages = await _collect(loop)
+    assert messages[2].content[0].content == "perm ok:x"
+    assert not messages[2].content[0].is_error
+    assert hooks.pre_calls == 1
+
+
+async def test_hook_allow_floor_downgrades_to_ask():
+    """写保护地板(§5.3):allow + 写保护路径 → 降级 request_permission;拒绝 → 工具不执行。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return False  # 人工拒绝
+
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Write", "t1", '{"file_path": "repo/.git/config"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[WriteTool()], hooks=hooks, request_permission=request_permission)
+    messages = await _collect(loop)
+    assert len(asks) == 1
+    assert asks[0].source == "write-protection"
+    assert asks[0].requires_explicit_approval is True
+    assert messages[2].content[0].is_error
+    assert "write-protected" in str(messages[2].content[0].content)
+
+
+async def test_hook_allow_floor_approved_runs_tool():
+    """写保护地板人工确认通过 → 放行执行(引擎不跑:钩子已决策,§5.3)。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return True  # 人工确认
+
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Write", "t1", '{"file_path": "repo/.git/config"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[WriteTool()], hooks=hooks, request_permission=request_permission)
+    messages = await _collect(loop)
+    assert len(asks) == 1
+    assert messages[2].content[0].content == "wrote:repo/.git/config"
+    assert not messages[2].content[0].is_error
+
+
+async def test_hook_allow_immune_still_floor():
+    """§5.5 约束 2:allow+immune 命中写保护 → 免疫位不豁免权限层,仍降级 ask。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return False
+
+    hooks = FakeHooks(pre_result=pre_allow(immune=True))
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Write", "t1", '{"file_path": "repo/.git/config"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[WriteTool()], hooks=hooks, request_permission=request_permission)
+    await _collect(loop)
+    assert len(asks) == 1 and asks[0].source == "write-protection"
+
+
+async def test_hook_updated_input_rewrites_call_not_session(tmp_path):
+    """§5.4:updatedInput 改写执行输入,但改写不落会话(会话只记模型原始 tool_use)。"""
+    session = Session("s1", tmp_path)
+    hooks = FakeHooks(pre_result=pre_allow(updated_input={"text": "rewritten"}))
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "original"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks, session=session)
+    messages = await _collect(loop)
+    # 工具收到改写后输入
+    assert messages[2].content[0].content == "echo:rewritten"
+    # 会话不落改写:assistant 消息的 tool_use input 仍是模型原始输入
+    loaded = session.load()
+    assistant = [m for m in loaded if m.role == "assistant"][0]
+    tool_use = [b for b in assistant.content if b.type == "tool_use"][0]
+    assert tool_use.input == {"text": "original"}
+
+
+async def test_post_tool_use_fires_with_result():
+    """PostToolUse 观察型:成功路径触发,带序列化 tool_response(§2.2 字段清单)。"""
+    hooks = FakeHooks(pre_result=None)  # 无 PreToolUse 决策 → 引擎照常
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert hooks.pre_calls == 1 and hooks.post_calls == 1
+    extra = hooks.last_input.extra
+    assert extra["tool_name"] == "Echo"
+    assert extra["tool_use_id"] == "t1"
+    assert extra["tool_response"] == {"content": "echo:x", "is_error": False}
+
+
+async def test_hooks_none_zero_path():
+    """无 hooks(默认)→ 引擎照常,既有行为不回归(§4.10.1 零路径)。"""
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    messages = await _collect(_loop(llm))
+    assert messages[2].content[0].content == "echo:x"
+
+
+# ---- PermissionEngine.floor_check 单元测试(§5.3) ----
+
+
+def test_floor_check_protected_path():
+    engine = PermissionEngine()
+    d = engine.floor_check(
+        tool_name="Write", tool_input={"file_path": "repo/.git/config"}, cwd=Path(".")
+    )
+    assert d is not None
+    assert d.allowed is False and d.mode == "ask"
+    assert d.source == "write-protection"
+    assert d.requires_explicit_approval is True
+
+
+def test_floor_check_clean_path_none():
+    engine = PermissionEngine()
+    assert (
+        engine.floor_check(tool_name="Write", tool_input={"file_path": "src/main.py"}, cwd=Path("."))
+        is None
+    )
+
+
+def test_floor_check_non_file_tool_none():
+    engine = PermissionEngine()
+    assert engine.floor_check(tool_name="Bash", tool_input={"command": "ls"}, cwd=Path(".")) is None
+
+
+def test_floor_check_bash_rm_protected_home():
+    """Bash 地板:analyze_bash_command 的 deny(rm -rf ~)不得被 hook allow 绕过(§5.3)。"""
+    engine = PermissionEngine()
+    d = engine.floor_check(tool_name="Bash", tool_input={"command": "rm -rf ~"}, cwd=Path("."))
+    assert d is not None
+    assert d.source == "write-protection" and d.requires_explicit_approval is True
+    assert "protected" in d.reason
+
+
+def test_floor_check_bash_rm_protected_component():
+    """Bash 地板:rm/rmdir 目标命中写保护组件(rm -rf .git)→ 降级 ask(§5.3)。"""
+    engine = PermissionEngine()
+    d = engine.floor_check(tool_name="Bash", tool_input={"command": "rm -rf .git"}, cwd=Path("."))
+    assert d is not None
+    assert d.source == "write-protection" and d.requires_explicit_approval is True
+    assert ".git" in d.reason
+
+
+def test_floor_check_bash_clean_command_none():
+    engine = PermissionEngine()
+    assert (
+        engine.floor_check(tool_name="Bash", tool_input={"command": "git status"}, cwd=Path("."))
+        is None
+    )
+
+
+def test_floor_check_audits_once():
+    events = []
+
+    class Sink:
+        def emit(self, e):
+            events.append(e)
+
+    engine = PermissionEngine(audit_sink=Sink())
+    engine.floor_check(tool_name="Write", tool_input={"file_path": ".git/config"}, cwd=Path("."))
+    assert len(events) == 1
+    assert events[0].source == "write-protection"  # §8.1:地板降级第二条事件
+
+
+# ---- 阶段 09 S6 评审修复(M1 Bash 地板 / m1 审计 / m2 测试缺口) ----
+
+
+class FakeBashTool(Tool):
+    """name="Bash" 假件:走引擎 bash 分支但不真执行子进程(安全)。"""
+
+    name = "Bash"
+    is_concurrency_safe = True
+
+    def needs_permissions(self, input):
+        return True
+
+    async def _run(self, input, ctx):
+        return ToolResult("ran:" + input["command"])
+
+
+async def test_hook_allow_bash_floor_downgrades_to_ask():
+    """M1 Bash 地板:allow + Bash(rm -rf .git) → 降级 ask;拒绝 → denied。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return False  # 人工拒绝
+
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t1", '{"command": "rm -rf .git"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[FakeBashTool()], hooks=hooks, request_permission=request_permission)
+    messages = await _collect(loop)
+    assert len(asks) == 1
+    assert asks[0].source == "write-protection" and asks[0].requires_explicit_approval is True
+    assert messages[2].content[0].is_error
+    assert ".git" in str(messages[2].content[0].content)
+
+
+async def test_hook_allow_bash_floor_approved_runs_tool():
+    """M1 Bash 地板人工确认通过 → 放行执行。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return True  # 人工确认
+
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t1", '{"command": "rm -rf .git"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[FakeBashTool()], hooks=hooks, request_permission=request_permission)
+    messages = await _collect(loop)
+    assert len(asks) == 1
+    assert messages[2].content[0].content == "ran:rm -rf .git"
+    assert not messages[2].content[0].is_error
+
+
+async def test_hook_allow_bash_git_status_passes():
+    """M1 非保护命令不受影响:allow + Bash(git status) → 直接放行,无地板询问。"""
+    asks = []
+
+    async def request_permission(decision, tool, input):
+        asks.append(decision)
+        return True
+
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Bash", "t1", '{"command": "git status"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[FakeBashTool()], hooks=hooks, request_permission=request_permission)
+    messages = await _collect(loop)
+    assert asks == []
+    assert messages[2].content[0].content == "ran:git status"
+
+
+async def test_hook_dispatch_error_fails_closed_with_audit():
+    """m1/m2(a):dispatch 异常 → fail-closed deny + 恰好一条权限审计(§8.1)。"""
+    events = []
+
+    class Sink:
+        def emit(self, e):
+            events.append(e)
+
+    class RaisingHooks(FakeHooks):
+        async def dispatch(self, event, *, input, abort_event=None):
+            raise RuntimeError("hook manager bug")
+
+    hooks = RaisingHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    loop.permissions = PermissionEngine(audit_sink=Sink())
+    messages = await _collect(loop)
+    assert messages[2].content[0].is_error
+    assert "Permission denied by hook" in str(messages[2].content[0].content)
+    assert len(events) == 1
+    assert events[0].source == "hook:PreToolUse" and events[0].decision == "deny"
+
+
+async def test_hook_dispatch_receives_abort_event():
+    """m2(b):dispatch 收到 loop 的 abort_event(§6.3 abort 感知接线)。"""
+    hooks = FakeHooks(pre_result=pre_allow())
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    await _collect(loop)
+    assert hooks.abort_event is loop.abort
+
+
+async def test_post_only_config_pre_zero_path():
+    """m2(c):仅配置 PostToolUse 时 PreToolUse 零路径 —— 引擎照常、无 pre 调用(§4.10.1)。"""
+    hooks = FakeHooks(pre_result=None, events=("PostToolUse",))
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, hooks=hooks)
+    messages = await _collect(loop)
+    assert hooks.pre_calls == 0 and hooks.post_calls == 1
+    assert messages[2].content[0].content == "echo:x"
+
+
+async def test_passthrough_updated_input_reaches_engine():
+    """m2(d):passthrough 钩子 + updatedInput → 引擎读到改写后输入(§5.4 完整语义)。"""
+    seen = []
+
+    async def request_permission(decision, tool, input):
+        seen.append(dict(input))
+        return True  # 引擎 ask 被确认 → 放行
+
+    hooks = FakeHooks(pre_result=pre_passthrough(updated_input={"text": "rewritten"}))
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Perm", "t1", '{"text": "original"}'),
+            lambda i: text_event("ok"),
+        ]
+    )
+    loop = _loop(llm, tools=[PermTool()], hooks=hooks, request_permission=request_permission)
+    await _collect(loop)
+    assert seen == [{"text": "rewritten"}]  # 引擎 ask 决策(含 reason)看到的是改写后输入
