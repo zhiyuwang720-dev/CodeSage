@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,64 @@ def _is_thinking_only(message: SessionMessage) -> bool:
         and len(content) > 0
         and all(b.type == "thinking" for b in content)
     )
+
+
+@dataclass(slots=True, frozen=True)
+class AgentLoopConfig:
+    """Explicit construction contract for AgentLoop (CC QueryEngineConfig).
+
+    Fields are immutable construction parameters; per-session runtime
+    mutables (mode, on_stream, on_tool_event, on_notification, steer_queue,
+    finalize, abort) stay on the AgentLoop instance. NOTE: the config holds
+    references, not copies — e.g. compaction.enabled is still mutated by the
+    breaker, and apply_tool_filter re-assigns loop.tools (the instance alias
+    is the runtime truth, config.tools is the construction snapshot).
+    """
+
+    client: LLMClient
+    tools: ToolRegistry
+    permissions: PermissionEngine | None = None
+    request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None
+    system_prompt: str = ""
+    context_bundle: ContextBundle | None = None
+    compaction: CompactionConfig | None = None
+    prefetch: Callable[[list["SessionMessage"]], Awaitable[list[tuple[str, str]]]] | None = None
+    model: str = "main"
+    max_turns: int | None = 100
+    max_budget_usd: float | None = None
+    cwd: Path | None = None
+    session: Session | None = None
+    settings: Any = None
+    session_permissions: dict | None = None
+    history: list["SessionMessage"] | None = None
+    hooks: HookManager | None = None
+
+    def __post_init__(self) -> None:
+        max_turns = self.max_turns
+        if max_turns is not None and (not isinstance(max_turns, int) or max_turns <= 0):
+            # a mistyped config silently becoming 100 turns would run the
+            # model 100 rounds for nothing (review P3-3)
+            raise ValueError(f"max_turns must be a positive int or None, got {max_turns!r}")
+        if max_turns is None:
+            object.__setattr__(self, "max_turns", 100)  # frozen: one-time normalize
+
+
+@dataclass(slots=True)
+class RunState:
+    """Per-run mutable state (aligned with CC query()'s State object).
+
+    Created at the top of each run(); cross-run fields (SessionStart latch,
+    breaker, debounce, one-shot reminders, tool context) stay on the AgentLoop
+    instance — see their declaration comments there.
+    """
+
+    messages: list["SessionMessage"]
+    turn: int = 0
+    thinking_retries: int = 0
+    ptl_retried: bool = False  # ← self._ptl_retried
+    last_cache_read: int = 0  # ← self._last_cache_read
+    stop_feedback_count: int = 0  # ← self._stop_feedback_count
+    permission_denials: list[str] = field(default_factory=list)
 
 
 class AgentLoop:
