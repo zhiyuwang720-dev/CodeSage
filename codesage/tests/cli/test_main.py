@@ -207,11 +207,15 @@ def test_output_format_json_emits_summary(tmp_path, monkeypatch, capsys):
         "is_error",
         "duration_seconds",
         "max_turns_exceeded",
+        "budget_exceeded",
+        "permission_denials",
     }
     assert data["result"] == "ok"
     assert data["is_error"] is False
     assert data["num_turns"] >= 1
     assert data["usage"] >= 0
+    assert data["budget_exceeded"] is False
+    assert data["permission_denials"] == []
 
 
 # ---- 1e. --debug / --verbose (C4) ----

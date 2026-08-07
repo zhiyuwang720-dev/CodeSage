@@ -12,7 +12,7 @@ from pathlib import Path
 from ..ai import LLMClient
 from ..config import GlobalConfig, load_settings, paths
 from ..core import Session
-from ..engine import AgentLoop, CompactionConfig, build_context_bundle
+from ..engine import AgentLoop, AgentLoopConfig, CompactionConfig, build_context_bundle
 from ..hooks import HookJsonlSink, load_hook_manager
 from ..permissions import JsonlAuditSink, PermissionEngine
 from ..permissions.store import load_permission_rules
@@ -61,22 +61,24 @@ def build_loop(
         session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
 
     return AgentLoop(
-        client=client,
-        tools=registry,
-        permissions=permissions,
-        request_permission=request_permission,
-        system_prompt=system_prompt if system_prompt is not None else get_base_prompt(str(cwd)),
-        context_bundle=build_context_bundle(cwd),  # memoize: once per session (S4)
-        compaction=CompactionConfig(),  # PI-05 auto-compact (S6)
-        model=model,
-        mode=mode,
-        max_turns=max_turns,
-        max_budget_usd=max_budget_usd,
-        cwd=cwd,
-        session=session,
-        settings=settings,
-        history=history,
-        hooks=hooks,  # 阶段 09:事件钩子管理器(无配置事件走索引零路径,§4.10.1)
+        AgentLoopConfig(
+            client=client,
+            tools=registry,
+            permissions=permissions,
+            request_permission=request_permission,
+            system_prompt=system_prompt if system_prompt is not None else get_base_prompt(str(cwd)),
+            context_bundle=build_context_bundle(cwd),  # memoize: once per session (S4)
+            compaction=CompactionConfig(),  # PI-05 auto-compact (S6)
+            model=model,
+            max_turns=max_turns,
+            max_budget_usd=max_budget_usd,
+            cwd=cwd,
+            session=session,
+            settings=settings,
+            history=history,
+            hooks=hooks,  # 阶段 09:事件钩子管理器(无配置事件走索引零路径,§4.10.1)
+        ),
+        mode=mode,  # 会话级运行时切换(/mode 命令写实例,不进 config)
     )
 
 

@@ -11,7 +11,7 @@ import asyncio
 
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent
 from codesage.core import assistant_message, user_message
-from codesage.engine import AgentLoop, CompactionConfig
+from codesage.engine import AgentLoop, AgentLoopConfig, CompactionConfig
 from codesage.engine.compaction import find_cut_point
 from codesage.hooks import HookDispatchResult
 from codesage.permissions import PermissionEngine
@@ -134,11 +134,13 @@ def _tiny_compaction():
 
 def _loop(llm, hooks=None, **kw):
     return AgentLoop(
-        client=llm,
-        tools=ToolRegistry([EchoTool()]),
-        permissions=PermissionEngine(),
-        hooks=hooks,
-        **kw,
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([EchoTool()]),
+            permissions=PermissionEngine(),
+            hooks=hooks,
+            **kw,
+        )
     )
 
 

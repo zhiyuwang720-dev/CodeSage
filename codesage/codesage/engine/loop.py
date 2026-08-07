@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -80,42 +81,106 @@ def _is_thinking_only(message: SessionMessage) -> bool:
     )
 
 
+@dataclass(slots=True, frozen=True)
+class AgentLoopConfig:
+    """Explicit construction contract for AgentLoop (CC QueryEngineConfig).
+
+    Fields are immutable construction parameters; per-session runtime
+    mutables (mode, on_stream, on_tool_event, on_notification, steer_queue,
+    finalize, abort) stay on the AgentLoop instance. NOTE: the config holds
+    references, not copies — e.g. compaction.enabled is still mutated by the
+    breaker, and apply_tool_filter re-assigns loop.tools (the instance alias
+    is the runtime truth, config.tools is the construction snapshot).
+    """
+
+    client: LLMClient
+    tools: ToolRegistry
+    permissions: PermissionEngine | None = None
+    request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None
+    system_prompt: str = ""
+    context_bundle: ContextBundle | None = None
+    compaction: CompactionConfig | None = None
+    prefetch: Callable[[list["SessionMessage"]], Awaitable[list[tuple[str, str]]]] | None = None
+    model: str = "main"
+    max_turns: int | None = 100
+    max_budget_usd: float | None = None
+    cwd: Path | None = None
+    session: Session | None = None
+    settings: Any = None
+    session_permissions: dict | None = None
+    history: list["SessionMessage"] | None = None
+    hooks: HookManager | None = None
+
+    def __post_init__(self) -> None:
+        max_turns = self.max_turns
+        if max_turns is not None and (not isinstance(max_turns, int) or max_turns <= 0):
+            # a mistyped config silently becoming 100 turns would run the
+            # model 100 rounds for nothing (review P3-3)
+            raise ValueError(f"max_turns must be a positive int or None, got {max_turns!r}")
+        if max_turns is None:
+            object.__setattr__(self, "max_turns", 100)  # frozen: one-time normalize
+
+
+@dataclass(slots=True)
+class RunState:
+    """Per-run mutable state (aligned with CC query()'s State object).
+
+    Created at the top of each run(); cross-run fields (SessionStart latch,
+    breaker, debounce, one-shot reminders, tool context) stay on the AgentLoop
+    instance — see their declaration comments there.
+    """
+
+    messages: list["SessionMessage"]
+    turn: int = 0
+    thinking_retries: int = 0
+    ptl_retried: bool = False  # ← self._ptl_retried
+    last_cache_read: int = 0  # ← self._last_cache_read
+    stop_feedback_count: int = 0  # ← self._stop_feedback_count
+    permission_denials: list[str] = field(default_factory=list)
+
+
 class AgentLoop:
     def __init__(
         self,
+        config: AgentLoopConfig,
         *,
-        client: LLMClient,
-        tools: ToolRegistry,
-        permissions: PermissionEngine | None = None,
-        request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
-        system_prompt: str = "",
-        context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
-        compaction: CompactionConfig | None = None,  # PI-05 auto-compact (S6; None disables)
-        prefetch: Callable[[list["SessionMessage"]], Awaitable[list[tuple[str, str]]]] | None = None,  # §3.10 memory prefetch (phase 17 fills in)
-        model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
-        max_turns: int = 100,
-        max_budget_usd: float | None = None,
-        cwd: Path | None = None,
-        session: Session | None = None,
-        settings: Any = None,  # phase-01 Settings for permission rules
-        session_permissions: dict | None = None,  # "this session only" rules (CC-07)
-        history: list["SessionMessage"] | None = None,  # prior turns as context (--continue)
         on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
         on_notification: Callable[[str, str, dict], None] | None = None,  # 通知 UI 消费(§2.5:statusbar)
         finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
-        hooks: HookManager | None = None,  # 阶段 09:事件钩子管理器(None = 禁用;S10 装配传入)
     ):
-        self.client = client
-        self.tools = tools
-        self.permissions = permissions or PermissionEngine()
-        self.request_permission = request_permission
-        self.system_prompt = system_prompt
-        self.context_bundle = context_bundle
-        self.compaction = compaction
-        self.prefetch = prefetch
+        #: construction contract; per-session runtime mutables stay on the
+        #: instance (mode, callbacks, steer_queue) — see AgentLoopConfig doc.
+        self.config = config
+        # 17 别名:外部读取点密集(repl/test 读 loop.client/compaction/max_turns 等),
+        # 内部方法零改动(行为零变化的兼容层)
+        self.client = config.client
+        self.tools = config.tools
+        self.permissions = config.permissions or PermissionEngine()
+        self.request_permission = config.request_permission
+        self.system_prompt = config.system_prompt
+        self.context_bundle = config.context_bundle
+        self.compaction = config.compaction
+        self.prefetch = config.prefetch
+        self.model = config.model
+        self.max_turns = config.max_turns
+        self.max_budget_usd = config.max_budget_usd
+        self.cwd = config.cwd or Path.cwd()
+        self.session = config.session
+        self.settings = config.settings
+        self.session_permissions = config.session_permissions
+        self.history = config.history or []
+        self.hooks = config.hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        # 运行时可变(会话级,不进 config)
+        self.mode = mode
+        self.on_stream = on_stream
+        self.steer_queue = steer_queue
+        self.on_tool_event = on_tool_event
+        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
+        self.finalize = finalize
+        # ---- 跨 run 可变状态(per-run 部分在 RunState,run() 入口创建)----
         self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
@@ -124,43 +189,24 @@ class AgentLoop:
         self._recovery_reminder: str | None = None
         # §3.7: last time the request view cleared old tool results
         self._last_result_clean = time.time()
-        # §3.8: reactive compaction — one PTL recovery per loop run
-        self._ptl_retried = False
         #: active message list exposed for the CLI status bar's ctx meter
+        #: (对外投影:run() 内随 state.messages 更新,loop 内自身不读)
         self._active_messages: list["SessionMessage"] | None = None
-        # §3.9: previous response's cache_read_tokens (break detection)
-        self._last_cache_read = 0
-        self.model = model
-        self.mode = mode
-        if max_turns is not None and (not isinstance(max_turns, int) or max_turns <= 0):
-            # a mistyped config silently becoming 100 turns would run the
-            # model 100 rounds for nothing (review P3-3)
-            raise ValueError(f"max_turns must be a positive int or None, got {max_turns!r}")
-        self.max_turns = max_turns if max_turns is not None else 100
-        self.max_budget_usd = max_budget_usd
-        self.cwd = cwd or Path.cwd()
-        self.session = session
-        self.settings = settings
-        self.session_permissions = session_permissions
-        self.history = history or []
-        self.on_stream = on_stream
-        self.steer_queue = steer_queue
-        self.on_tool_event = on_tool_event
-        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
-        self.finalize = finalize
-        self.hooks = hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        #: 最近一次 run() 的权限拒绝清单(与 last_stop_reason 同模式:run() 是
+        #: AsyncIterator 无法返回值,结果经 finally 投影到这里供 submit 读取)
+        self.last_permission_denials: list[str] = []
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
         self._session_started = False
         #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
         #: 一次性 prefix,注入后清除(与 _recovery_reminder 同款模式)
         self._hook_reminder: str | None = None
-        #: Stop feedback 注入计数(M1,§6.4):run() 生命周期,达 MAX_STOP_HOOK_ATTEMPTS
-        #: 后不再注入(与 turn 同生命周期,run() 入口重置)
-        self._stop_feedback_count = 0
         #: Termination reason of the last run(): "completed" | "max_turns" |
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
         self.last_stop_reason: str | None = None
+        #: Permission denials collected during the last run() (投影;submit/
+        #: run_single_turn 读取 —— CC submitMessage 的 permission_denials)
+        self.last_permission_denials: list[str] = []
         self.abort = asyncio.Event()
         #: One ToolUseContext per loop: carries read-freshness state and the
         #: abort channel across tool calls (phase 03 read-first guard).
@@ -170,11 +216,10 @@ class AgentLoop:
 
     async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
         """Run the loop from a user input; yields the conversation messages."""
-        # per-run state: a reused loop instance must start fresh (P3-8)
-        self._ptl_retried = False
-        self._last_cache_read = 0
+        # per-run state: a reused loop instance must start fresh (P3-8);
+        # ptl_retried/last_cache_read/stop_feedback_count live in RunState,
+        # _active_messages stays an instance projection (repl statusbar reads it)
         self._active_messages = None
-        self._stop_feedback_count = 0  # M1:feedback 计数与 turn 同生命周期(§6.4)
         # SessionStart 钩子(§6.2):run() 入口,门闩一次 —— 首个 run() 派发后置位,
         # 生命周期内不再触发;非阻塞(§4.6 表:非 PreToolUse 事件 fail-open)
         if not self._session_started:
@@ -192,15 +237,13 @@ class AgentLoop:
 
         # resumed turns start from the prior history; the session file keeps
         # growing so --continue chains naturally across runs
-        messages: list[SessionMessage] = [*self.history, first]
-        turn = 0
-        thinking_retries = 0
+        state = RunState(messages=[*self.history, first])
         try:
             while True:
                 # CLI status bar's ctx meter reads this (compaction visibly
                 # drops it); updated again after a compaction replaces it
-                self._active_messages = messages
-                if turn >= self.max_turns:
+                self._active_messages = state.messages
+                if state.turn >= self.max_turns:
                     yield await self._stop("max_turns", MAX_TURNS_TEXT, meta=True)
                     return
                 if self.max_budget_usd is not None and self.client.total_cost[0] >= self.max_budget_usd:
@@ -209,7 +252,7 @@ class AgentLoop:
                 if self.abort.is_set():
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
-                turn += 1
+                state.turn += 1
 
                 # PI-05 checkpoint: auto-compaction, after abort/budget/turns
                 # (specs/08 §3.5). Pipeline order follows CC query.ts:379-468 —
@@ -219,28 +262,28 @@ class AgentLoop:
                 # enough tokens makes the summary call unnecessary (auto-
                 # compact is the last resort). The summary request does not
                 # count as a turn.
-                if self.compaction is not None and self.compaction.enabled and turn != self._last_compact_turn:
+                if self.compaction is not None and self.compaction.enabled and state.turn != self._last_compact_turn:
                     # Estimative cleanup only — deliberately do NOT touch
                     # _last_result_clean: that gate is shared with _ask_model's
                     # request-view projection, and consuming the stale trigger
                     # here would leave the actual request un-cleaned (review:
                     # the checkpoint must not eat the other site's gate).
                     cleaned, _ = clean_old_tool_results(
-                        messages, now=time.time(), last_clean=self._last_result_clean
+                        state.messages, now=time.time(), last_clean=self._last_result_clean
                     )
                     # clean_old_tool_results returns `messages` itself when
                     # nothing was cleared — safe to estimate unconditionally
                     estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
-                        self._last_compact_turn = turn  # debounce: no second pass this turn
+                        self._last_compact_turn = state.turn  # debounce: no second pass this turn
                         # PreCompact 的 context_tokens = 压缩检查点的请求视图估算
                         # (cleaned 视图,§6.2);PTL 路径无此变量,_compact 内回退估算
-                        compacted = await self._compact(messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
+                        compacted = await self._compact(state.messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
                         if compacted is not None:
                             summary_msg, cut = compacted
                             yield summary_msg
-                            messages = [summary_msg, *messages[cut.index :]]
-                            self._active_messages = messages  # meter reflects the compaction
+                            state.messages = [summary_msg, *state.messages[cut.index :]]
+                            self._active_messages = state.messages  # meter reflects the compaction
 
                 # PI-06: drain mid-run steer inputs into the conversation
                 # (they become user messages for the next LLM call)
@@ -263,15 +306,15 @@ class AgentLoop:
                         steer_msg = user_message(submitted)
                         yield steer_msg
                         await self._persist(steer_msg)
-                        messages.append(steer_msg)
+                        state.messages.append(steer_msg)
 
                 # LLM call (checkpoint 1: abort before and after)
                 try:
-                    assistant = await self._ask_model(messages)
+                    assistant = await self._ask_model(state)
                 except LLMError as exc:
                     if (
                         is_ptl_error(exc)
-                        and not self._ptl_retried
+                        and not state.ptl_retried
                         and self.compaction is not None
                         and self.compaction.enabled  # breaker tripped: no more summary calls (P3-4)
                     ):
@@ -281,13 +324,13 @@ class AgentLoop:
                         # (skip should_compact) and retry once; a failing
                         # compact falls through to the outer error path and
                         # counts into the breaker (no PTL-compact-PTL loop).
-                        self._ptl_retried = True
-                        compacted = await self._compact(messages)
+                        state.ptl_retried = True
+                        compacted = await self._compact(state.messages)
                         if compacted is not None:
                             summary_msg, cut = compacted
                             yield summary_msg
-                            messages = [summary_msg, *messages[cut.index :]]
-                            self._active_messages = messages  # meter reflects it now (P3-5)
+                            state.messages = [summary_msg, *state.messages[cut.index :]]
+                            self._active_messages = state.messages  # meter reflects it now (P3-5)
                             continue
                     raise
                 if assistant is None:
@@ -295,21 +338,21 @@ class AgentLoop:
                     return
                 yield assistant
                 await self._persist(assistant)
-                messages.append(assistant)
+                state.messages.append(assistant)
 
                 tool_uses = [b for b in assistant.content if b.type == "tool_use"] if isinstance(assistant.content, list) else []
                 if not tool_uses:
                     if _is_thinking_only(assistant):
-                        thinking_retries += 1
-                        if thinking_retries >= THINKING_ONLY_MAX_RETRIES:
+                        state.thinking_retries += 1
+                        if state.thinking_retries >= THINKING_ONLY_MAX_RETRIES:
                             yield await self._stop("thinking_only_exhausted", THINKING_ONLY_GIVE_UP, meta=True)
                             return
                         # retry with a recovery nudge (counted separately, not as a turn)
                         recovery = user_message(THINKING_ONLY_RECOVERY)
                         yield recovery
                         await self._persist(recovery)
-                        messages.append(recovery)
-                        turn -= 1
+                        state.messages.append(recovery)
+                        state.turn -= 1
                         continue
                     # an is_error response (provider failure with no text) is
                     # NOT a completed turn — stop reason must say so (P3-7)
@@ -327,14 +370,14 @@ class AgentLoop:
                                 "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
                             )
                             return
-                        if result.stop_feedback is not None and self._allow_stop_feedback():
+                        if result.stop_feedback is not None and self._allow_stop_feedback(state):
                             # m3/§6.4 澄清:feedback 必须是普通 user_message —— is_meta
                             # 会被 normalize_for_api 过滤,模型不可见;注入后下一轮
                             # 计为一次 turn(n2)
                             feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
                             yield feedback
                             await self._persist(feedback)
-                            messages.append(feedback)
+                            state.messages.append(feedback)
                             continue
                     return
 
@@ -342,7 +385,7 @@ class AgentLoop:
                 if self.abort.is_set():
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
-                scheduled = await self._execute_tools(tool_uses)
+                scheduled = await self._execute_tools(state, tool_uses)
                 # one tool_result user message per tool, in tool_use order
                 # (normalize_for_api merges adjacent user messages — wire behavior unchanged)
                 for item in scheduled:
@@ -358,7 +401,7 @@ class AgentLoop:
                     )
                     yield tool_round
                     await self._persist(tool_round)
-                    messages.append(tool_round)
+                    state.messages.append(tool_round)
                 # PI-04: terminate semantics — the turn stops only when EVERY
                 # tool in the batch asks to stop. Checked AFTER the tool results
                 # were yielded so the model/user still see what the tools did.
@@ -374,13 +417,13 @@ class AgentLoop:
                                 "hook", result.stop_reason or "Stopped: hook requested stop.", meta=True
                             )
                             return
-                        if result is not None and result.stop_feedback is not None and self._allow_stop_feedback():
+                        if result is not None and result.stop_feedback is not None and self._allow_stop_feedback(state):
                             # m3/§6.4 澄清:feedback 必须普通 user_message(is_meta 被过滤,
                             # 模型不可见);下一轮计为一次 turn(n2)
                             feedback = user_message(f"Stop hook feedback:\n{result.stop_feedback}")
                             yield feedback
                             await self._persist(feedback)
-                            messages.append(feedback)
+                            state.messages.append(feedback)
                             continue
                         yield await self._stop("tool_terminated", "Stopped: tools requested termination.", meta=True)
                         return
@@ -396,6 +439,9 @@ class AgentLoop:
             yield failed
             await self._persist(failed)
         finally:
+            # per-run 结果投影到实例(与 last_stop_reason 同模式);state 在
+            # try 之前创建,所有出口(return/异常/GeneratorExit)都经过这里
+            self.last_permission_denials = list(state.permission_denials)
             # a prefetch still in flight must not dangle past the loop
             task = self._prefetch_task
             if task is not None and not task.done():
@@ -459,7 +505,7 @@ class AgentLoop:
         await self._dispatch_post_compact(trigger, summary_msg, cut)
         return summary_msg, cut
 
-    async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
+    async def _ask_model(self, state: RunState) -> SessionMessage | None:
         # §3.10: a prefetch launched last turn that finished during the model
         # response / tool execution rides THIS request (CC attachment message:
         # injected after tool execution, visible in the next API call's context)
@@ -467,6 +513,7 @@ class AgentLoop:
         # §3.7 projection: old tool results cleared in the request view only —
         # the session log stays append-only (specs/08 §3.7). Independent of
         # compaction: it is most useful when compaction is off (messages only grow).
+        messages = state.messages
         now = time.time()
         cleaned, did = clean_old_tool_results(
             messages, now=now, last_clean=self._last_result_clean
@@ -551,12 +598,12 @@ class AgentLoop:
         # (TTL expiry or server eviction). Diagnostic only — no action.
         if response.usage is not None:
             cache_read = response.usage.cache_read_tokens
-            if cache_read == 0 and self._last_cache_read > 0:
+            if cache_read == 0 and state.last_cache_read > 0:
                 logger.warning(
                     "cache break: cache_read_tokens dropped %d -> 0 (TTL expiry or server eviction)",
-                    self._last_cache_read,
+                    state.last_cache_read,
                 )
-            self._last_cache_read = cache_read
+            state.last_cache_read = cache_read
         return assistant_message(
             response.content,
             usage=response.usage,
@@ -602,7 +649,7 @@ class AgentLoop:
             return None
         return sections[:MAX_REMINDER_SECTIONS]
 
-    async def _execute_tools(self, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
+    async def _execute_tools(self, state: RunState, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
         scheduled: list[ScheduledTool] = []
         if self._tool_ctx is None:
             self._tool_ctx = ToolUseContext(cwd=self.cwd, abort_event=self.abort)
@@ -648,7 +695,7 @@ class AgentLoop:
             )
         queue = ToolUseQueue(
             scheduled,
-            permission_check=self._permission_check,
+            permission_check=lambda item: self._permission_check(item, state),
             pre_hook=self._pre_tool_use_hook,  # PreToolUse 钩子(阶段 09 §5.1,先于权限引擎)
             post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
@@ -681,7 +728,7 @@ class AgentLoop:
             # UI 回调独立 try:hook 失败不得连带跳过权限弹窗这类关键状态行
             logger.exception("on_notification callback failed (best-effort)")
 
-    async def _permission_check(self, item: ScheduledTool) -> ToolResult | None:
+    async def _permission_check(self, item: ScheduledTool, state: RunState) -> ToolResult | None:
         """Return a denial ToolResult, or None to allow execution."""
         decision = self.permissions.evaluate_tool_use(
             tool_name=item.tool.name,
@@ -718,6 +765,9 @@ class AgentLoop:
             mode=decision.mode,
             reason=decision.reason,
         )
+        # 收集(对齐 CC permission_denials):ask 被拒 / 非 ask 硬拒统一入账,
+        # run() 结束由 finally 投影到 last_permission_denials
+        state.permission_denials.append(f"{item.tool.name}: {decision.reason}")
         return ToolResult(f"Permission denied: {decision.reason}", is_error=True)
 
     async def _pre_tool_use_hook(self, item: ScheduledTool) -> ToolResult | None:
@@ -986,16 +1036,16 @@ class AgentLoop:
         except Exception:
             logger.exception("PostCompact hook dispatch failed (non-blocking, §6.2)")
 
-    def _allow_stop_feedback(self) -> bool:
+    def _allow_stop_feedback(self, state: RunState) -> bool:
         """M1(§6.4 补):Stop feedback 注入上限 —— 达 MAX_STOP_HOOK_ATTEMPTS(5)
         后不再注入,按普通 completed/tool_terminated 停止,不报错。
 
-        计数按 run() 生命周期(run() 入口重置);只在真正注入时递增,
+        计数按 run() 生命周期(RunState 新建承担);只在真正注入时递增,
         防「永远 exit 2」的钩子拖出无限循环(对齐 CC MAX_STOP_HOOK_ATTEMPTS)。
         """
-        if self._stop_feedback_count >= MAX_STOP_HOOK_ATTEMPTS:
+        if state.stop_feedback_count >= MAX_STOP_HOOK_ATTEMPTS:
             return False
-        self._stop_feedback_count += 1
+        state.stop_feedback_count += 1
         return True
 
     def _accumulate_hook_reminder(self, text: str | None) -> None:

@@ -181,3 +181,17 @@ while True:
 **A: 模型只输出 thinking 块、无文本无 tool_use 时直接返回就是静默终止。_is_thinking_only 检测后注入恢复消息("你只输出了内部思考…"),turn 回退不计轮次,3 次(THINKING_ONLY_MAX_RETRIES)后放弃并产 is_meta 消息 —— 有界保证不无限空转烧钱。**
 **深度衍生: turn -= 1 的语义是什么?** → **恢复消息是 harness 注入的 nudge 而非模型产出,不应消耗用户轮次预算;thinking_retries 单独计数,与 turn 解耦 —— 重试预算与轮次预算是两个独立有界维度,分别防空转与防过长。**
 **广度衍生: 超大工具结果落盘为什么也放引擎?** → **_spill_large_result 在 queue 收结果后统一处理:>100K 字符写临时文件,模型只见 "(result saved to ...)" + 500 字符预览。放引擎而非工具层,保证所有工具(含第三方)共享同一上限,工具作者无需自管 —— 与权限决策链同理,横切关注点在引擎单点。**
+
+---
+
+## 决策记录:AgentLoopConfig + RunState + AgentSession(2026-08,refactor/engine-config)
+
+对照 Claude Code QueryEngine 设计(QueryEngineConfig + submitMessage/query 两层 + State)的三项收拢。行为零变化,793 测试为闸门,唯一刻意变更:JSON 输出 8 → 10 keys。
+
+1. **配置显式化(AgentLoopConfig)**:23 个 keyword-only 构造参数收拢为 `@dataclass(slots=True, frozen=True)`(17 个纯构造字段);6 个运行时可变字段(mode/on_stream/steer_queue/on_tool_event/on_notification/finalize)留实例。`abort` 保持实例不换对象(测试断言 `hooks.abort_event is loop.abort` 同一性)。
+   - **config.tools 快照语义**:apply_tool_filter(assemble.py)重赋值 `loop.tools` —— config.tools 是构造快照,运行时真相是实例别名属性。frozen 只挡直接赋值不挡引用传递:`compaction.enabled` 熔断写(压缩失败自禁用)经 config 引用传递正常生效。
+   - **max_turns 归一化**:None → 100 在 `__post_init__` 用 `object.__setattr__`(frozen 一次性写入)。
+2. **两层分离(AgentLoop.run = query / AgentSession.submit = submitMessage)**:run() 流式 yield 签名不变;engine/session.py 新建 AgentSession.submit(收集 usage/cost/turns/stop_reason/permission_denials,无渲染)。层依赖纪律:engine 不 import cli —— RunSummary 先迁入 engine,repl.py 改导入;渲染路径 run_single_turn 与 submit 共享模块级 `_summarize_run` 提取尾部。
+3. **State 显式化(RunState)**:run() 散布可变状态收拢(messages/turn/thinking_retries/ptl_retried/last_cache_read/stop_feedback_count/permission_denials),run() 入口新建,per-run 生命周期(reused loop 天然重置,test_reused_loop_instance_resets_per_run_state 改行为断言)。
+   - **_active_messages 留实例投影**(repl 状态栏 ctx meter 读 `loop._active_messages`),run() 内随 state.messages 更新。
+   - **permission_denials 收集位**:`_permission_check` 拒绝路径(与 permission_denied 通知同位)入账 `f"{tool}: {reason}"`;run() 是 AsyncIterator 无法返回值 → finally 投影到实例 `last_permission_denials`(与 last_stop_reason 同模式),RunSummary 带出。

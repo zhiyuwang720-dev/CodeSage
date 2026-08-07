@@ -7,7 +7,7 @@ import pytest
 
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
 from codesage.core import Session, assistant_message, user_message
-from codesage.engine import AgentLoop, CompactionConfig
+from codesage.engine import AgentLoop, AgentLoopConfig, CompactionConfig
 from codesage.hooks import HookDispatchResult
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
@@ -95,7 +95,12 @@ class ExplodingTool(Tool):
 
 def _loop(llm, tools=None, **kw):
     registry = ToolRegistry(tools or [EchoTool()])
-    return AgentLoop(client=llm, tools=registry, permissions=PermissionEngine(), **kw)
+    # 运行时 kw(实例参数,config 拒收)与构造 kw 分流
+    runtime = {k: kw.pop(k) for k in ("mode", "steer_queue", "on_tool_event", "finalize") if k in kw}
+    return AgentLoop(
+        AgentLoopConfig(client=llm, tools=registry, permissions=PermissionEngine(), **kw),
+        **runtime,
+    )
 
 
 async def _collect(loop, user_input="hi"):
@@ -1130,11 +1135,10 @@ async def test_reused_loop_instance_resets_per_run_state():
     instance (review P3-8)."""
     loop = _loop(FakeLLM([_ptl_stream, lambda i: text_event("ok")]), history=_big_history(), compaction=_tiny_compaction())
     await _collect(loop)
-    assert loop._ptl_retried is True  # first run consumed its PTL retry
-    # second run on the same instance gets a fresh retry budget
+    # second run on the same instance gets a fresh retry budget (per-run
+    # state lives in RunState now — observable via the retry happening again)
     loop.client = FakeLLM([_ptl_stream, lambda i: text_event("ok2")], summary_text="s")
     messages = await _collect(loop)
-    assert loop._ptl_retried is True  # retried again — state was reset
     assert any(m.is_compaction_summary for m in messages)
     assert messages[-1].content[0].text == "ok2"
 

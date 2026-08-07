@@ -12,41 +12,14 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
-from ..engine import AgentLoop
+from ..engine import AgentLoop, RunSummary
+from ..engine.session import _summarize_run
 from ..engine.tokens import estimate_context_tokens
 from .commands import find_command
 from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 from .statusbar import StatusBar
-
-
-@dataclass
-class RunSummary:
-    """Machine-readable outcome of one single-turn run (--output-format json)."""
-
-    session_id: str
-    result: str
-    num_turns: int
-    usage: int
-    total_cost_usd: float
-    is_error: bool
-    duration_seconds: float
-    budget_exceeded: bool = False
-    max_turns_exceeded: bool = False
-
-    def to_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "result": self.result,
-            "num_turns": self.num_turns,
-            "usage": self.usage,
-            "total_cost_usd": self.total_cost_usd,
-            "is_error": self.is_error,
-            "duration_seconds": self.duration_seconds,
-            "max_turns_exceeded": self.max_turns_exceeded,
-        }
 
 
 async def run_single_turn(
@@ -63,7 +36,8 @@ async def run_single_turn(
 
     Returns a RunSummary: is_error mirrors the old bool (exit code 1),
     budget_exceeded/max_turns_exceeded flag the engine's structured stop
-    reason (exit code 1).
+    reason (exit code 1). The extraction tail is shared with
+    AgentSession.submit (engine/session.py).
     """
     target = out or sys.stdout
     started = time.monotonic()
@@ -113,29 +87,13 @@ async def run_single_turn(
     finally:
         loop.on_stream = prev_on_stream  # type: ignore[attr-defined]
         loop.on_tool_event = prev_on_tool_event  # type: ignore[attr-defined]
-    client = getattr(loop, "client", None)
-    # CC-10: prefer the engine's structured stop reason over text sniffing.
-    stop_reason = getattr(loop, "last_stop_reason", None)
-    budget_exceeded = stop_reason == "max_budget"
-    max_turns_exceeded = stop_reason == "max_turns"
-    if stop_reason is None:
-        # AgentLoop.last_stop_reason not landed yet — legacy fallback: text
-        # sniff + cost check (remove once the engine sets the reason).
-        budget_exceeded = "budget" in last_text.lower() or (
-            getattr(loop, "max_budget_usd", None) is not None
-            and getattr(client, "total_cost", None) is not None
-            and client.total_cost[0] >= loop.max_budget_usd
-        )
-    return RunSummary(
-        session_id=loop.session.path.stem if getattr(loop, "session", None) is not None else "",
-        result=last_text,
-        num_turns=max(llm_calls, 1),
-        usage=total_tokens,
-        total_cost_usd=float(getattr(client, "total_cost", [0.0])[0]),
-        is_error=has_error,
-        duration_seconds=time.monotonic() - started,
-        budget_exceeded=budget_exceeded,
-        max_turns_exceeded=max_turns_exceeded,
+    return _summarize_run(
+        loop,
+        started=started,
+        last_text=last_text,
+        has_error=has_error,
+        llm_calls=llm_calls,
+        total_tokens=total_tokens,
     )
 
 
