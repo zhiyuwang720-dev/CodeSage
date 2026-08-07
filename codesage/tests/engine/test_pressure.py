@@ -8,7 +8,7 @@ on a recursive generator at ~1000 turns (Python's default recursion limit).
 import pytest
 
 from codesage.ai import StreamEvent
-from codesage.engine import AgentLoop
+from codesage.engine import AgentLoop, AgentLoopConfig
 from codesage.permissions import PermissionEngine
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
 
@@ -54,10 +54,12 @@ class TirelessLLM:
 async def test_2001_turns_no_recursion():
     llm = TirelessLLM(max_turns=TURNS)
     loop = AgentLoop(
-        client=llm,
-        tools=ToolRegistry([TurnTool()]),
-        permissions=PermissionEngine(),
-        max_turns=TURNS + 5,
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([TurnTool()]),
+            permissions=PermissionEngine(),
+            max_turns=TURNS + 5,
+        )
     )
     count = 0
     async for _message in loop.run("go"):

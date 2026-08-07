@@ -14,7 +14,7 @@ from codesage.ai import LLMError, StreamEvent
 from codesage.cli.repl import _render_notification
 from codesage.cli import statusbar as sb_mod
 from codesage.cli.statusbar import StatusBar
-from codesage.engine import AgentLoop
+from codesage.engine import AgentLoop, AgentLoopConfig
 from codesage.permissions import PermissionEngine
 from codesage.permissions.audit import JsonlAuditSink
 from codesage.tools import Tool, ToolError, ToolRegistry, ToolResult
@@ -97,7 +97,9 @@ def _loop(llm, hooks, **kw):
     registry = ToolRegistry([PermTool(), ErrTool()])
     permissions = kw.pop("permissions", None) or PermissionEngine()
     return AgentLoop(
-        client=llm, tools=registry, permissions=permissions, hooks=hooks, **kw
+        AgentLoopConfig(
+            client=llm, tools=registry, permissions=permissions, hooks=hooks, **kw
+        )
     )
 
 

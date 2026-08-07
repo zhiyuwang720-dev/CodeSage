@@ -142,39 +142,45 @@ class RunState:
 class AgentLoop:
     def __init__(
         self,
+        config: AgentLoopConfig,
         *,
-        client: LLMClient,
-        tools: ToolRegistry,
-        permissions: PermissionEngine | None = None,
-        request_permission: Callable[[PermissionDecision, Any, dict], Awaitable[bool]] | None = None,
-        system_prompt: str = "",
-        context_bundle: ContextBundle | None = None,  # session context → system-reminder (S4)
-        compaction: CompactionConfig | None = None,  # PI-05 auto-compact (S6; None disables)
-        prefetch: Callable[[list["SessionMessage"]], Awaitable[list[tuple[str, str]]]] | None = None,  # §3.10 memory prefetch (phase 17 fills in)
-        model: str = "main",
         mode: str | PermissionMode = PermissionMode.DEFAULT,
-        max_turns: int = 100,
-        max_budget_usd: float | None = None,
-        cwd: Path | None = None,
-        session: Session | None = None,
-        settings: Any = None,  # phase-01 Settings for permission rules
-        session_permissions: dict | None = None,  # "this session only" rules (CC-07)
-        history: list["SessionMessage"] | None = None,  # prior turns as context (--continue)
         on_stream: Callable[["StreamEvent"], None] | None = None,  # live text deltas for UI
         steer_queue: "asyncio.Queue[str] | None" = None,  # mid-run user inputs (PI-06)
         on_tool_event: Callable[[str, str, dict], None] | None = None,  # start/update/end (PI-01)
         on_notification: Callable[[str, str, dict], None] | None = None,  # 通知 UI 消费(§2.5:statusbar)
         finalize: Callable[["ScheduledTool", "ToolResult"], "Awaitable[ToolResult]"] | None = None,  # result rewrite hook (PI-02)
-        hooks: HookManager | None = None,  # 阶段 09:事件钩子管理器(None = 禁用;S10 装配传入)
     ):
-        self.client = client
-        self.tools = tools
-        self.permissions = permissions or PermissionEngine()
-        self.request_permission = request_permission
-        self.system_prompt = system_prompt
-        self.context_bundle = context_bundle
-        self.compaction = compaction
-        self.prefetch = prefetch
+        #: construction contract; per-session runtime mutables stay on the
+        #: instance (mode, callbacks, steer_queue) — see AgentLoopConfig doc.
+        self.config = config
+        # 17 别名:外部读取点密集(repl/test 读 loop.client/compaction/max_turns 等),
+        # 内部方法零改动(行为零变化的兼容层)
+        self.client = config.client
+        self.tools = config.tools
+        self.permissions = config.permissions or PermissionEngine()
+        self.request_permission = config.request_permission
+        self.system_prompt = config.system_prompt
+        self.context_bundle = config.context_bundle
+        self.compaction = config.compaction
+        self.prefetch = config.prefetch
+        self.model = config.model
+        self.max_turns = config.max_turns
+        self.max_budget_usd = config.max_budget_usd
+        self.cwd = config.cwd or Path.cwd()
+        self.session = config.session
+        self.settings = config.settings
+        self.session_permissions = config.session_permissions
+        self.history = config.history or []
+        self.hooks = config.hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        # 运行时可变(会话级,不进 config)
+        self.mode = mode
+        self.on_stream = on_stream
+        self.steer_queue = steer_queue
+        self.on_tool_event = on_tool_event
+        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
+        self.finalize = finalize
+        # ---- 跨 run 可变状态(per-run 部分在 RunState,run() 入口创建)----
         self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
@@ -183,43 +189,25 @@ class AgentLoop:
         self._recovery_reminder: str | None = None
         # §3.7: last time the request view cleared old tool results
         self._last_result_clean = time.time()
-        # §3.8: reactive compaction — one PTL recovery per loop run
-        self._ptl_retried = False
         #: active message list exposed for the CLI status bar's ctx meter
+        #: (对外投影:run() 内随 state.messages 更新,loop 内自身不读)
         self._active_messages: list["SessionMessage"] | None = None
-        # §3.9: previous response's cache_read_tokens (break detection)
-        self._last_cache_read = 0
-        self.model = model
-        self.mode = mode
-        if max_turns is not None and (not isinstance(max_turns, int) or max_turns <= 0):
-            # a mistyped config silently becoming 100 turns would run the
-            # model 100 rounds for nothing (review P3-3)
-            raise ValueError(f"max_turns must be a positive int or None, got {max_turns!r}")
-        self.max_turns = max_turns if max_turns is not None else 100
-        self.max_budget_usd = max_budget_usd
-        self.cwd = cwd or Path.cwd()
-        self.session = session
-        self.settings = settings
-        self.session_permissions = session_permissions
-        self.history = history or []
-        self.on_stream = on_stream
-        self.steer_queue = steer_queue
-        self.on_tool_event = on_tool_event
-        self.on_notification = on_notification  # 阶段 09 §2.5:通知 UI 消费(None = 无头模式)
-        self.finalize = finalize
-        self.hooks = hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        # per-run 字段(步 3 迁入 RunState 后删;run() 入口重置):
+        self._ptl_retried = False  # §3.8 reactive compaction
+        self._last_cache_read = 0  # §3.9 cache-break detection
+        self._stop_feedback_count = 0  # M1 Stop feedback 上限(§6.4)
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
         self._session_started = False
         #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
         #: 一次性 prefix,注入后清除(与 _recovery_reminder 同款模式)
         self._hook_reminder: str | None = None
-        #: Stop feedback 注入计数(M1,§6.4):run() 生命周期,达 MAX_STOP_HOOK_ATTEMPTS
-        #: 后不再注入(与 turn 同生命周期,run() 入口重置)
-        self._stop_feedback_count = 0
         #: Termination reason of the last run(): "completed" | "max_turns" |
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
         self.last_stop_reason: str | None = None
+        #: Permission denials collected during the last run() (投影;submit/
+        #: run_single_turn 读取 —— CC submitMessage 的 permission_denials)
+        self.last_permission_denials: list[str] = []
         self.abort = asyncio.Event()
         #: One ToolUseContext per loop: carries read-freshness state and the
         #: abort channel across tool calls (phase 03 read-first guard).
