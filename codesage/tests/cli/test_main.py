@@ -495,6 +495,7 @@ async def test_graceful_shutdown_aborts_and_exits_with_code(monkeypatch):
     loop = _AbortLoop()
 
     await repl_module.graceful_shutdown(loop, 130)
+    await asyncio.sleep(0)  # drain: the exit is scheduled on the event loop
 
     assert loop.abort.is_set()  # running turn/tools get aborted
     assert exited == [130]  # exits with the requested code
@@ -509,6 +510,7 @@ async def test_graceful_shutdown_idempotent(monkeypatch, capsys):
 
     await repl_module.graceful_shutdown(loop, 130)
     await repl_module.graceful_shutdown(loop, 130)  # second call: no-op
+    await asyncio.sleep(0)  # drain: the exit is scheduled on the event loop
 
     assert exited == [130]  # cleanup ran once
     assert capsys.readouterr().out.count("bye") == 1

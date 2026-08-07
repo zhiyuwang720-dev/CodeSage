@@ -381,7 +381,10 @@ async def graceful_shutdown(loop: AgentLoop, code: int = 130) -> None:
         await asyncio.wait_for(_cleanup(), timeout=5)
     except asyncio.TimeoutError:
         os._exit(code)  # failsafe: cleanup budget exhausted — force exit
-    sys.exit(code)
+    # 退出从事件循环顶层抛,而不是在 task 内 sys.exit:task 内抛 SystemExit
+    # 会变成无人 retrieve 的 orphan task 异常("Task exception was never
+    # retrieved"),进程不会退出,权限询问等场景下会话就停不下来。
+    asyncio.get_event_loop().call_soon(sys.exit, code)
 
 
 def _make_signal_handler(loop: AgentLoop):

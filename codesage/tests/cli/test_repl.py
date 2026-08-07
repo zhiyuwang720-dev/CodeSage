@@ -1,12 +1,13 @@
 """Single-shot mode tests (mock LLM, offline)."""
 
+import asyncio
 import io
 
 import pytest
 
 from codesage.ai import StreamEvent
 from codesage.cli.assemble import build_loop
-from codesage.cli.repl import run_single_turn
+from codesage.cli.repl import graceful_shutdown, run_single_turn
 from codesage.config import paths
 
 
@@ -203,3 +204,20 @@ async def test_on_after_render_hook_fires(tmp_path):
     # render off (--output-format json): nothing fires
     await run(False)
     assert fires == []
+
+
+def test_graceful_shutdown_exits_via_event_loop():
+    """Ctrl+C 在权限询问时:退出必须从事件循环顶层抛出,进程以 130 退出。
+    task 内 sys.exit 只会留下 orphan task 异常("Task exception was never
+    retrieved"),会话停不下来(回归:权限提示 Ctrl+C)。"""
+    import codesage.cli.repl as repl
+
+    class FakeLoop:
+        abort = asyncio.Event()
+
+    try:
+        with pytest.raises(SystemExit) as exc:
+            asyncio.run(graceful_shutdown(FakeLoop(), 130))
+        assert exc.value.code == 130
+    finally:
+        repl._shutdown_started = False  # reset the module guard for other tests
