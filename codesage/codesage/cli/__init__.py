@@ -28,6 +28,7 @@ from ..core import Session, find_session, most_recent_session
 from .assemble import apply_tool_filter, build_loop, session_root
 from .permission_prompt import request_permission
 from .render import CYAN, _c, render_message
+from ..engine import AgentSession
 from .repl import _install_single_shot_sigint, repl_loop, run_single_turn
 
 
@@ -181,14 +182,18 @@ def main(argv: list[str] | None = None) -> int:
     if prompt:
         # single-shot: no UI for permission asks — denials go back to the model
         _install_single_shot_sigint(loop)  # CC-11: Ctrl+C aborts + exits 130
-        summary = asyncio.run(
-            run_single_turn(
-                loop,
-                prompt,
-                show_thinking=args.show_thinking,
-                render=args.output_format != "json",
+        if args.output_format == "json":
+            # CC submitMessage 外壳:无渲染,收集 RunSummary
+            summary = asyncio.run(AgentSession(loop).submit(prompt))
+        else:
+            summary = asyncio.run(
+                run_single_turn(
+                    loop,
+                    prompt,
+                    show_thinking=args.show_thinking,
+                    render=True,
+                )
             )
-        )
         if args.output_format == "json":
             print(json.dumps(summary.to_dict(), ensure_ascii=False))
         if summary.budget_exceeded:

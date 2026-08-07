@@ -10,11 +10,14 @@ from .compaction import (
 )
 from .context import ContextBundle, build_context_bundle
 from .loop import AgentLoop, AgentLoopConfig
+from .session import AgentSession, RunSummary
 from .tool_queue import ScheduledTool, ToolUseQueue
 
 __all__ = [
     "AgentLoop",
     "AgentLoopConfig",
+    "AgentSession",
+    "RunSummary",
     "CompactionConfig",
     "ContextBundle",
     "CutPoint",
