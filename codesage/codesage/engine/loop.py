@@ -231,7 +231,9 @@ class AgentLoop:
                     estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
                         self._last_compact_turn = turn  # debounce: no second pass this turn
-                        compacted = await self._compact(messages)  # RAW span: summary keeps full detail
+                        # PreCompact 的 context_tokens = 压缩检查点的请求视图估算
+                        # (cleaned 视图,§6.2);PTL 路径无此变量,_compact 内回退估算
+                        compacted = await self._compact(messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
                         if compacted is not None:
                             summary_msg, cut = compacted
                             yield summary_msg
@@ -396,22 +398,44 @@ class AgentLoop:
 
     # ---- internals ----
 
-    async def _compact(self, messages: list[SessionMessage]) -> tuple[SessionMessage, CutPoint] | None:
+    async def _compact(
+        self,
+        messages: list[SessionMessage],
+        *,
+        trigger: str = "auto",  # 阶段 09 §2.2:阶段 10 manual 预留,v1 恒 "auto"
+        context_tokens: int | None = None,  # 压缩检查点的估算值(auto 路径传入;PTL 路径回退估算)
+    ) -> tuple[SessionMessage, CutPoint] | None:
         """Summarize the history span and persist the summary (append-only).
 
         Returns (summary_message, cut) on success, None when there is nothing
         to compress or the request failed. Two consecutive failures trip the
         breaker (specs/08 §3.5): the feature disables itself instead of
         burning a summary call every turn.
+
+        阶段 09 §6.2:PreCompact/PostCompact 钩子封装在本函数内,一处覆盖
+        auto 主路径与 PTL 反应式两个调用点。PreCompact exit 2 → 阻止本轮
+        压缩(防抖已占位,下轮 turn+1 恢复);钩子失败/超时/无输出 → fail-open
+        (压缩照常无指令);两者都不计入 _compact_failures(R1 §5,熔断只由
+        generate_summary 的 LLMError 驱动)。PostCompact 纯观察型。
         """
         cut = find_cut_point(messages, keep_recent=self.compaction.keep_recent)
         if cut is None:
             return None  # not a success — the failure streak stays intact (breaker)
+        # PreCompact 钩子(§6.2/§7.4):find_cut_point 后、generate_summary 前
+        if context_tokens is None:
+            context_tokens = estimate_context_tokens(messages).tokens
+        blocked, instructions = await self._dispatch_pre_compact(trigger, context_tokens)
+        if blocked:
+            return None  # 与 cut is None 同语义:调用方不替换消息;熔断计数不动
         compressed = messages[: cut.index]
         prev_summary = find_previous_summary(compressed)
         try:
             summary = await generate_summary(
-                self.client, messages, cut=cut, previous_summary=prev_summary
+                self.client,
+                messages,
+                cut=cut,
+                previous_summary=prev_summary,
+                extra_instructions=instructions,  # §7.4:custom instructions 注入摘要 prompt
             )
         except LLMError:
             self._compact_failures += 1
@@ -426,6 +450,8 @@ class AgentLoop:
         summary_msg = summary_message(ops.append_to(summary))
         self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
         await self._persist(summary_msg)  # append-only: compaction appends one summary
+        # PostCompact 钩子(§6.2):成功返回前,纯观察型(exit 2 与非阻塞等同)
+        await self._dispatch_post_compact(trigger, summary_msg, cut)
         return summary_msg, cut
 
     async def _ask_model(self, messages: list[SessionMessage]) -> SessionMessage | None:
@@ -839,6 +865,75 @@ class AgentLoop:
             # §6.4:钩子层自身异常 → 只警告 + 日志,不影响停止(CC fail-open)
             logger.exception("Stop hook dispatch failed (fail-open, §6.4)")
             return None
+
+    async def _dispatch_pre_compact(
+        self, trigger: str, context_tokens: int
+    ) -> tuple[bool, str | None]:
+        """PreCompact 钩子(§6.2/§7.4):_compact 内 generate_summary 前(fail-open)。
+
+        返回 (blocked, instructions):blocked = exit 2 阻止本轮压缩;instructions =
+        exit 0 stdout 多钩子 join('\n\n')(None = 无指令,压缩照常)。钩子失败/超时/
+        abort → (False, None):压缩照常、无指令,且不计入熔断(R1 §5)。abort 置位时
+        dispatch 跳过整批(§6.3),与 fail-open 同一收敛面。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PreCompact"):
+            return False, None
+        try:
+            result = await hooks.dispatch(
+                "PreCompact",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "trigger": trigger,
+                        "context_tokens": context_tokens,
+                        "window": self.compaction.window,
+                        "reserve": self.compaction.reserve,
+                        "keep_recent": self.compaction.keep_recent,
+                    },
+                ),
+                abort_event=self.abort,  # §6.3:钩子批次 abort 感知
+            )
+        except Exception:
+            # §6.2:钩子层自身 bug → fail-open(压缩不是安全门,损失一条指令而已)
+            logger.exception("PreCompact hook dispatch failed (fail-open, §6.2)")
+            return False, None
+        if result.block_compact:
+            return True, None
+        return False, result.compact_instructions
+
+    async def _dispatch_post_compact(
+        self, trigger: str, summary_msg: SessionMessage, cut: CutPoint
+    ) -> None:
+        """PostCompact 钩子(§6.2):_compact 成功返回前,纯观察型。
+
+        HookInput 字段(§2.2):trigger、compact_summary(summary 文本,含 fileOps
+        尾段)、cut_index(被压消息数)、keep_recent。exit 2 与非阻塞等同(§4.3
+        PostToolUse 同款);失败仅日志,不拖垮压缩(R1 §5)。
+        """
+        hooks = self.hooks
+        if hooks is None or not hooks.has_hooks_for_event("PostCompact"):
+            return
+        try:
+            await hooks.dispatch(
+                "PostCompact",
+                input=HookInput(
+                    session_id=self.session.session_id if self.session else "",
+                    cwd=str(self.cwd),
+                    session_path=str(self.session.path) if self.session else "",
+                    extra={
+                        "trigger": trigger,
+                        "compact_summary": summary_msg.content,
+                        "cut_index": cut.index,
+                        "keep_recent": self.compaction.keep_recent,
+                    },
+                ),
+                abort_event=self.abort,
+            )
+        except Exception:
+            logger.exception("PostCompact hook dispatch failed (non-blocking, §6.2)")
 
     def _allow_stop_feedback(self) -> bool:
         """M1(§6.4 补):Stop feedback 注入上限 —— 达 MAX_STOP_HOOK_ATTEMPTS(5)
