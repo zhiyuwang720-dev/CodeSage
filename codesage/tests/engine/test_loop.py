@@ -1135,11 +1135,10 @@ async def test_reused_loop_instance_resets_per_run_state():
     instance (review P3-8)."""
     loop = _loop(FakeLLM([_ptl_stream, lambda i: text_event("ok")]), history=_big_history(), compaction=_tiny_compaction())
     await _collect(loop)
-    assert loop._ptl_retried is True  # first run consumed its PTL retry
-    # second run on the same instance gets a fresh retry budget
+    # second run on the same instance gets a fresh retry budget (per-run
+    # state lives in RunState now — observable via the retry happening again)
     loop.client = FakeLLM([_ptl_stream, lambda i: text_event("ok2")], summary_text="s")
     messages = await _collect(loop)
-    assert loop._ptl_retried is True  # retried again — state was reset
     assert any(m.is_compaction_summary for m in messages)
     assert messages[-1].content[0].text == "ok2"
 
