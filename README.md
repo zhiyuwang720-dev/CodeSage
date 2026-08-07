@@ -1,84 +1,86 @@
 <p align="center">
-  <img src="assets/logo.png" alt="CodeSage" width="120"/>
+  <img src="assets/logo.png" alt="CodeSage" width="240"/>
 </p>
+
+<p align="center"><a href="README.en.md">English</a> · <strong>中文</strong></p>
 
 # CodeSage
 
-You know that feeling when you ask an AI tool about a complex codebase, and it drowns you in a 500-page essay you'll never read? CodeSage is the opposite. It explains complex projects in plain, human language — like a senior dev sitting next to you. And when it writes code, it writes the minimum amount needed to get the job done. No over-engineering. No fluff. Just clarity and efficiency.
+你有没有过这种感觉——问某个 AI 工具一个复杂代码库的问题,它给你扔过来一篇 500 页的论文,根本看不下去?CodeSage 正好相反。它用最简单的人话解释复杂项目,就像坐在你旁边的资深工程师。而且它写代码的时候,只写最少的代码来完成工作。不过度设计,不堆砌废话。只有清晰和高效。
 
-## What is CodeSage?
+## CodeSage 是什么
 
-CodeSage is a Python harness framework in the spirit of Claude Code / Kode-CLI — a structured, staged reimplementation built for two purposes:
+CodeSage 是一个用 Python 实现的、类 Claude Code / Kode-CLI 的 Harness 框架——分阶段结构化重建,两个目的:
 
-1. **Learning**: rebuild every module of a harness step by step to understand how it works end to end
-2. **Future adaptation**: a solid foundation for large-project authoring and security-oriented extensions (permissions, auditing, sandboxing)
+1. **学习**:逐模块复刻 harness,端到端理解每个部件如何工作
+2. **未来适配**:为大型项目编写与安全领域适配(权限、审计、沙箱)打下坚实基础
 
-## Status
+## 当前状态
 
 | | |
 |---|---|
-| Phases 01–09 delivered | config, AI clients, tools, core messages, permissions, engine, CLI, context, hooks |
-| Tests | 793 passing / 9 skipped (LLM integration, auto-skip without API key) |
-| Language | Python ≥ 3.11 + asyncio, httpx, pydantic |
+| 阶段 01–09 已交付 | 配置、AI 客户端、工具、消息与会话、权限、引擎主循环、CLI、上下文、钩子系统 |
+| 测试 | 793 通过 / 9 跳过(LLM 集成测试,无 key 自动跳过) |
+| 技术栈 | Python ≥ 3.11 + asyncio、httpx、pydantic |
 
-Each phase is one module on its own branch, merged back to `master` only when fully tested.
+每个阶段 = 一个模块 + 一个独立分支,测试全绿后才合并回 `master`。
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Run all tests (from repo root or codesage/)
+# 运行全部测试(仓库根或 codesage/ 内均可)
 python -m pytest codesage/tests/ -q
 
-# Run a single module
+# 运行单模块
 python -m pytest codesage/tests/hooks/ -q
 
-# Check the version
+# 查看版本
 python -m codesage.cli --version
 
-# Include LLM integration tests (skipped without the key)
+# 含 LLM 集成测试(无 key 自动跳过)
 DEEPSEEK_API_KEY=xxx python -m pytest codesage/tests/ -q
 ```
 
-## Project Layout
+## 目录结构
 
 ```
-codesage/            # production harness (the only active code)
-  config/            # settings layering (user/project/local) + global config
-  ai/                # LLM clients: adapters, retry, cost, model pointers, VCR
-  tools/             # tool contracts + registry + builtin tools (12)
-  core/              # messages & sessions
-  permissions/       # decision chain: deny > ask > allow, audit
-  engine/            # agent main loop, compaction, task queue
-  cli/               # interactive REPL
-  context/           # AGENTS.md collection, system prompt assembly
-  hooks/             # 8 lifecycle events, command/prompt/http executors, `if` rules
-Kode-CLI/            # reference implementation (TypeScript, read-only)
-docs/                # intent / ideas / specs / modules — spec-driven development
+codesage/            # 生产级 harness(唯一活跃代码)
+  config/            # 配置系统:settings 三层(user/project/local)+ 全局配置
+  ai/                # LLM 客户端:双 adapter、重试、成本、模型指针、VCR
+  tools/             # 工具契约 + 注册表 + 12 个内置工具
+  core/              # 消息与会话
+  permissions/       # 权限决策链:deny > ask > allow,审计
+  engine/            # 引擎主循环、压缩、工具队列
+  cli/               # 交互式 REPL
+  context/           # AGENTS.md 收集、system prompt 组装
+  hooks/             # 八事件钩子:command/prompt/http 三执行体 + if 条件
+Kode-CLI/            # 参考实现(TypeScript,只读)
+docs/                # intent / ideas / specs / modules 四层文档,规格驱动开发
 ```
 
-## Documentation
+## 文档
 
-- `docs/specs/codesage.md` — master spec: 19-phase roadmap, design invariants
-- `docs/specs/0N-*.md` — per-phase specs (read before implementing a phase)
-- `docs/modules/` — per-phase comprehension documents
-- `tasks/todo.md` — acceptance checklist
+- `docs/specs/codesage.md` — 主规格:19 阶段路线图、核心设计不变量
+- `docs/specs/0N-*.md` — 各阶段规格(实现某阶段前必读)
+- `docs/modules/` — 每阶段理解文档
+- `tasks/todo.md` — 任务清单与验收标准
 
-## Roadmap
+## 路线图
 
-| # | Phase | Status |
+| # | 阶段 | 状态 |
 |---|---|---|
-| 01 | Configuration | ✅ delivered |
-| 02 | LLM clients | ✅ delivered |
-| 03 | Tools | ✅ delivered |
-| 04 | Messages & sessions | ✅ delivered |
-| 05 | Permissions | ✅ delivered |
-| 06 | Engine main loop | ✅ delivered |
-| 07 | CLI REPL | ✅ delivered |
-| 08 | Context management | ✅ delivered |
-| 09 | Hook system | ✅ delivered |
-| 10 | Context compaction | next |
-| 11–19 | Tasks, sessions, subagents, skills, MCP, bash safety, memory, multimodel, plugins | planned |
+| 01 | 配置系统 | ✅ 已交付 |
+| 02 | LLM 客户端 | ✅ 已交付 |
+| 03 | 工具 | ✅ 已交付 |
+| 04 | 消息与会话 | ✅ 已交付 |
+| 05 | 权限引擎 | ✅ 已交付 |
+| 06 | 引擎主循环 | ✅ 已交付 |
+| 07 | CLI REPL | ✅ 已交付 |
+| 08 | 上下文管理 | ✅ 已交付 |
+| 09 | 钩子系统 | ✅ 已交付 |
+| 10 | 上下文压缩 | 下一个 |
+| 11–19 | 任务、会话、子代理、技能、MCP、Bash 安全、记忆、多模型、插件 | 规划中 |
 
-## License
+## 许可证
 
-Not yet licensed — ask before reuse.
+尚未授权 —— 复用前请先询问。
