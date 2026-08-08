@@ -36,9 +36,9 @@
   - 验收:错误分类/扣留层(413/PTL + max_output_tokens/length 统一归「可恢复」,其余走原路径);输出端恢复(stop_reason=="length" 残缺 tool_use 截断重发);恢复阶梯 + 防死循环闸(每错误类每 turn 至多一次);显式轮次状态 + transition reason(RunState.last_transition/recovery_attempts);manual `/compact` 命令(loop.compact_now() + commands.py 注册,trigger="manual",PreCompact 钩子按 trigger 匹配);熔断复位/闭包化(成功即复位,manual 恒可用,硬阻塞语义);boundary 消息模式成文(core/normalize.py 保位,测试固化)
   - 验证:分类器单测(test_errors)+ 恢复/闸门单测 + manual 命令测试 + 熔断闭包回归 + boundary 固化;**全量回归 829 全绿**
   - 步骤:S1 分类器 → S2 RunState 扩展 → S3 输出端恢复 → S4 恢复阶梯统一闸门 → S5 熔断闭包化 → S6 compact_now() → S7 /compact 注册 → S8 transition 日志 → S9 boundary 固化 + modules 文档
-- [ ] **11 tasks 任务系统** (`feat/11-tasks`)
-  - 验收:Task CRUD;blocks/blockedBy 环检测;todo
-  - 验证:依赖图单测(环/缺失)
+- [x] **11 tasks 任务系统** (`feat/11-tasks`)(规格:`docs/specs/11-tasks.md`)✅ 2026-08-08
+  - 验收:Task CRUD 全链路(TaskCreate/Get/List/Update 四工具 + `{config_dir}/tasks/{task_list_id}/` 持久化);blocks/blockedBy 双向依赖 + 环检测(mutation 三查预防 + validate_task_graph 四类全量验证);TodoWrite 并存零破坏;命名避让(TaskOutput/TaskStop);E2E(mock LLM 单轮 run TaskCreate×3→TaskList→TaskUpdate,会话隔离);双层锁(进程内 asyncio.Lock + 跨进程 O_EXCL 目录锁)
+  - 验证:依赖图单测(环/缺失/重复/非对称)+ 存储单测(CRUD/高水位/并发)+ 锁单测(真实竞态)+ 工具 4 文件 + E2E;**918 passed, 9 skipped**
 - [ ] **12 session 会话生命周期** (`feat/12-session`)
   - 验收:fork/continue/resume;sidechain 日志;归档
   - 验证:会话恢复单测(摘要前 2 条 user 消息)
