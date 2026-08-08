@@ -7,6 +7,7 @@ ask decisions are denied (safe default).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import signal
 import sys
@@ -346,7 +347,10 @@ async def _handle_slash_command(loop: AgentLoop, line: str, state: dict) -> bool
         print(f"unknown command: {parts[0]} (try /help)")
         return False
     args = parts[1].split() if len(parts) > 1 else []
-    return cmd.handler(args, state)
+    result = cmd.handler(args, state)
+    if inspect.isawaitable(result):  # async handlers (e.g. /compact) awaited here
+        result = await result
+    return result
 
 
 def _prompt_mark() -> str:

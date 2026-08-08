@@ -6,12 +6,13 @@ from the actual command set.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
-#: handler(args, state) -> True = exit the REPL. *state* carries REPL flags:
+#: handler(args, state) -> True = exit the REPL; async handlers allowed
+#: (dispatch awaits isawaitable results). *state* carries REPL flags:
 #: {"show_thinking": bool, "loop": AgentLoop} — /mode writes loop.mode.
-Handler = Callable[[list[str], dict], bool]
+Handler = Callable[[list[str], dict], bool | Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -47,9 +48,17 @@ def _cmd_show_thinking(args: list[str], state: dict) -> bool:
     return False
 
 
+async def _cmd_compact(args: list[str], state: dict) -> bool:
+    """Manual compaction (§6.3): 非任务直接 await;结果一行,不清屏(§6.4)。"""
+    ok = await state["loop"].compact_now()
+    print("上下文已压缩" if ok else "无可压缩内容")
+    return False
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand("mode", _cmd_mode, "switch permission mode (plan|default|yolo)"),
     SlashCommand("show-thinking", _cmd_show_thinking, "toggle thinking output"),
+    SlashCommand("compact", _cmd_compact, "压缩上下文"),
     SlashCommand("help", _cmd_help, "this help", aliases=["h"]),
     SlashCommand("quit", _cmd_quit, "exit", aliases=["q"]),
 ]
