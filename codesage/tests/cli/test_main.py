@@ -242,6 +242,30 @@ def test_verbose_sets_logging_level(tmp_path, monkeypatch, capsys):
         logging.getLogger().setLevel(old)
 
 
+def test_enable_interactive_hook_logging_idempotent(capsys):
+    """交互模式装配:codesage.hooks → INFO + 单一 stderr handler,幂等,
+    INFO 消息经 handler 输出(不带 --verbose 也可见 hook 成功 stderr)。"""
+    from codesage.cli import _enable_interactive_hook_logging
+
+    h = logging.getLogger("codesage.hooks")
+    h.setLevel(logging.WARNING)
+    for handler in list(h.handlers):
+        h.removeHandler(handler)
+    try:
+        _enable_interactive_hook_logging()
+        assert h.level == logging.INFO
+        assert len(h.handlers) == 1
+        _enable_interactive_hook_logging()  # 幂等:不重复加 handler
+        assert len(h.handlers) == 1
+
+        logging.getLogger("codesage.hooks").info("hook stderr visible")
+        assert "hook stderr visible" in capsys.readouterr().err
+    finally:
+        h.setLevel(logging.WARNING)
+        for handler in list(h.handlers):
+            h.removeHandler(handler)
+
+
 # ---- 1f. --system-prompt / --system-prompt-file (C5) ----
 
 def test_system_prompt_passthrough(tmp_path, monkeypatch):

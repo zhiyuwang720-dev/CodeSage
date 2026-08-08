@@ -203,8 +203,23 @@ def main(argv: list[str] | None = None) -> int:
             print("Error: Exceeded max turns", file=sys.stderr)
             return 1
         return 1 if summary.is_error else 0
+    if not args.verbose and args.debug is None:
+        # 交互模式:hook 成功输出默认可见(§4.1 stderr 是给人类看的摘要,
+        # 测试/排查 hook 的刚需);仅开 codesage.hooks 一个 logger,其他
+        # INFO 日志仍默认关闭(--verbose 全局开)
+        _enable_interactive_hook_logging()
     asyncio.run(repl_loop(loop, cwd=cwd, show_thinking=args.show_thinking))
     return 0
+
+
+def _enable_interactive_hook_logging() -> None:
+    """交互模式默认装配:codesage.hooks → INFO + stderr handler,幂等。"""
+    h = logging.getLogger("codesage.hooks")
+    h.setLevel(logging.INFO)
+    if not h.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        h.addHandler(handler)
 
 
 def _print_history_summary(path: Path, root: Path, limit: int = 10) -> None:
