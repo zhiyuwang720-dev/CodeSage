@@ -42,6 +42,7 @@ from .compaction import (
     summary_message,
 )
 from .context import ContextBundle
+from .errors import RecoveryClass
 from .tokens import estimate_context_tokens, should_compact
 from .tool_queue import ScheduledTool, ToolUseQueue
 
@@ -133,10 +134,14 @@ class RunState:
     messages: list["SessionMessage"]
     turn: int = 0
     thinking_retries: int = 0
-    ptl_retried: bool = False  # ← self._ptl_retried
+    ptl_retried: bool = False  # ← self._ptl_retried(S4 迁 recovery_attempts,本步不动)
     last_cache_read: int = 0  # ← self._last_cache_read
     stop_feedback_count: int = 0  # ← self._stop_feedback_count
     permission_denials: list[str] = field(default_factory=list)
+    # 阶段 10(§5.2):最近一次状态迁移原因(§5.3 词表;--verbose 单行日志,不持久化)
+    last_transition: str | None = None
+    #: §4.3 防死循环闸数据源:每错误类每 turn 至多 1 次恢复动作(值 0→1 后不再触发)
+    recovery_attempts: dict[RecoveryClass, int] = field(default_factory=dict)
 
 
 class AgentLoop:
