@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from codesage.ai import ContentBlock, LLMResponse
-from codesage.core import assistant_message, user_message
+from codesage.core import assistant_message, normalize_for_api, user_message
 from codesage.engine.compaction import (
     DEFAULT_RESERVE_TOKENS,
     MAX_RESULTS_BEFORE_CLEAN,
@@ -229,6 +229,24 @@ async def test_summary_message_flag():
     assert msg.role == "user"
     assert msg.is_compaction_summary
     assert not msg.is_reminder
+
+
+def test_boundary_single_summary_and_normalize_holds():
+    """§8.2/§9.1 固化:压缩后的会话视图含且仅含一条 is_compaction_summary
+    (boundary 唯一载体,不插空消息/说明消息);normalize 保位不合并
+    (core/normalize.py:15,75-87 规则 5)——摘要前已落盘的 user 消息独立保位。
+    链式「摘要可再被压缩」(§8.1 语义 4)由
+    test_generate_summary_uses_update_prompt_for_previous_summary 覆盖(不重复)。"""
+    msgs = _conversation()
+    cut = find_cut_point(msgs, keep_recent=_tail_tokens(msgs, 4))
+    assert cut is not None
+    view = [_u("hi"), summary_message("compacted"), *msgs[cut.index :]]  # loop 同款替换视图
+    summaries = [m for m in view if m.is_compaction_summary]
+    assert len(summaries) == 1  # 唯一载体:压缩恰追加一条摘要
+    norm = normalize_for_api(view)
+    contents = [m.content for m in norm]
+    assert contents.count("compacted") == 1  # 摘要独立成条,未被邻接 user 合并吞并
+    assert contents[0] == "hi"  # 摘要前的 user 消息保位,未与摘要拼合
 
 
 # ---- §3.6 fileOps restore ----
