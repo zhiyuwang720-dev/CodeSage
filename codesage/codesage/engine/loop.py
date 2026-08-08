@@ -741,7 +741,12 @@ class AgentLoop:
     async def _execute_tools(self, state: RunState, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
         scheduled: list[ScheduledTool] = []
         if self._tool_ctx is None:
-            self._tool_ctx = ToolUseContext(cwd=self.cwd, abort_event=self.abort)
+            # §11-8.1:注入 session id 作任务列表归属;无会话传空串,
+            # 让 resolve_task_list_id 的 env > default 链在引擎路径同样生效
+            self._tool_ctx = ToolUseContext(
+                cwd=self.cwd, abort_event=self.abort,
+                task_list_id=self.session.session_id if self.session else "",
+            )
         ctx = self._tool_ctx
         for block in tool_uses:
             tool = self.tools.get(block.name or "")
