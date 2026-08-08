@@ -31,9 +31,11 @@
   - 验收:八事件(SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/PreCompact/PostCompact/Notification);钩子先于权限引擎(deny 优先/allow 短路/updatedInput 透传 + 写保护地板);safetyCheck bypass-免疫位(仅 hook allow 可设);命令+提示+HTTP 三执行体;if 条件(hook 级,复用权限规则语法,仅 PreToolUse/PostToolUse 可求值,工具不存在/校验失败恒 false,matcher 先 if 后);compact 事件(封装进 `_compact`:auto 主路径 + PTL 路径一处覆盖;PreCompact exit 2 阻止压缩、stdout 多钩子 join 注入摘要 prompt、fail-open;PostCompact 纯观察型);Notification 四通知源(permission_request/permission_denied/tool_error/llm_error,全 fail-open + 默认 10s,statusbar 消费,不产生权限审计事件);JSON 结果解析;fail-closed(PreToolUse 超时/JSON 失败 → deny);双流审计(权限 audit.jsonl + hooks.jsonl);执行引擎管线(§4.10:无钩子零开销短路(事件→钩子数索引)/执行层去重(同批只执行/审计一次)/stdout 限额(256KB 截断 + UTF-8 errors=replace)/聚合输出传递链(逐事件消费总表))
   - 验证:决策合并矩阵单测 + 执行器单测(test_command/test_prompt/test_http)+ 事件接线单测(test_compact_events/test_notification)+ if 单测(test_if_rules);**515 全绿 + 09 新增**
   - 步骤:S1 契约层(types/base)→ S2 匹配与解析+if 过滤(_common)→ S3 命令执行体 → S4 HTTP 执行体(http.py)→ S5 HookManager(含 notify)→ S6 引擎接线(floor_check)→ S7 事件接线 → S8 compact 事件接线 → S9 通知 emit → S10 提示执行体+装配 → S11 收尾
-- [ ] **10 compact 上下文压缩增强** (`feat/10-compact`)(核心已并入 08,见 `docs/specs/08-context.md`)
-  - 验收:手动 /compact 命令;多级阈值(硬阻塞预留手动空间);boundary 消息模式;CC 熔断增强(硬阻塞上限)
   - 验证:压缩边界单测
+- [ ] **10 compact 上下文压缩增强** (`feat/10-compact`)(规格:`docs/specs/10-compact.md`)
+  - 验收:错误分类/扣留层(413/PTL + max_output_tokens/length 统一归「可恢复」,其余走原路径);输出端恢复(stop_reason=="length" 残缺 tool_use 截断重发);恢复阶梯 + 防死循环闸(每错误类每 turn 至多一次);显式轮次状态 + transition reason(RunState.last_transition/recovery_attempts);manual `/compact` 命令(loop.compact_now() + commands.py 注册,trigger="manual",PreCompact 钩子按 trigger 匹配);熔断复位/闭包化(成功即复位,manual 恒可用,硬阻塞语义);boundary 消息模式成文(core/normalize.py 保位,测试固化)
+  - 验证:分类器单测(test_errors)+ 恢复/闸门单测 + manual 命令测试 + 熔断闭包回归 + boundary 固化;**全量回归 797+ 全绿**
+  - 步骤:S1 分类器 → S2 RunState 扩展 → S3 输出端恢复 → S4 恢复阶梯统一闸门 → S5 熔断闭包化 → S6 compact_now() → S7 /compact 注册 → S8 transition 日志 → S9 boundary 固化 + modules 文档
 - [ ] **11 tasks 任务系统** (`feat/11-tasks`)
   - 验收:Task CRUD;blocks/blockedBy 环检测;todo
   - 验证:依赖图单测(环/缺失)
