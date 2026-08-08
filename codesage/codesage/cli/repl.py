@@ -18,7 +18,7 @@ from pathlib import Path
 from ..engine import AgentLoop, RunSummary
 from ..engine.session import _summarize_run
 from ..engine.tokens import estimate_context_tokens
-from .commands import find_command
+from .commands import COMMANDS, SlashCommand, find_command
 from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 from .statusbar import StatusBar
 
@@ -279,6 +279,74 @@ def _drain_steer_queue(loop: AgentLoop) -> str | None:
         return None
 
 
+def _match_commands(text: str) -> list[SlashCommand]:
+    """Slash-command candidates for *text* (prefix match on name + aliases).
+
+    Only non-empty after the user has typed a leading '/'; used by the
+    Windows REPL line editor to drive the tab/arrow completion list.
+    """
+    if not text.startswith("/"):
+        return []
+    prefix = text[1:].lower()
+    return [
+        cmd
+        for cmd in COMMANDS
+        if cmd.name.startswith(prefix) or any(a.startswith(prefix) for a in cmd.aliases)
+    ]
+
+
+def _candidate_col(prompt: str, buf: list[str]) -> int:
+    """Cursor column at the end of the typed input (prompt + buffer)."""
+    return len(prompt) + sum(len(c) for c in buf)
+
+
+def _draw_candidates(
+    state: dict, cands: list[SlashCommand], sel: int, prompt: str, buf: list[str]
+) -> None:
+    """Draw the completion list above the input line; cursor back at the
+    input-line end. Absolute rows under the status-bar layout, relative
+    movement without one."""
+    n = len(cands)
+    bar = state.get("sb")
+    if bar is not None and bar.enabled:
+        top = bar._rows - 1 - n  # input line is rows-1; list sits above it
+        for i, cmd in enumerate(cands):
+            marker = ">" if i == sel else " "
+            print(f"\033[{top + i};1H\033[2K{marker} /{cmd.name}  {cmd.description}", file=sys.stdout)
+        col = _candidate_col(prompt, buf)
+        print(f"\033[{bar._rows - 1};1H\033[2K{prompt}{''.join(buf)}", end="", file=sys.stdout, flush=True)
+    else:
+        print(f"\033[{n}A", end="", file=sys.stdout)
+        for i, cmd in enumerate(cands):
+            marker = ">" if i == sel else " "
+            if i > 0:
+                print("\r\n", end="", file=sys.stdout)
+            print(f"\033[2K{marker} /{cmd.name}  {cmd.description}", end="", file=sys.stdout)
+        col = _candidate_col(prompt, buf)
+        print(f"\033[1B\033[{col}C", end="", file=sys.stdout, flush=True)
+
+
+def _clear_candidates(state: dict, n: int, prompt: str, buf: list[str]) -> None:
+    """Erase the completion list (n rows above the input line)."""
+    if n <= 0:
+        return
+    bar = state.get("sb")
+    if bar is not None and bar.enabled:
+        top = bar._rows - 1 - n
+        for i in range(n):
+            print(f"\033[{top + i};1H\033[2K", end="", file=sys.stdout)
+        col = _candidate_col(prompt, buf)
+        print(f"\033[{bar._rows - 1};1H\033[2K{prompt}{''.join(buf)}", end="", file=sys.stdout, flush=True)
+    else:
+        print(f"\033[{n}A", end="", file=sys.stdout)
+        for i in range(n):
+            if i > 0:
+                print("\r\n", end="", file=sys.stdout)
+            print("\033[2K", end="", file=sys.stdout)
+        col = _candidate_col(prompt, buf)
+        print(f"\033[1B\033[{col}C", end="", file=sys.stdout, flush=True)
+
+
 def _prompt_text(state: dict) -> str:
     """The prompt string; no leading newline under the status-bar layout —
     the LF would push the cursor from the input line onto the bar row
@@ -292,7 +360,9 @@ def _read_line(state: dict) -> str | None:
     """Read one input line; None when a hotkey was consumed.
 
     Windows: msvcrt raw input so Ctrl+O (0x0F) toggles the transcript mode
-    mid-typing. POSIX: plain input() (no Ctrl+O — use /expand instead).
+    mid-typing, and a leading '/' opens the command-completion list (tab /
+    arrow keys move the selection, Enter sends it, ESC closes it). POSIX:
+    plain input() (no completion — use /expand instead).
     """
     if sys.platform != "win32":
         line = input(_prompt_text(state))
@@ -305,9 +375,20 @@ def _read_line(state: dict) -> str | None:
     prompt = _prompt_text(state)
     print(prompt, end="", flush=True)
     buf: list[str] = []
+    candidates: list[SlashCommand] = []
+    sel = 0
+
+    def redraw() -> None:
+        if candidates:
+            _draw_candidates(state, candidates, sel, prompt, buf)
+
     while True:
         ch = msvcrt.getwch()
         if ch == "\x0f":  # Ctrl+O
+            if candidates:
+                _clear_candidates(state, len(candidates), prompt, buf)
+                candidates.clear()
+                sel = 0
             state["transcript"] = not state["transcript"]
             print("\r" + " " * (len(prompt) + sum(len(c) for c in buf)) + "\r", end="", flush=True)
             bar = state.get("sb")
@@ -320,24 +401,63 @@ def _read_line(state: dict) -> str | None:
                 print(_c(f"\n[transcript {'on' if state['transcript'] else 'off'}]", YELLOW), file=sys.stdout)
             print(prompt + "".join(buf), end="", flush=True)
             continue
+        if ch == "\t":  # tab: cycle the selection
+            if candidates:
+                sel = (sel + 1) % len(candidates)
+                redraw()
+            continue
+        if ch == "\x1b":
+            c1 = msvcrt.getwch()
+            if c1 == "[":
+                c2 = msvcrt.getwch()
+                if c2 == "A" and candidates:  # up arrow
+                    sel = (sel - 1) % len(candidates)
+                    redraw()
+                elif c2 == "B" and candidates:  # down arrow
+                    sel = (sel + 1) % len(candidates)
+                    redraw()
+                # left/right arrows and other sequences: ignored
+            elif c1 != "\x1b":  # bare ESC: close the completion list
+                if candidates:
+                    _clear_candidates(state, len(candidates), prompt, buf)
+                    candidates.clear()
+                    sel = 0
+            continue
         if ch in ("\r", "\n"):
+            if candidates:
+                chosen = "/" + candidates[sel].name
+                _clear_candidates(state, len(candidates), prompt, buf)
+            else:
+                chosen = "".join(buf)
             bar = state.get("sb")
             if bar is not None and bar.enabled:
                 bar.after_submit()  # erase the echoed input, re-enter the scroll region
             else:
                 print(file=sys.stdout)
-            return "".join(buf)
+            return chosen
         if ch == "\x08":  # backspace
             if buf:
                 buf.pop()
                 print("\b \b", end="", flush=True)
+                new = _match_commands("".join(buf))
+                if new != candidates:
+                    if candidates:
+                        _clear_candidates(state, len(candidates), prompt, buf)
+                    candidates = new
+                    sel = 0
+                    redraw()
             continue
         if ch == "\x03":  # Ctrl+C
             raise KeyboardInterrupt
-        if ch == "\x1b":  # ESC: ignore sequences for now
-            continue
         buf.append(ch)
         print(ch, end="", flush=True)
+        new = _match_commands("".join(buf))
+        if new != candidates:
+            if candidates:
+                _clear_candidates(state, len(candidates), prompt, buf)
+            candidates = new
+            sel = 0
+            redraw()
 
 
 async def _handle_slash_command(loop: AgentLoop, line: str, state: dict) -> bool:

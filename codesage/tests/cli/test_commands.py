@@ -99,3 +99,23 @@ async def test_compact_command_reports_nothing_to_compress(capsys):
     assert await _handle_slash_command(loop, "/compact", _state(loop)) is False
     assert loop.compact_calls == 1
     assert "无可压缩内容" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_compact_shows_spinner_while_running(capsys):
+    """/compact 期间显示 spinner 帧(「压缩上下文中…」),结束自清除。"""
+    import asyncio
+
+    async def slow_compact(self):
+        await asyncio.sleep(0.25)  # 足够跨过至少一个 spinner 帧(0.1s)
+        return True
+
+    class _SlowLoop(_FakeLoop):
+        compact_now = slow_compact
+
+    loop = _SlowLoop()
+    out = await _handle_slash_command(loop, "/compact", _state(loop))
+    assert out is False
+    captured = capsys.readouterr().out
+    assert "压缩上下文中" in captured  # spinner 帧出现过
+    assert "上下文已压缩" in captured

@@ -230,6 +230,20 @@ async def test_word_granular_deltas_no_stray_punct(tmp_path, monkeypatch):
     assert "\n)\n" not in out
 
 
+def test_match_commands_prefix_suggestions():
+    """补全候选:仅 '/' 开头触发,前缀匹配 name 与 alias。"""
+    from codesage.cli.repl import _match_commands
+
+    assert _match_commands("hello") == []
+    assert _match_commands("/") == _match_commands("/")  # 全部指令
+    names = [c.name for c in _match_commands("/")]
+    assert names == ["mode", "show-thinking", "compact", "help", "quit"]
+    assert [c.name for c in _match_commands("/co")] == ["compact"]
+    assert [c.name for c in _match_commands("/h")] == ["help"]  # alias h
+    assert [c.name for c in _match_commands("/q")] == ["quit"]  # alias q
+    assert _match_commands("/x") == []
+
+
 def test_graceful_shutdown_exits_via_event_loop():
     """Ctrl+C 在权限询问时:退出必须从事件循环顶层抛出,进程以 130 退出。
     task 内 sys.exit 只会留下 orphan task 异常("Task exception was never
