@@ -37,6 +37,9 @@ class ToolUseContext:
     timeout: int = 60
     env: dict[str, str] | None = None
     command_source: str = "agent_call"  # user_bash_mode | agent_call
+    #: 任务系统归属列表(阶段 11 §8.1):引擎在唯一构造点注入 session id,
+    #: 默认值保证既有构造点零破坏;TaskCreate/TaskGet/TaskList/TaskUpdate 使用。
+    task_list_id: str = "default"
     #: path -> mtime_ns / sha256 recorded by ReadTool; Edit/Write verify
     #: against these so external changes are never silently overwritten.
     read_file_timestamps: dict[str, float] = field(default_factory=dict)

@@ -2399,3 +2399,100 @@ async def test_length_empty_truncated_no_empty_message_in_session(tmp_path):
     persisted = session.load()
     assert [m.role for m in persisted] == ["user"]
     assert [m.role for m in out] == ["user"]
+
+
+# --- 阶段 11 tasks E2E(§9.1:TaskCreate×3 → TaskList → TaskUpdate;§8.1 注入链) ---
+
+def _task_results(messages):
+    """抽取全部 tool_result 文本(任务工具输出断言用)。"""
+    return [b.content for m in messages if isinstance(m.content, list)
+            for b in m.content if getattr(b, "type", "") == "tool_result"]
+
+
+def _task_tools():
+    from codesage.tools import get_builtin_tools
+    return [t for t in get_builtin_tools() if t.name in ("TaskCreate", "TaskList", "TaskUpdate")]
+
+
+async def test_tasks_e2e_flow(tmp_path, monkeypatch):
+    """E2E:mock LLM 单轮 run 内 TaskCreate×3 → TaskList(摘要)→ TaskUpdate(完成)。"""
+    import json
+    from codesage.core import Session
+    from codesage.core.tasks import TaskStore
+    import codesage.core.tasks.storage as storage_mod
+
+    monkeypatch.setattr(storage_mod, "_store", TaskStore(tmp_path))  # 隔离真实 config_dir
+    session = Session("e2e-1", tmp_path / "sessions")
+    llm = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "Fix auth", "description": "Session tokens expire early"}'),
+        lambda i: tool_use_event("TaskCreate", "t2", '{"subject": "Write docs", "description": "How-to guide"}'),
+        lambda i: tool_use_event("TaskCreate", "t3", '{"subject": "Ship release", "description": "Cut the tag"}'),
+        lambda i: tool_use_event("TaskList", "t4", "{}"),
+        lambda i: tool_use_event("TaskUpdate", "t5", '{"taskId": "1", "status": "completed"}'),
+        lambda i: text_event("all done"),
+    ])
+    messages = await _collect(_loop(llm, tools=_task_tools(), session=session))
+    assert llm.calls == 6
+    # 三任务文件落在会话 id 目录(§8.1 注入)
+    files = sorted((tmp_path / "e2e-1").glob("*.json"))
+    assert [f.stem for f in files] == ["1", "2", "3"]
+    # TaskUpdate 完成 #1 → 状态流转落盘
+    assert json.loads((tmp_path / "e2e-1" / "1.json").read_text())["status"] == "completed"
+    assert json.loads((tmp_path / "e2e-1" / "2.json").read_text())["status"] == "pending"
+    # 模型可见输出:创建/摘要行/更新文案
+    results = _task_results(messages)
+    assert any("Created task #3: Ship release" in r for r in results)
+    assert any("#3 [pending] Ship release" in r for r in results)
+    assert any("Updated task #1 (status → completed)" in r for r in results)
+    assert messages[-1].content[0].text == "all done"
+
+
+async def test_tasks_session_isolation(tmp_path, monkeypatch):
+    """不同 session id 的任务列表互不可见(§8.1 注入)。"""
+    from codesage.core import Session
+    from codesage.core.tasks import TaskStore
+    import codesage.core.tasks.storage as storage_mod
+
+    monkeypatch.setattr(storage_mod, "_store", TaskStore(tmp_path))
+    tools = _task_tools()
+    llm = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "Only here", "description": "x"}'),
+        lambda i: tool_use_event("TaskList", "t2", "{}"),
+        lambda i: text_event("ok"),
+    ])
+    await _collect(_loop(llm, tools=tools, session=Session("iso-a", tmp_path / "sessions")))
+    # 另一会话:TaskList 空列表,且不创建任务目录
+    llm2 = FakeLLM([
+        lambda i: tool_use_event("TaskList", "t3", "{}"),
+        lambda i: text_event("ok2"),
+    ])
+    messages = await _collect(_loop(llm2, tools=tools, session=Session("iso-b", tmp_path / "sessions")))
+    assert any(r == "No tasks found" for r in _task_results(messages))
+    assert (tmp_path / "iso-a" / "1.json").exists()
+    assert not (tmp_path / "iso-b").exists()
+
+
+async def test_tasks_env_override_chain(tmp_path, monkeypatch):
+    """§8.1 链:无 session 时 env 生效;session 存在时 explicit(session id)优先于 env。"""
+    from codesage.core import Session
+    from codesage.core.tasks import TaskStore
+    import codesage.core.tasks.storage as storage_mod
+
+    monkeypatch.setattr(storage_mod, "_store", TaskStore(tmp_path))
+    monkeypatch.setenv("CODESAGE_TASK_LIST_ID", "env-list")
+    tools = _task_tools()
+    llm = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "Env task", "description": "x"}'),
+        lambda i: text_event("ok"),
+    ])
+    await _collect(_loop(llm, tools=tools))  # 无 session → 空串 explicit → env 层生效
+    assert (tmp_path / "env-list" / "1.json").exists()
+    # session 存在 → 注入值(explicit)压过 env
+    llm2 = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t2", '{"subject": "Sess task", "description": "y"}'),
+        lambda i: text_event("ok2"),
+    ])
+    await _collect(_loop(llm2, tools=tools, session=Session("sess-wins", tmp_path / "sessions")))
+    # ID 按列表目录独立分配:新会话目录从 1 重新开始,env 目录不受影响
+    assert (tmp_path / "sess-wins" / "1.json").exists()
+    assert sorted(p.name for p in (tmp_path / "env-list").glob("*.json")) == ["1.json"]
