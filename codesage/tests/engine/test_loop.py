@@ -2214,3 +2214,23 @@ async def test_length_gate_exhausted_falls_through(tmp_path):
     assert persisted[1].content[0].text == "second partial"
     # 第一次恢复时注入过一次反馈(第二次请求里),未被重复注入
     assert request_text(llm.last_messages).count(OUTPUT_OVERFLOW_RECOVERY) == 1
+
+
+async def test_length_empty_truncated_no_empty_message_in_session(tmp_path):
+    """LOW-3:闸尽后全空截断回复(纯 tool_use 被剥,无文本)→ 不落空消息,
+    按原 error 语义终止。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM(
+        [
+            lambda i: length_tool_use_event(),
+            lambda i: length_tool_use_event(text="", tid="t2"),
+        ]
+    )
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2
+    assert loop.last_stop_reason == "error"
+    # 无空 assistant 消息落盘(恢复轮与终止轮均未 yield/persist)
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user"]
+    assert [m.role for m in out] == ["user"]

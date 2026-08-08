@@ -136,7 +136,6 @@ class RunState:
     messages: list["SessionMessage"]
     turn: int = 0
     thinking_retries: int = 0
-    ptl_retried: bool = False  # ← self._ptl_retried(S4 迁 recovery_attempts,本步不动)
     last_cache_read: int = 0  # ← self._last_cache_read
     stop_feedback_count: int = 0  # ← self._stop_feedback_count
     permission_denials: list[str] = field(default_factory=list)
@@ -224,7 +223,7 @@ class AgentLoop:
     async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
         """Run the loop from a user input; yields the conversation messages."""
         # per-run state: a reused loop instance must start fresh (P3-8);
-        # ptl_retried/last_cache_read/stop_feedback_count live in RunState,
+        # recovery_attempts/last_cache_read/stop_feedback_count live in RunState,
         # _active_messages stays an instance projection (repl statusbar reads it)
         self._active_messages = None
         # SessionStart 钩子(§6.2):run() 入口,门闩一次 —— 首个 run() 派发后置位,
@@ -321,7 +320,7 @@ class AgentLoop:
                 except LLMError as exc:
                     if (
                         is_ptl_error(exc)
-                        and not state.ptl_retried
+                        and state.recovery_attempts.get(RecoveryClass.CONTEXT_OVERFLOW, 0) == 0
                         and self.compaction is not None
                         and self.compaction.enabled  # breaker tripped: no more summary calls (P3-4)
                     ):
@@ -331,7 +330,8 @@ class AgentLoop:
                         # (skip should_compact) and retry once; a failing
                         # compact falls through to the outer error path and
                         # counts into the breaker (no PTL-compact-PTL loop).
-                        state.ptl_retried = True
+                        state.recovery_attempts[RecoveryClass.CONTEXT_OVERFLOW] = 1
+                        state.last_transition = "ptl_compact"
                         compacted = await self._compact(state.messages)
                         if compacted is not None:
                             summary_msg, cut = compacted
@@ -361,6 +361,11 @@ class AgentLoop:
                     # PI-03 的 is_error 截断消息按普通截断回复处理(否则走 error
                     # 终止路径,违背「不终止本轮」)
                     if assistant.is_error:
+                        # 全空内容(纯 tool_use 被剥,仅空文本块)→ 重建无意义且
+                        # 空消息会落盘,按原 error 语义终止不 yield(LOW-3)
+                        if not any(b.type == "text" and b.text for b in assistant.content):
+                            self.last_stop_reason = "error"
+                            return
                         assistant = assistant_message(
                             assistant.content,
                             usage=assistant.usage,
