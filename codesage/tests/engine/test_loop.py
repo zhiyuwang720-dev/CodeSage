@@ -8,6 +8,7 @@ import pytest
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
 from codesage.core import Session, assistant_message, user_message
 from codesage.engine import AgentLoop, AgentLoopConfig, CompactionConfig
+from codesage.engine.loop import OUTPUT_OVERFLOW_RECOVERY
 from codesage.hooks import HookDispatchResult
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
@@ -66,6 +67,32 @@ def text_event(text="answer"):
 
 def thinking_only_event():
     return [StreamEvent(type="thinking_delta", thinking="hmm"), StreamEvent(type="done", stop_reason="end_turn")]
+
+
+def length_tool_use_event(text="partial reply", tid="t1", input_json='{"text": "x"}'):
+    """§3.2 形态 1:length 截断 + 残缺 tool_use(PI-03 会剥除 tool_use 块)。"""
+    return [
+        StreamEvent(type="text_delta", text=text),
+        StreamEvent(type="tool_use_start", tool_use_id=tid, tool_name="Echo"),
+        StreamEvent(type="tool_use_delta", input_json_delta=input_json),
+        StreamEvent(type="done", stop_reason="length"),
+    ]
+
+
+def length_text_event(text="partial reply"):
+    """§3.2 形态 2:纯文本 length 截断。"""
+    return [StreamEvent(type="text_delta", text=text), StreamEvent(type="done", stop_reason="length")]
+
+
+def request_text(messages):
+    """请求消息渲染为文本(断言反馈注入用)。"""
+    parts = []
+    for m in messages:
+        if isinstance(m.content, str):
+            parts.append(m.content)
+        else:
+            parts.extend(b.text or "" for b in m.content if b.type == "text")
+    return "\n".join(parts)
 
 
 class EchoTool(Tool):
@@ -2128,3 +2155,62 @@ async def test_s7_events_receive_abort_event():
     loop = _loop(llm, hooks=hooks)
     await _collect(loop)
     assert hooks.abort_event is loop.abort
+
+
+# ---- §3.2 输出端(length)恢复 ----
+
+
+async def test_length_truncated_tool_use_recovers_once(tmp_path):
+    """§3.2 形态 1:length+残缺 tool_use → 不落会话 + 反馈重试一次,最终回答落盘。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: length_tool_use_event(), lambda i: text_event("done reply")])
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2  # 反馈后重试一次
+    # 第二请求携带反馈,且不含被剥除的残缺 tool_use
+    assert OUTPUT_OVERFLOW_RECOVERY in request_text(llm.last_messages)
+    assert not any(
+        isinstance(m.content, list) and any(b.type == "tool_use" for b in m.content)
+        for m in llm.last_messages
+    )
+    # 残缺回复与反馈均不落会话:仅用户输入 + 最终回答
+    assert [m.role for m in out] == ["user", "assistant"]
+    assert out[1].content[0].text == "done reply"
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user", "assistant"]
+    assert persisted[1].content[0].text == "done reply"
+
+
+async def test_length_pure_text_truncation_no_recovery(tmp_path):
+    """§3.2 形态 2:纯文本截断不恢复,截断回复照常落盘并完成(仅记 transition)。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: length_text_event("partial reply"), lambda i: text_event("done reply")])
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 1  # 不重试
+    assert [m.role for m in out] == ["user", "assistant"]
+    assert out[1].content[0].text == "partial reply"
+    persisted = session.load()
+    assert persisted[1].content[0].text == "partial reply"
+
+
+async def test_length_gate_exhausted_falls_through(tmp_path):
+    """§3.2 防死循环闸:同一 run 二次 length+tool_use 不再恢复,
+    截断回复落回正常循环(不终止本轮,last_stop_reason=completed)。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM(
+        [
+            lambda i: length_tool_use_event(),
+            lambda i: length_tool_use_event(text="second partial", tid="t2"),
+        ]
+    )
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2  # 第一次恢复,第二次闸门用尽不恢复
+    assert loop.last_stop_reason == "completed"  # is_error 截断消息按普通回复完成
+    # 第二次截断回复以正常 assistant 消息落盘(PI-03 已剥 tool_use,仅余文本)
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user", "assistant"]
+    assert persisted[1].content[0].text == "second partial"
+    # 第一次恢复时注入过一次反馈(第二次请求里),未被重复注入
+    assert request_text(llm.last_messages).count(OUTPUT_OVERFLOW_RECOVERY) == 1

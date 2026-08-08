@@ -272,6 +272,7 @@ def _drop_truncated_tool_uses(response: LLMResponse) -> LLMResponse:
         model=response.model,
         is_error=True,
         error_message="response truncated before tool calls completed; re-issue the tool calls",
+        dropped_tool_uses=len(content) - len(kept),
     )
 
 

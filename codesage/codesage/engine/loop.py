@@ -63,6 +63,8 @@ REMINDER_HEADER = (
 REMINDER_FOOTER = "\n\nIMPORTANT: this context may or may not be relevant to your tasks.\n</system-reminder>"
 #: Injected when the model replies with only internal reasoning (bounded retries).
 THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
+#: §3.2 输出端(length)恢复反馈:残缺 tool_use 已被 PI-03 剥除,提示模型直接重发
+OUTPUT_OVERFLOW_RECOVERY = "你的上一条回复在 tool_use 处被输出上限截断,残缺的工具调用已丢弃。请直接重新发出该工具调用。"
 THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
 THINKING_ONLY_MAX_RETRIES = 3
 #: Stop feedback 注入上限(M1,09 补,对齐 CC MAX_STOP_HOOK_ATTEMPTS=5):
@@ -341,6 +343,30 @@ class AgentLoop:
                 if assistant is None:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
+                # §3.2 输出端(length)恢复:length 是成功响应,不进 LLMError 路径(R5)。
+                # 形态 1(client PI-03 已剥除残缺 tool_use,不落会话)→ 轻量反馈重试
+                # 一次,记 recovery_attempts[OUTPUT_OVERFLOW];形态 2(纯文本截断)或
+                # 恢复闸已用尽 → 不恢复,落回正常循环(下轮模型自愈),不终止本轮。
+                if assistant.stop_reason == "length":
+                    if (
+                        assistant.dropped_tool_uses
+                        and not state.recovery_attempts.get(RecoveryClass.OUTPUT_OVERFLOW, 0)
+                    ):
+                        # 残缺回复整体不进会话(不 yield/不 persist),反馈仅留内存
+                        # 上下文;重试计新 turn(while 顶 turn += 1,与 PTL 专线同约定)
+                        state.recovery_attempts[RecoveryClass.OUTPUT_OVERFLOW] = 1
+                        state.messages.append(user_message(OUTPUT_OVERFLOW_RECOVERY))
+                        continue
+                    # 形态 2 或闸已用尽:不恢复(transition 写位归 S8)。
+                    # PI-03 的 is_error 截断消息按普通截断回复处理(否则走 error
+                    # 终止路径,违背「不终止本轮」)
+                    if assistant.is_error:
+                        assistant = assistant_message(
+                            assistant.content,
+                            usage=assistant.usage,
+                            model=assistant.model,
+                            stop_reason=assistant.stop_reason,
+                        )
                 yield assistant
                 await self._persist(assistant)
                 state.messages.append(assistant)
@@ -616,6 +642,7 @@ class AgentLoop:
             is_error=response.is_error,
             error_message=response.error_message,
             stop_reason=response.stop_reason,
+            dropped_tool_uses=response.dropped_tool_uses,
         )
 
     def _start_prefetch(self, messages: list[SessionMessage]) -> None:
