@@ -48,11 +48,13 @@ async def run_single_turn(
     total_tokens = 0
 
     def _on_stream(ev):
-        # live text_deltas print complete lines as they arrive (CC behavior)
-        if render and ev.type == "text_delta" and ev.text:
-            render_streamed_text_delta(ev.text, target)
-            if on_after_render is not None:
-                on_after_render()
+        # Streamed deltas are word-granular (DeepSeek sends "标点+\n" as its
+        # own chunk): printing complete lines here emits stray punctuation
+        # lines before the body, and the tail buffer render.py expects from
+        # the caller doesn't exist here. The finished message is rendered in
+        # full by render_message below instead — the thinking fold row stays
+        # above the body. (Future UX work may re-add buffered streaming.)
+        pass
 
     def _on_tool_event(event, name, payload):
         # PI-01 wiring: a lightweight status line when a tool starts running.
