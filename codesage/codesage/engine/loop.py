@@ -214,6 +214,10 @@ class AgentLoop:
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
         self.last_stop_reason: str | None = None
+        #: 最近一次状态迁移原因(§5.3 词表;--verbose 单行日志,不持久化)。
+        #: run 内写位在 state.last_transition,run() finally 投影到此;run 外写位
+        #: (manual /compact)直接写这里 —— 单一读面供调试/S9 boundary 使用
+        self.last_transition: str | None = None
         #: Permission denials collected during the last run() (投影;submit/
         #: run_single_turn 读取 —— CC submitMessage 的 permission_denials)
         self.last_permission_denials: list[str] = []
@@ -248,6 +252,7 @@ class AgentLoop:
         # resumed turns start from the prior history; the session file keeps
         # growing so --continue chains naturally across runs
         state = RunState(messages=[*self.history, first])
+        self._mark_transition(state, "user_input")  # §5.3:run() 入口接收本轮输入
         try:
             while True:
                 # CLI status bar's ctx meter reads this (compaction visibly
@@ -291,6 +296,7 @@ class AgentLoop:
                     estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
                         self._last_compact_turn = state.turn  # debounce: no second pass this turn
+                        self._mark_transition(state, "auto_compact")  # §5.3:阈值检查点压缩
                         # PreCompact 的 context_tokens = 压缩检查点的请求视图估算
                         # (cleaned 视图,§6.2);PTL 路径无此变量,_compact 内回退估算
                         compacted = await self._compact(state.messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
@@ -341,7 +347,7 @@ class AgentLoop:
                         # compact falls through to the outer error path and
                         # counts into the breaker (no PTL-compact-PTL loop).
                         state.recovery_attempts[RecoveryClass.CONTEXT_OVERFLOW] = 1
-                        state.last_transition = "ptl_compact"
+                        self._mark_transition(state, "ptl_compact")
                         compacted = await self._compact(state.messages)
                         if compacted is not None:
                             summary_msg, cut = compacted
@@ -365,15 +371,19 @@ class AgentLoop:
                         # 残缺回复整体不进会话(不 yield/不 persist),反馈仅留内存
                         # 上下文;重试计新 turn(while 顶 turn += 1,与 PTL 专线同约定)
                         state.recovery_attempts[RecoveryClass.OUTPUT_OVERFLOW] = 1
+                        self._mark_transition(state, "output_overflow")  # §5.3:截断重发
                         state.messages.append(user_message(OUTPUT_OVERFLOW_RECOVERY))
                         continue
-                    # 形态 2 或闸已用尽:不恢复(transition 写位归 S8)。
+                    # 形态 2 或闸已用尽:不恢复
+                    self._mark_transition(state, "output_overflow_truncated")  # §5.3:纯文本截断
                     # PI-03 的 is_error 截断消息按普通截断回复处理(否则走 error
                     # 终止路径,违背「不终止本轮」)
                     if assistant.is_error:
                         # 全空内容(纯 tool_use 被剥,仅空文本块)→ 重建无意义且
-                        # 空消息会落盘,按原 error 语义终止不 yield(LOW-3)
+                        # 空消息会落盘,按原 error 语义终止不 yield(LOW-3);
+                        # 裁决(§5.3):终止 ≠ 截断落回,写 error_terminate
                         if not any(b.type == "text" and b.text for b in assistant.content):
+                            self._mark_transition(state, "error_terminate")
                             self.last_stop_reason = "error"
                             return
                         assistant = assistant_message(
@@ -448,6 +458,7 @@ class AgentLoop:
                     yield tool_round
                     await self._persist(tool_round)
                     state.messages.append(tool_round)
+                self._mark_transition(state, "tool_result")  # §5.3:工具执行返回(执行后恢复点)
                 # PI-04: terminate semantics — the turn stops only when EVERY
                 # tool in the batch asks to stop. Checked AFTER the tool results
                 # were yielded so the model/user still see what the tools did.
@@ -475,6 +486,7 @@ class AgentLoop:
                         return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
+            self._mark_transition(state, "error_terminate")  # §5.3:不可恢复错误落原路径
             self.last_stop_reason = "error"
             # 通知(§2.5):llm_error —— provider error 消息位;fail-open
             await self._notify("llm_error", f"LLM error: {exc}", status_code=exc.status_code)
@@ -488,6 +500,7 @@ class AgentLoop:
             # per-run 结果投影到实例(与 last_stop_reason 同模式);state 在
             # try 之前创建,所有出口(return/异常/GeneratorExit)都经过这里
             self.last_permission_denials = list(state.permission_denials)
+            self.last_transition = state.last_transition  # §5.3:run 内写位投影到实例
             # a prefetch still in flight must not dangle past the loop
             task = self._prefetch_task
             if task is not None and not task.done():
@@ -502,6 +515,7 @@ class AgentLoop:
         """
         if not self._active_messages or self.compaction is None:
             return False  # 无可压缩内容(repl 提示)
+        self._mark_transition(None, "manual_compact")  # §5.3:run 外写位(实例投影)
         compacted = await self._compact(self._active_messages, trigger="manual")
         if compacted is None:
             return False
@@ -509,6 +523,16 @@ class AgentLoop:
         # 投影刷新(与 auto 检查点 loop.py:301 同款):meter/下一次 manual 都读它
         self._active_messages = [summary_msg, *self._active_messages[cut.index :]]
         return True
+
+    def _mark_transition(self, state: RunState | None, reason: str) -> None:
+        """§5.3:写 transition reason + --verbose 单行日志(INFO 只在 --verbose 可见,
+        不做持久化)。run 内写位走 state;run 外(manual /compact)走实例投影。
+        """
+        if state is None:
+            self.last_transition = reason
+        else:
+            state.last_transition = reason
+        logger.info("transition: %s", reason)
 
     # ---- internals ----
 
