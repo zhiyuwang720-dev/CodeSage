@@ -23,7 +23,8 @@ READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
 
 #: Internal harness tools (not model-visible) — always allowed.
 # Skill is NOT whitelisted: model-invoked skills run through the normal chain.
-SYSTEM_TOOLS = frozenset({"TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"})
+SYSTEM_TOOLS = frozenset({"TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+                          "TaskCreate", "TaskGet", "TaskList", "TaskUpdate"})
 
 #: Tools that are never auto-allowed even in yolo mode (require explicit approval).
 REQUIRES_EXPLICIT_APPROVAL = frozenset({"Bash"})
