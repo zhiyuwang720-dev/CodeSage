@@ -258,7 +258,7 @@ async def test_precompact_hook_failure_does_not_trip_breaker():
     await _collect(loop)
     assert len(llm.complete_calls) == 2  # 两个 turn 都压缩成功(fail-open)
     assert loop._compact_failures == 0  # 钩子失败不计入熔断
-    assert loop.compaction.enabled is True  # 熔断未被误触
+    assert loop._compaction_breaker is False  # 熔断未被误触(§7.2 闭包)
 
 
 async def test_hooks_none_compaction_unaffected():

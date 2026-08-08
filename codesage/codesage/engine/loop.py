@@ -91,9 +91,10 @@ class AgentLoopConfig:
     Fields are immutable construction parameters; per-session runtime
     mutables (mode, on_stream, on_tool_event, on_notification, steer_queue,
     finalize, abort) stay on the AgentLoop instance. NOTE: the config holds
-    references, not copies — e.g. compaction.enabled is still mutated by the
-    breaker, and apply_tool_filter re-assigns loop.tools (the instance alias
-    is the runtime truth, config.tools is the construction snapshot).
+    references, not copies — e.g. apply_tool_filter re-assigns loop.tools
+    (the instance alias is the runtime truth, config.tools is the construction
+    snapshot). The compaction breaker lives on the AgentLoop instance
+    (_compaction_breaker, §7.2) — config.compaction.enabled is never written.
     """
 
     client: LLMClient
@@ -190,6 +191,9 @@ class AgentLoop:
         self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
+        # §7.2:熔断闭包(替代写 config.enabled,R4 解耦)。True = 熔断中,仅挡 auto
+        # 触发(§7.1:manual 恒可用);压缩成功即复位
+        self._compaction_breaker: bool = False
         # §3.6: one-shot reminder with recently modified files, injected into
         # the request right after a compaction (never persisted)
         self._recovery_reminder: str | None = None
@@ -268,7 +272,12 @@ class AgentLoop:
                 # enough tokens makes the summary call unnecessary (auto-
                 # compact is the last resort). The summary request does not
                 # count as a turn.
-                if self.compaction is not None and self.compaction.enabled and state.turn != self._last_compact_turn:
+                if (
+                    self.compaction is not None
+                    and self.compaction.enabled
+                    and not self._compaction_breaker
+                    and state.turn != self._last_compact_turn
+                ):
                     # Estimative cleanup only — deliberately do NOT touch
                     # _last_result_clean: that gate is shared with _ask_model's
                     # request-view projection, and consuming the stale trigger
@@ -322,7 +331,8 @@ class AgentLoop:
                         is_ptl_error(exc)
                         and state.recovery_attempts.get(RecoveryClass.CONTEXT_OVERFLOW, 0) == 0
                         and self.compaction is not None
-                        and self.compaction.enabled  # breaker tripped: no more summary calls (P3-4)
+                        and self.compaction.enabled
+                        and not self._compaction_breaker  # breaker tripped: no more summary calls (P3-4)
                     ):
                         # §3.8 reactive compaction: PTL is the one state a
                         # threshold-triggered compact can't prevent (huge
@@ -527,9 +537,10 @@ class AgentLoop:
         except LLMError:
             self._compact_failures += 1
             if self._compact_failures >= 2:
-                self.compaction.enabled = False  # breaker (specs/08 §3.5)
+                self._compaction_breaker = True  # breaker(§7.2 闭包;config 只读,specs/08 §3.5)
             return None
         self._compact_failures = 0
+        self._compaction_breaker = False  # §7.2:压缩成功即复位熔断
         # fileOps merge across rounds (§3.6): previous summary's lists + what
         # this compressed span touched; appended to the summary tail so the
         # info survives --continue replays

@@ -643,6 +643,7 @@ async def test_compact_breaker_after_two_failures():
     llm = FakeLLM(
         [
             lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t2", '{"text": "y"}'),
             lambda i: text_event("final"),
         ],
         summary_error=LLMError("summary boom"),
@@ -650,8 +651,24 @@ async def test_compact_breaker_after_two_failures():
     loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
     await _collect(loop)
     assert len(llm.complete_calls) == 2  # two consecutive failures trip the breaker
-    assert loop.compaction.enabled is False
+    # §7.2:熔断收归闭包,config 只读 —— 第三次检查点(auto)被闭包挡住不再压缩
+    assert loop._compaction_breaker is True
+    assert loop.compaction.enabled is True  # config 字段保留且不再被运行时写
     assert loop.last_stop_reason == "completed"  # the loop itself keeps running
+
+
+async def test_compaction_success_resets_breaker():
+    """§7.2:压缩成功复位熔断(闭包)—— 复位是 S5 验收核心。熔断态下
+    auto/PTL 读点均被闭包挡住(auto 路径无法再触发压缩),故直接调
+    _compact 绕过挡点,直测成功路径的复位(loop.py:542-543)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    loop._compaction_breaker = True  # 模拟已熔断
+    loop._compact_failures = 1
+    result = await loop._compact(_big_history())
+    assert result is not None  # 压缩成功
+    assert loop._compaction_breaker is False  # 成功即复位
+    assert loop._compact_failures == 0
 
 
 async def test_compact_persists_summary_message(tmp_path):
