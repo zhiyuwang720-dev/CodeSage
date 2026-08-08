@@ -32,9 +32,9 @@
   - 验证:决策合并矩阵单测 + 执行器单测(test_command/test_prompt/test_http)+ 事件接线单测(test_compact_events/test_notification)+ if 单测(test_if_rules);**515 全绿 + 09 新增**
   - 步骤:S1 契约层(types/base)→ S2 匹配与解析+if 过滤(_common)→ S3 命令执行体 → S4 HTTP 执行体(http.py)→ S5 HookManager(含 notify)→ S6 引擎接线(floor_check)→ S7 事件接线 → S8 compact 事件接线 → S9 通知 emit → S10 提示执行体+装配 → S11 收尾
   - 验证:压缩边界单测
-- [ ] **10 compact 上下文压缩增强** (`feat/10-compact`)(规格:`docs/specs/10-compact.md`)
+- [x] **10 compact 上下文压缩增强** (`feat/10-compact`)(规格:`docs/specs/10-compact.md`)✅ 2026-08-08
   - 验收:错误分类/扣留层(413/PTL + max_output_tokens/length 统一归「可恢复」,其余走原路径);输出端恢复(stop_reason=="length" 残缺 tool_use 截断重发);恢复阶梯 + 防死循环闸(每错误类每 turn 至多一次);显式轮次状态 + transition reason(RunState.last_transition/recovery_attempts);manual `/compact` 命令(loop.compact_now() + commands.py 注册,trigger="manual",PreCompact 钩子按 trigger 匹配);熔断复位/闭包化(成功即复位,manual 恒可用,硬阻塞语义);boundary 消息模式成文(core/normalize.py 保位,测试固化)
-  - 验证:分类器单测(test_errors)+ 恢复/闸门单测 + manual 命令测试 + 熔断闭包回归 + boundary 固化;**全量回归 797+ 全绿**
+  - 验证:分类器单测(test_errors)+ 恢复/闸门单测 + manual 命令测试 + 熔断闭包回归 + boundary 固化;**全量回归 829 全绿**
   - 步骤:S1 分类器 → S2 RunState 扩展 → S3 输出端恢复 → S4 恢复阶梯统一闸门 → S5 熔断闭包化 → S6 compact_now() → S7 /compact 注册 → S8 transition 日志 → S9 boundary 固化 + modules 文档
 - [ ] **11 tasks 任务系统** (`feat/11-tasks`)
   - 验收:Task CRUD;blocks/blockedBy 环检测;todo
