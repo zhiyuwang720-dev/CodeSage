@@ -696,6 +696,67 @@ async def test_compact_resume_replay(tmp_path):
     assert resumed.client.last_messages[1].content == "compacted"
 
 
+# ---- §6.2: manual compact_now() (S6) ----
+
+async def test_compact_now_manual_trigger_compacts_and_refreshes_projection():
+    """manual 触发压缩:大窗口 run 完(auto 不触发)→ compact_now 成功,
+    投影刷新、防抖/熔断不受影响。(transition 写位归 S8,本步不写。)"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(
+        llm,
+        history=_big_history(),
+        compaction=CompactionConfig(window=10**6, reserve=10**4, keep_recent=200),
+    )
+    await _collect(loop)  # 窗口巨大 → auto 检查点不触发
+    assert len(llm.complete_calls) == 0 and loop._last_compact_turn == -1
+    ok = await loop.compact_now()
+    assert ok is True
+    assert len(llm.complete_calls) == 1  # 仅 manual 这一次摘要调用
+    assert loop._active_messages[0].is_compaction_summary  # 投影以摘要开头
+    assert loop._last_compact_turn == -1  # 防抖不被 manual 写
+    assert loop._compaction_breaker is False
+
+
+async def test_compact_now_before_any_run_returns_false():
+    """未 run 过(无可压缩内容)→ False,不调摘要。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    assert await loop.compact_now() is False
+    assert llm.complete_calls == []
+
+
+async def test_compact_now_bypasses_debounce_after_auto_compact():
+    """auto 检查点已在 turn1 压缩过(_last_compact_turn=1)→ manual 仍可压
+    (防抖仅 auto 检查点写/读,§6.2 天然不受限)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert len(llm.complete_calls) == 1 and loop._last_compact_turn == 1  # auto 已压
+    assert await loop.compact_now() is True  # manual 绕过防抖
+    assert len(llm.complete_calls) == 2
+    assert loop._last_compact_turn == 1  # manual 不写防抖
+
+
+async def test_compact_now_bypasses_breaker_and_success_resets_it():
+    """熔断闭包只挡 auto 读点(§7.1 manual 恒可用):两次 auto 失败熔断后,
+    manual 照常触发且成功即复位闭包。"""
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t2", '{"text": "y"}'),
+            lambda i: text_event("final"),  # 终结轮(否则脚本耗尽重放 → max_turns 空转)
+        ],
+        summary_errors=[LLMError("boom 1"), LLMError("boom 2")],  # 前两次失败,第三次成功
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert loop._compaction_breaker is True  # 两次连续失败已熔断
+    assert await loop.compact_now() is True  # manual 不被闭包挡
+    assert len(llm.complete_calls) == 3  # auto×2 失败 + manual 成功
+    assert loop._compaction_breaker is False  # §7.2:压缩成功即复位
+    assert loop._compact_failures == 0
+
+
 # ---- PI-05 §3.6/§3.7: recovery reminder + old-result cleanup (S7) ----
 
 def _edit_history(tmp_path):

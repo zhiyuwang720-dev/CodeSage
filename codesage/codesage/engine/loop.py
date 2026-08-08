@@ -493,13 +493,30 @@ class AgentLoop:
             if task is not None and not task.done():
                 task.cancel()
 
+    async def compact_now(self) -> bool:
+        """Manual compaction (§6.2). Returns whether a summary was produced.
+
+        绕过防抖(_last_compact_turn 只由 auto 检查点写)与熔断(_compaction_breaker
+        只挡 auto 读点,§7.1 manual 恒可用);压缩成功即复位熔断闭包(_compact 内)。
+        无消息可压(未 run 过/空会话/无压缩配置)或压缩失败 → False。
+        """
+        if not self._active_messages or self.compaction is None:
+            return False  # 无可压缩内容(repl 提示)
+        compacted = await self._compact(self._active_messages, trigger="manual")
+        if compacted is None:
+            return False
+        summary_msg, cut = compacted
+        # 投影刷新(与 auto 检查点 loop.py:301 同款):meter/下一次 manual 都读它
+        self._active_messages = [summary_msg, *self._active_messages[cut.index :]]
+        return True
+
     # ---- internals ----
 
     async def _compact(
         self,
         messages: list[SessionMessage],
         *,
-        trigger: str = "auto",  # 阶段 09 §2.2:阶段 10 manual 预留,v1 恒 "auto"
+        trigger: str = "auto",  # §6.2:auto 检查点/PTL 传 "auto",compact_now 传 "manual"
         context_tokens: int | None = None,  # 压缩检查点的估算值(auto 路径传入;PTL 路径回退估算)
     ) -> tuple[SessionMessage, CutPoint] | None:
         """Summarize the history span and persist the summary (append-only).

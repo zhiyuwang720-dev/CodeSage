@@ -261,6 +261,24 @@ async def test_precompact_hook_failure_does_not_trip_breaker():
     assert loop._compaction_breaker is False  # 熔断未被误触(§7.2 闭包)
 
 
+async def test_compact_now_trigger_is_manual():
+    """§6.2:compact_now 传 trigger="manual" → PreCompact/PostCompact 的
+    extra["trigger"] 为 manual(与 auto 检查点的 "auto" 区分)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    hooks = CompactFakeHooks(
+        pre_results=[pre_instructions("auto one"), pre_instructions("manual two")]
+    )
+    loop = _loop(llm, hooks=hooks, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)  # turn1 auto 检查点压缩
+    assert hooks.pre_calls == 1 and hooks.pre_input.extra["trigger"] == "auto"
+    assert await loop.compact_now() is True  # manual 压缩
+    assert hooks.pre_calls == 2
+    assert hooks.pre_input.extra["trigger"] == "manual"
+    # manual 摘要请求带 manual 的指令
+    assert "# Custom Instructions\nmanual two" in llm.complete_calls[1][1].messages[0].content
+    assert "# Custom Instructions\nauto one" in llm.complete_calls[0][1].messages[0].content
+
+
 async def test_hooks_none_compaction_unaffected():
     """无 hooks(默认)→ 压缩行为与 S6 既有完全一致(零路径,§4.10.1)。"""
     llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
