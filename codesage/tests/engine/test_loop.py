@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
-from codesage.core import Session, assistant_message, user_message
+from codesage.core import Session, assistant_message, normalize_for_api, user_message
 from codesage.engine import AgentLoop, AgentLoopConfig, CompactionConfig
 from codesage.engine.loop import OUTPUT_OVERFLOW_RECOVERY
 from codesage.hooks import HookDispatchResult
@@ -682,6 +682,24 @@ async def test_compact_persists_summary_message(tmp_path):
     lines = (tmp_path / "s1.jsonl").read_text(encoding="utf-8").splitlines()
     assert any('"is_compaction_summary": true' in ln for ln in lines)
     assert len(session.load()) == 3  # user + summary + assistant
+
+
+async def test_compaction_boundary_single_summary_and_normalize_holds(tmp_path):
+    """§8.2/§9.1 固化:压缩后会话含且仅含一条 is_compaction_summary(boundary
+    唯一载体,不插空消息/说明消息);normalize 后摘要保位不合并
+    (core/normalize.py:15,75-87 规则 5),摘要前 user 消息原样独立。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    msgs = session.load()
+    summaries = [m for m in msgs if m.is_compaction_summary]
+    assert len(summaries) == 1  # 唯一载体:压缩恰追加一条摘要
+    assert summaries[0].content == "compacted"
+    norm = normalize_for_api(msgs)
+    contents = [m.content for m in norm]
+    assert contents.count("compacted") == 1  # 摘要独立成条,未被邻接 user 合并吞并
+    assert contents[0] == "hi"  # 摘要前的 user 消息保位,未与摘要合并
 
 
 async def test_compact_resume_replay(tmp_path):
