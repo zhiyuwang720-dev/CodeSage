@@ -32,6 +32,9 @@ class SessionMessage:
     is_meta: bool = False  # synthesized messages (e.g. interruption notices)
     error_message: str | None = None  # provider/transport error detail (diagnostics)
     stop_reason: str | None = None  # end_turn / tool_use / length / error (UI truncation hint)
+    #: PI-03/S3:该回复被剥除的残缺 tool_use 块数(瞬态,仅 loop 内判定用,
+    #: 不随 to_dict 落盘 —— 会话格式稳定)
+    dropped_tool_uses: int = 0
     # phase 08 context engineering flags
     is_reminder: bool = False  # system-reminder carrier (context); sent to API, hoisted first
     is_compaction_summary: bool = False  # compaction summary; kept in place, never merged (specs/08 §3.1)

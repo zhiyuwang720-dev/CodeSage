@@ -198,12 +198,50 @@ async def test_on_after_render_hook_fires(tmp_path):
             on_after_render=lambda: fires.append(1),
         )
 
-    # rendered: streamed text + final message each fire
+    # rendered: one fire per rendered message (streamed deltas are buffered
+    # into the final message render — see test_word_granular_deltas_no_stray_punct)
     await run(True)
-    assert len(fires) >= 2
+    assert len(fires) >= 1
     # render off (--output-format json): nothing fires
     await run(False)
     assert fires == []
+
+
+@pytest.mark.asyncio
+async def test_word_granular_deltas_no_stray_punct(tmp_path, monkeypatch):
+    """回归:DeepSeek 词级流式 chunk("标点+\\n" 单独成 chunk)不得在正文前
+    渲染出孤立标点行。正文由 render_message 全量渲染,折叠行保持在正文前。"""
+    body = "It looks like your message got cut off — you just sent \"sd\". What would you like me to do? For example:\n- Work on something in the `feat/10-compact` branch (e.g., engine compaction features)\n"
+    # 按 DeepSeek 实际粒度切分:词与行尾标点各自成 chunk
+    chunks = ["It looks like your message got cut off — you just sent ", '"sd"', ". What would you like me to do? For example", ":\n", "- Work on something in the `feat/10-compact` branch (e.g., engine compaction features", ")\n"]
+    assert "".join(chunks) == body
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [StreamEvent(type="text_delta", text=c) for c in chunks]
+         + [StreamEvent(type="done", stop_reason="end_turn")]],
+        monkeypatch=monkeypatch,
+    )
+    out = await _run(loop, "hi")
+    # 正文完整(render_message 全量渲染)
+    assert "It looks like your message got cut off" in out
+    assert "branch (e.g., engine compaction features)" in out
+    # 无孤立标点行(流式期间不打印)
+    assert "\n:\n" not in out
+    assert "\n)\n" not in out
+
+
+def test_match_commands_prefix_suggestions():
+    """补全候选:仅 '/' 开头触发,前缀匹配 name 与 alias。"""
+    from codesage.cli.repl import _match_commands
+
+    assert _match_commands("hello") == []
+    assert _match_commands("/") == _match_commands("/")  # 全部指令
+    names = [c.name for c in _match_commands("/")]
+    assert names == ["mode", "show-thinking", "compact", "help", "quit"]
+    assert [c.name for c in _match_commands("/co")] == ["compact"]
+    assert [c.name for c in _match_commands("/h")] == ["help"]  # alias h
+    assert [c.name for c in _match_commands("/q")] == ["quit"]  # alias q
+    assert _match_commands("/x") == []
 
 
 def test_graceful_shutdown_exits_via_event_loop():

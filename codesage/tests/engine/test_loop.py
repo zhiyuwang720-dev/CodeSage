@@ -1,13 +1,15 @@
 """AgentLoop tests: termination, self-healing, abort, permissions (mock LLM)."""
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
 
 from codesage.ai import ContentBlock, LLMError, LLMResponse, StreamEvent, Usage
-from codesage.core import Session, assistant_message, user_message
+from codesage.core import Session, assistant_message, normalize_for_api, user_message
 from codesage.engine import AgentLoop, AgentLoopConfig, CompactionConfig
+from codesage.engine.loop import OUTPUT_OVERFLOW_RECOVERY
 from codesage.hooks import HookDispatchResult
 from codesage.permissions import PermissionEngine, PermissionMode
 from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
@@ -66,6 +68,32 @@ def text_event(text="answer"):
 
 def thinking_only_event():
     return [StreamEvent(type="thinking_delta", thinking="hmm"), StreamEvent(type="done", stop_reason="end_turn")]
+
+
+def length_tool_use_event(text="partial reply", tid="t1", input_json='{"text": "x"}'):
+    """§3.2 形态 1:length 截断 + 残缺 tool_use(PI-03 会剥除 tool_use 块)。"""
+    return [
+        StreamEvent(type="text_delta", text=text),
+        StreamEvent(type="tool_use_start", tool_use_id=tid, tool_name="Echo"),
+        StreamEvent(type="tool_use_delta", input_json_delta=input_json),
+        StreamEvent(type="done", stop_reason="length"),
+    ]
+
+
+def length_text_event(text="partial reply"):
+    """§3.2 形态 2:纯文本 length 截断。"""
+    return [StreamEvent(type="text_delta", text=text), StreamEvent(type="done", stop_reason="length")]
+
+
+def request_text(messages):
+    """请求消息渲染为文本(断言反馈注入用)。"""
+    parts = []
+    for m in messages:
+        if isinstance(m.content, str):
+            parts.append(m.content)
+        else:
+            parts.extend(b.text or "" for b in m.content if b.type == "text")
+    return "\n".join(parts)
 
 
 class EchoTool(Tool):
@@ -596,6 +624,7 @@ async def test_compact_triggers_when_over_threshold():
     assert any(m.is_compaction_summary for m in messages)  # summary yielded to the stream
     # the next model request starts with the summary, not the old history
     assert llm.last_messages[0].content == "compacted"
+    assert loop.last_transition == "auto_compact"  # §5.3:阈值检查点压缩(投影)
 
 
 async def test_compact_debounce_holds_on_same_turn_retry():
@@ -616,6 +645,7 @@ async def test_compact_breaker_after_two_failures():
     llm = FakeLLM(
         [
             lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t2", '{"text": "y"}'),
             lambda i: text_event("final"),
         ],
         summary_error=LLMError("summary boom"),
@@ -623,8 +653,24 @@ async def test_compact_breaker_after_two_failures():
     loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
     await _collect(loop)
     assert len(llm.complete_calls) == 2  # two consecutive failures trip the breaker
-    assert loop.compaction.enabled is False
+    # §7.2:熔断收归闭包,config 只读 —— 第三次检查点(auto)被闭包挡住不再压缩
+    assert loop._compaction_breaker is True
+    assert loop.compaction.enabled is True  # config 字段保留且不再被运行时写
     assert loop.last_stop_reason == "completed"  # the loop itself keeps running
+
+
+async def test_compaction_success_resets_breaker():
+    """§7.2:压缩成功复位熔断(闭包)—— 复位是 S5 验收核心。熔断态下
+    auto/PTL 读点均被闭包挡住(auto 路径无法再触发压缩),故直接调
+    _compact 绕过挡点,直测成功路径的复位(loop.py:542-543)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    loop._compaction_breaker = True  # 模拟已熔断
+    loop._compact_failures = 1
+    result = await loop._compact(_big_history())
+    assert result is not None  # 压缩成功
+    assert loop._compaction_breaker is False  # 成功即复位
+    assert loop._compact_failures == 0
 
 
 async def test_compact_persists_summary_message(tmp_path):
@@ -636,6 +682,24 @@ async def test_compact_persists_summary_message(tmp_path):
     lines = (tmp_path / "s1.jsonl").read_text(encoding="utf-8").splitlines()
     assert any('"is_compaction_summary": true' in ln for ln in lines)
     assert len(session.load()) == 3  # user + summary + assistant
+
+
+async def test_compaction_boundary_single_summary_and_normalize_holds(tmp_path):
+    """§8.2/§9.1 固化:压缩后会话含且仅含一条 is_compaction_summary(boundary
+    唯一载体,不插空消息/说明消息);normalize 后摘要保位不合并
+    (core/normalize.py:15,75-87 规则 5),摘要前 user 消息原样独立。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    msgs = session.load()
+    summaries = [m for m in msgs if m.is_compaction_summary]
+    assert len(summaries) == 1  # 唯一载体:压缩恰追加一条摘要
+    assert summaries[0].content == "compacted"
+    norm = normalize_for_api(msgs)
+    contents = [m.content for m in norm]
+    assert contents.count("compacted") == 1  # 摘要独立成条,未被邻接 user 合并吞并
+    assert contents[0] == "hi"  # 摘要前的 user 消息保位,未与摘要合并
 
 
 async def test_compact_resume_replay(tmp_path):
@@ -650,6 +714,133 @@ async def test_compact_resume_replay(tmp_path):
     resumed = _loop(FakeLLM([lambda i: text_event("resumed")]), history=session.load())
     await _collect(resumed, user_input="continue")
     assert resumed.client.last_messages[1].content == "compacted"
+
+
+# ---- §6.2: manual compact_now() (S6) ----
+
+async def test_compact_now_manual_trigger_compacts_and_refreshes_projection():
+    """manual 触发压缩:大窗口 run 完(auto 不触发)→ compact_now 成功,
+    投影刷新、防抖/熔断不受影响;transition 写 manual_compact(§5.3,run 外写位)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(
+        llm,
+        history=_big_history(),
+        compaction=CompactionConfig(window=10**6, reserve=10**4, keep_recent=200),
+    )
+    await _collect(loop)  # 窗口巨大 → auto 检查点不触发
+    assert len(llm.complete_calls) == 0 and loop._last_compact_turn == -1
+    ok = await loop.compact_now()
+    assert ok is True
+    assert len(llm.complete_calls) == 1  # 仅 manual 这一次摘要调用
+    assert loop._active_messages[0].is_compaction_summary  # 投影以摘要开头
+    assert loop._last_compact_turn == -1  # 防抖不被 manual 写
+    assert loop._compaction_breaker is False
+    assert loop.last_transition == "manual_compact"  # §5.3:run 外写位(实例投影)
+
+
+async def test_compact_now_before_any_run_returns_false():
+    """未 run 过(无可压缩内容)→ False,不调摘要。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    assert await loop.compact_now() is False
+    assert llm.complete_calls == []
+
+
+async def test_compact_now_bypasses_debounce_after_auto_compact():
+    """auto 检查点已在 turn1 压缩过(_last_compact_turn=1)→ manual 仍可压
+    (防抖仅 auto 检查点写/读,§6.2 天然不受限)。"""
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert len(llm.complete_calls) == 1 and loop._last_compact_turn == 1  # auto 已压
+    assert await loop.compact_now() is True  # manual 绕过防抖
+    assert len(llm.complete_calls) == 2
+    assert loop._last_compact_turn == 1  # manual 不写防抖
+
+
+async def test_compact_now_bypasses_breaker_and_success_resets_it():
+    """熔断闭包只挡 auto 读点(§7.1 manual 恒可用):两次 auto 失败熔断后,
+    manual 照常触发且成功即复位闭包。"""
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: tool_use_event("Echo", "t2", '{"text": "y"}'),
+            lambda i: text_event("final"),  # 终结轮(否则脚本耗尽重放 → max_turns 空转)
+        ],
+        summary_errors=[LLMError("boom 1"), LLMError("boom 2")],  # 前两次失败,第三次成功
+    )
+    loop = _loop(llm, history=_big_history(), compaction=_tiny_compaction())
+    await _collect(loop)
+    assert loop._compaction_breaker is True  # 两次连续失败已熔断
+    assert await loop.compact_now() is True  # manual 不被闭包挡
+    assert len(llm.complete_calls) == 3  # auto×2 失败 + manual 成功
+    assert loop._compaction_breaker is False  # §7.2:压缩成功即复位
+    assert loop._compact_failures == 0
+
+
+# ---- §5.3: transition reason 写位 + --verbose 日志 (S8) ----
+
+def _transitions(caplog):
+    """从 caplog 提取 transition 日志行(按序)。"""
+    return [
+        r.getMessage().split("transition: ", 1)[1]
+        for r in caplog.records
+        if r.getMessage().startswith("transition: ")
+    ]
+
+
+async def test_transition_user_input_tool_result_logged_and_projected(caplog):
+    """§5.3:run 入口 user_input → 工具返回 tool_result;--verbose 逐行日志;
+    run() finally 投影到实例 = 最后一次迁移。"""
+    caplog.set_level(logging.INFO, logger="codesage.engine")
+    llm = FakeLLM(
+        [lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'), lambda i: text_event("final")],
+        summary_text="s",
+    )
+    loop = _loop(
+        llm,
+        history=_big_history(),
+        compaction=CompactionConfig(window=10**6, reserve=10**4, keep_recent=200),  # 大窗口:auto 不触发
+    )
+    await _collect(loop)
+    assert loop.last_transition == "tool_result"  # 投影 = 最后一次迁移
+    assert _transitions(caplog) == ["user_input", "tool_result"]
+
+
+async def test_transition_output_overflow_and_truncated(caplog):
+    """§3.2:形态 1(残缺 tool_use)重发 → output_overflow;形态 2(纯文本截断)
+    不恢复 → output_overflow_truncated。"""
+    caplog.set_level(logging.INFO, logger="codesage.engine")
+    big = CompactionConfig(window=10**6, reserve=10**4, keep_recent=200)
+    llm = FakeLLM([lambda i: length_tool_use_event(), lambda i: text_event("ok")], summary_text="s")
+    loop = _loop(llm, history=_big_history(), compaction=big)
+    await _collect(loop)
+    assert loop.last_transition == "output_overflow"
+    caplog.clear()
+    llm2 = FakeLLM([lambda i: length_text_event(), lambda i: text_event("ok")], summary_text="s")
+    loop2 = _loop(llm2, history=_big_history(), compaction=big)
+    await _collect(loop2)
+    assert loop2.last_transition == "output_overflow_truncated"
+    assert _transitions(caplog) == ["user_input", "output_overflow_truncated"]
+
+
+async def test_transition_ptl_compact_and_error_terminate(caplog):
+    """PTL 反应式 → ptl_compact;PTL 恢复闸已尽(第二次)→ raise 落原错误路径
+    → error_terminate。注:非 PTL 的 provider error 走 is_error 响应(loop.py:674
+    只对 PTL 文本 raise),不进 LLMError 路径。"""
+    caplog.set_level(logging.INFO, logger="codesage.engine")
+    big = CompactionConfig(window=10**6, reserve=10**4, keep_recent=200)
+    llm = FakeLLM([_ptl_stream, lambda i: text_event("answer")], summary_text="s")
+    loop = _loop(llm, history=_big_history(), compaction=big)
+    await _collect(loop)
+    assert loop.last_transition == "ptl_compact"
+    assert "transition: ptl_compact" in caplog.text
+    caplog.clear()
+    llm2 = FakeLLM([_ptl_stream, _ptl_stream], summary_text="s")
+    loop2 = _loop(llm2, history=_big_history(), compaction=big)
+    await _collect(loop2)
+    assert loop2.last_transition == "error_terminate"  # 第二次 PTL 闸尽 → 原错误路径
+    assert "transition: error_terminate" in caplog.text
 
 
 # ---- PI-05 §3.6/§3.7: recovery reminder + old-result cleanup (S7) ----
@@ -2128,3 +2319,83 @@ async def test_s7_events_receive_abort_event():
     loop = _loop(llm, hooks=hooks)
     await _collect(loop)
     assert hooks.abort_event is loop.abort
+
+
+# ---- §3.2 输出端(length)恢复 ----
+
+
+async def test_length_truncated_tool_use_recovers_once(tmp_path):
+    """§3.2 形态 1:length+残缺 tool_use → 不落会话 + 反馈重试一次,最终回答落盘。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: length_tool_use_event(), lambda i: text_event("done reply")])
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2  # 反馈后重试一次
+    # 第二请求携带反馈,且不含被剥除的残缺 tool_use
+    assert OUTPUT_OVERFLOW_RECOVERY in request_text(llm.last_messages)
+    assert not any(
+        isinstance(m.content, list) and any(b.type == "tool_use" for b in m.content)
+        for m in llm.last_messages
+    )
+    # 残缺回复与反馈均不落会话:仅用户输入 + 最终回答
+    assert [m.role for m in out] == ["user", "assistant"]
+    assert out[1].content[0].text == "done reply"
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user", "assistant"]
+    assert persisted[1].content[0].text == "done reply"
+
+
+async def test_length_pure_text_truncation_no_recovery(tmp_path):
+    """§3.2 形态 2:纯文本截断不恢复,截断回复照常落盘并完成(仅记 transition)。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM([lambda i: length_text_event("partial reply"), lambda i: text_event("done reply")])
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 1  # 不重试
+    assert [m.role for m in out] == ["user", "assistant"]
+    assert out[1].content[0].text == "partial reply"
+    persisted = session.load()
+    assert persisted[1].content[0].text == "partial reply"
+
+
+async def test_length_gate_exhausted_falls_through(tmp_path):
+    """§3.2 防死循环闸:同一 run 二次 length+tool_use 不再恢复,
+    截断回复落回正常循环(不终止本轮,last_stop_reason=completed)。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM(
+        [
+            lambda i: length_tool_use_event(),
+            lambda i: length_tool_use_event(text="second partial", tid="t2"),
+        ]
+    )
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2  # 第一次恢复,第二次闸门用尽不恢复
+    assert loop.last_stop_reason == "completed"  # is_error 截断消息按普通回复完成
+    # 第二次截断回复以正常 assistant 消息落盘(PI-03 已剥 tool_use,仅余文本)
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user", "assistant"]
+    assert persisted[1].content[0].text == "second partial"
+    # 第一次恢复时注入过一次反馈(第二次请求里),未被重复注入
+    assert request_text(llm.last_messages).count(OUTPUT_OVERFLOW_RECOVERY) == 1
+
+
+async def test_length_empty_truncated_no_empty_message_in_session(tmp_path):
+    """LOW-3:闸尽后全空截断回复(纯 tool_use 被剥,无文本)→ 不落空消息,
+    按原 error 语义终止。"""
+    session = Session("s1", tmp_path)
+    llm = FakeLLM(
+        [
+            lambda i: length_tool_use_event(),
+            lambda i: length_tool_use_event(text="", tid="t2"),
+        ]
+    )
+    loop = _loop(llm, session=session)
+    out = await _collect(loop)
+    assert llm.calls == 2
+    assert loop.last_stop_reason == "error"
+    assert loop.last_transition == "error_terminate"  # §5.3 裁决:全空终止 = 终止非截断落回
+    # 无空 assistant 消息落盘(恢复轮与终止轮均未 yield/persist)
+    persisted = session.load()
+    assert [m.role for m in persisted] == ["user"]
+    assert [m.role for m in out] == ["user"]

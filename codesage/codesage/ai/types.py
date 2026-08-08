@@ -72,6 +72,10 @@ class LLMResponse(BaseModel):
     model: str | None = None
     is_error: bool = False  # provider error surfaced as a message (design note: recoverable)
     error_message: str | None = None
+    #: PI-03/S3:本次响应被剥除的残缺 tool_use 块数(length 截断或 partial-JSON)。
+    #: 剥除发生在 _drop_truncated_tool_uses;loop 侧(§3.2 形态 1)以此区分
+    #: 「截断丢过工具调用」与「纯文本截断」。
+    dropped_tool_uses: int = 0
 
     @property
     def text(self) -> str:

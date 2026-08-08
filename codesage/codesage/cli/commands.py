@@ -6,12 +6,14 @@ from the actual command set.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
-#: handler(args, state) -> True = exit the REPL. *state* carries REPL flags:
+#: handler(args, state) -> True = exit the REPL; async handlers allowed
+#: (dispatch awaits isawaitable results). *state* carries REPL flags:
 #: {"show_thinking": bool, "loop": AgentLoop} — /mode writes loop.mode.
-Handler = Callable[[list[str], dict], bool]
+Handler = Callable[[list[str], dict], bool | Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -47,9 +49,42 @@ def _cmd_show_thinking(args: list[str], state: dict) -> bool:
     return False
 
 
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_CLEAR = " " * 24
+
+
+async def _spinner(done: asyncio.Event) -> None:
+    """In-place progress spinner ('\r'-refreshed line); erases itself at the
+    end. Runs as a sibling task while the compaction LLM call is awaited."""
+    i = 0
+    while not done.is_set():
+        frame = _SPINNER_FRAMES[i % len(_SPINNER_FRAMES)]
+        print(f"\r  {frame} 压缩上下文中…", end="", flush=True)
+        i += 1
+        try:
+            await asyncio.wait_for(done.wait(), timeout=0.1)
+        except asyncio.TimeoutError:
+            pass
+    print("\r" + _SPINNER_CLEAR + "\r", end="", flush=True)
+
+
+async def _cmd_compact(args: list[str], state: dict) -> bool:
+    """Manual compaction (§6.3): spinner 展示压缩过程;结果一行,不清屏(§6.4)。"""
+    done = asyncio.Event()
+    spinner = asyncio.create_task(_spinner(done))
+    try:
+        ok = await state["loop"].compact_now()
+    finally:
+        done.set()
+        await spinner
+    print("上下文已压缩" if ok else "无可压缩内容")
+    return False
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand("mode", _cmd_mode, "switch permission mode (plan|default|yolo)"),
     SlashCommand("show-thinking", _cmd_show_thinking, "toggle thinking output"),
+    SlashCommand("compact", _cmd_compact, "压缩上下文"),
     SlashCommand("help", _cmd_help, "this help", aliases=["h"]),
     SlashCommand("quit", _cmd_quit, "exit", aliases=["q"]),
 ]

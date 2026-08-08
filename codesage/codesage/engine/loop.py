@@ -42,6 +42,7 @@ from .compaction import (
     summary_message,
 )
 from .context import ContextBundle
+from .errors import RecoveryClass
 from .tokens import estimate_context_tokens, should_compact
 from .tool_queue import ScheduledTool, ToolUseQueue
 
@@ -62,6 +63,8 @@ REMINDER_HEADER = (
 REMINDER_FOOTER = "\n\nIMPORTANT: this context may or may not be relevant to your tasks.\n</system-reminder>"
 #: Injected when the model replies with only internal reasoning (bounded retries).
 THINKING_ONLY_RECOVERY = "你只输出了内部思考,请直接输出回复或调用工具"
+#: §3.2 输出端(length)恢复反馈:残缺 tool_use 已被 PI-03 剥除,提示模型直接重发
+OUTPUT_OVERFLOW_RECOVERY = "你的上一条回复在 tool_use 处被输出上限截断,残缺的工具调用已丢弃。请直接重新发出该工具调用。"
 THINKING_ONLY_GIVE_UP = "Model returned internal reasoning only; giving up after 3 attempts"
 THINKING_ONLY_MAX_RETRIES = 3
 #: Stop feedback 注入上限(M1,09 补,对齐 CC MAX_STOP_HOOK_ATTEMPTS=5):
@@ -88,9 +91,10 @@ class AgentLoopConfig:
     Fields are immutable construction parameters; per-session runtime
     mutables (mode, on_stream, on_tool_event, on_notification, steer_queue,
     finalize, abort) stay on the AgentLoop instance. NOTE: the config holds
-    references, not copies — e.g. compaction.enabled is still mutated by the
-    breaker, and apply_tool_filter re-assigns loop.tools (the instance alias
-    is the runtime truth, config.tools is the construction snapshot).
+    references, not copies — e.g. apply_tool_filter re-assigns loop.tools
+    (the instance alias is the runtime truth, config.tools is the construction
+    snapshot). The compaction breaker lives on the AgentLoop instance
+    (_compaction_breaker, §7.2) — config.compaction.enabled is never written.
     """
 
     client: LLMClient
@@ -133,10 +137,13 @@ class RunState:
     messages: list["SessionMessage"]
     turn: int = 0
     thinking_retries: int = 0
-    ptl_retried: bool = False  # ← self._ptl_retried
     last_cache_read: int = 0  # ← self._last_cache_read
     stop_feedback_count: int = 0  # ← self._stop_feedback_count
     permission_denials: list[str] = field(default_factory=list)
+    # 阶段 10(§5.2):最近一次状态迁移原因(§5.3 词表;--verbose 单行日志,不持久化)
+    last_transition: str | None = None
+    #: §4.3 防死循环闸数据源:每错误类每 turn 至多 1 次恢复动作(值 0→1 后不再触发)
+    recovery_attempts: dict[RecoveryClass, int] = field(default_factory=dict)
 
 
 class AgentLoop:
@@ -184,6 +191,9 @@ class AgentLoop:
         self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
+        # §7.2:熔断闭包(替代写 config.enabled,R4 解耦)。True = 熔断中,仅挡 auto
+        # 触发(§7.1:manual 恒可用);压缩成功即复位
+        self._compaction_breaker: bool = False
         # §3.6: one-shot reminder with recently modified files, injected into
         # the request right after a compaction (never persisted)
         self._recovery_reminder: str | None = None
@@ -204,6 +214,10 @@ class AgentLoop:
         #: "max_budget" | "interrupted" | "error" | "thinking_only_exhausted" |
         #: "tool_terminated" (CC-10 / PI-04)
         self.last_stop_reason: str | None = None
+        #: 最近一次状态迁移原因(§5.3 词表;--verbose 单行日志,不持久化)。
+        #: run 内写位在 state.last_transition,run() finally 投影到此;run 外写位
+        #: (manual /compact)直接写这里 —— 单一读面供调试/S9 boundary 使用
+        self.last_transition: str | None = None
         #: Permission denials collected during the last run() (投影;submit/
         #: run_single_turn 读取 —— CC submitMessage 的 permission_denials)
         self.last_permission_denials: list[str] = []
@@ -217,7 +231,7 @@ class AgentLoop:
     async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
         """Run the loop from a user input; yields the conversation messages."""
         # per-run state: a reused loop instance must start fresh (P3-8);
-        # ptl_retried/last_cache_read/stop_feedback_count live in RunState,
+        # recovery_attempts/last_cache_read/stop_feedback_count live in RunState,
         # _active_messages stays an instance projection (repl statusbar reads it)
         self._active_messages = None
         # SessionStart 钩子(§6.2):run() 入口,门闩一次 —— 首个 run() 派发后置位,
@@ -238,6 +252,7 @@ class AgentLoop:
         # resumed turns start from the prior history; the session file keeps
         # growing so --continue chains naturally across runs
         state = RunState(messages=[*self.history, first])
+        self._mark_transition(state, "user_input")  # §5.3:run() 入口接收本轮输入
         try:
             while True:
                 # CLI status bar's ctx meter reads this (compaction visibly
@@ -262,7 +277,12 @@ class AgentLoop:
                 # enough tokens makes the summary call unnecessary (auto-
                 # compact is the last resort). The summary request does not
                 # count as a turn.
-                if self.compaction is not None and self.compaction.enabled and state.turn != self._last_compact_turn:
+                if (
+                    self.compaction is not None
+                    and self.compaction.enabled
+                    and not self._compaction_breaker
+                    and state.turn != self._last_compact_turn
+                ):
                     # Estimative cleanup only — deliberately do NOT touch
                     # _last_result_clean: that gate is shared with _ask_model's
                     # request-view projection, and consuming the stale trigger
@@ -276,6 +296,7 @@ class AgentLoop:
                     estimate = estimate_context_tokens(cleaned)
                     if should_compact(estimate.tokens, self.compaction.window, self.compaction.reserve):
                         self._last_compact_turn = state.turn  # debounce: no second pass this turn
+                        self._mark_transition(state, "auto_compact")  # §5.3:阈值检查点压缩
                         # PreCompact 的 context_tokens = 压缩检查点的请求视图估算
                         # (cleaned 视图,§6.2);PTL 路径无此变量,_compact 内回退估算
                         compacted = await self._compact(state.messages, context_tokens=estimate.tokens)  # RAW span: summary keeps full detail
@@ -314,9 +335,10 @@ class AgentLoop:
                 except LLMError as exc:
                     if (
                         is_ptl_error(exc)
-                        and not state.ptl_retried
+                        and state.recovery_attempts.get(RecoveryClass.CONTEXT_OVERFLOW, 0) == 0
                         and self.compaction is not None
-                        and self.compaction.enabled  # breaker tripped: no more summary calls (P3-4)
+                        and self.compaction.enabled
+                        and not self._compaction_breaker  # breaker tripped: no more summary calls (P3-4)
                     ):
                         # §3.8 reactive compaction: PTL is the one state a
                         # threshold-triggered compact can't prevent (huge
@@ -324,7 +346,8 @@ class AgentLoop:
                         # (skip should_compact) and retry once; a failing
                         # compact falls through to the outer error path and
                         # counts into the breaker (no PTL-compact-PTL loop).
-                        state.ptl_retried = True
+                        state.recovery_attempts[RecoveryClass.CONTEXT_OVERFLOW] = 1
+                        self._mark_transition(state, "ptl_compact")
                         compacted = await self._compact(state.messages)
                         if compacted is not None:
                             summary_msg, cut = compacted
@@ -336,6 +359,39 @@ class AgentLoop:
                 if assistant is None:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
+                # §3.2 输出端(length)恢复:length 是成功响应,不进 LLMError 路径(R5)。
+                # 形态 1(client PI-03 已剥除残缺 tool_use,不落会话)→ 轻量反馈重试
+                # 一次,记 recovery_attempts[OUTPUT_OVERFLOW];形态 2(纯文本截断)或
+                # 恢复闸已用尽 → 不恢复,落回正常循环(下轮模型自愈),不终止本轮。
+                if assistant.stop_reason == "length":
+                    if (
+                        assistant.dropped_tool_uses
+                        and not state.recovery_attempts.get(RecoveryClass.OUTPUT_OVERFLOW, 0)
+                    ):
+                        # 残缺回复整体不进会话(不 yield/不 persist),反馈仅留内存
+                        # 上下文;重试计新 turn(while 顶 turn += 1,与 PTL 专线同约定)
+                        state.recovery_attempts[RecoveryClass.OUTPUT_OVERFLOW] = 1
+                        self._mark_transition(state, "output_overflow")  # §5.3:截断重发
+                        state.messages.append(user_message(OUTPUT_OVERFLOW_RECOVERY))
+                        continue
+                    # 形态 2 或闸已用尽:不恢复
+                    self._mark_transition(state, "output_overflow_truncated")  # §5.3:纯文本截断
+                    # PI-03 的 is_error 截断消息按普通截断回复处理(否则走 error
+                    # 终止路径,违背「不终止本轮」)
+                    if assistant.is_error:
+                        # 全空内容(纯 tool_use 被剥,仅空文本块)→ 重建无意义且
+                        # 空消息会落盘,按原 error 语义终止不 yield(LOW-3);
+                        # 裁决(§5.3):终止 ≠ 截断落回,写 error_terminate
+                        if not any(b.type == "text" and b.text for b in assistant.content):
+                            self._mark_transition(state, "error_terminate")
+                            self.last_stop_reason = "error"
+                            return
+                        assistant = assistant_message(
+                            assistant.content,
+                            usage=assistant.usage,
+                            model=assistant.model,
+                            stop_reason=assistant.stop_reason,
+                        )
                 yield assistant
                 await self._persist(assistant)
                 state.messages.append(assistant)
@@ -402,6 +458,7 @@ class AgentLoop:
                     yield tool_round
                     await self._persist(tool_round)
                     state.messages.append(tool_round)
+                self._mark_transition(state, "tool_result")  # §5.3:工具执行返回(执行后恢复点)
                 # PI-04: terminate semantics — the turn stops only when EVERY
                 # tool in the batch asks to stop. Checked AFTER the tool results
                 # were yielded so the model/user still see what the tools did.
@@ -429,6 +486,7 @@ class AgentLoop:
                         return
         except LLMError as exc:
             # unrecoverable provider error surfaces as a message, not a crash
+            self._mark_transition(state, "error_terminate")  # §5.3:不可恢复错误落原路径
             self.last_stop_reason = "error"
             # 通知(§2.5):llm_error —— provider error 消息位;fail-open
             await self._notify("llm_error", f"LLM error: {exc}", status_code=exc.status_code)
@@ -442,10 +500,39 @@ class AgentLoop:
             # per-run 结果投影到实例(与 last_stop_reason 同模式);state 在
             # try 之前创建,所有出口(return/异常/GeneratorExit)都经过这里
             self.last_permission_denials = list(state.permission_denials)
+            self.last_transition = state.last_transition  # §5.3:run 内写位投影到实例
             # a prefetch still in flight must not dangle past the loop
             task = self._prefetch_task
             if task is not None and not task.done():
                 task.cancel()
+
+    async def compact_now(self) -> bool:
+        """Manual compaction (§6.2). Returns whether a summary was produced.
+
+        绕过防抖(_last_compact_turn 只由 auto 检查点写)与熔断(_compaction_breaker
+        只挡 auto 读点,§7.1 manual 恒可用);压缩成功即复位熔断闭包(_compact 内)。
+        无消息可压(未 run 过/空会话/无压缩配置)或压缩失败 → False。
+        """
+        if not self._active_messages or self.compaction is None:
+            return False  # 无可压缩内容(repl 提示)
+        self._mark_transition(None, "manual_compact")  # §5.3:run 外写位(实例投影)
+        compacted = await self._compact(self._active_messages, trigger="manual")
+        if compacted is None:
+            return False
+        summary_msg, cut = compacted
+        # 投影刷新(与 auto 检查点 loop.py:301 同款):meter/下一次 manual 都读它
+        self._active_messages = [summary_msg, *self._active_messages[cut.index :]]
+        return True
+
+    def _mark_transition(self, state: RunState | None, reason: str) -> None:
+        """§5.3:写 transition reason + --verbose 单行日志(INFO 只在 --verbose 可见,
+        不做持久化)。run 内写位走 state;run 外(manual /compact)走实例投影。
+        """
+        if state is None:
+            self.last_transition = reason
+        else:
+            state.last_transition = reason
+        logger.info("transition: %s", reason)
 
     # ---- internals ----
 
@@ -453,7 +540,7 @@ class AgentLoop:
         self,
         messages: list[SessionMessage],
         *,
-        trigger: str = "auto",  # 阶段 09 §2.2:阶段 10 manual 预留,v1 恒 "auto"
+        trigger: str = "auto",  # §6.2:auto 检查点/PTL 传 "auto",compact_now 传 "manual"
         context_tokens: int | None = None,  # 压缩检查点的估算值(auto 路径传入;PTL 路径回退估算)
     ) -> tuple[SessionMessage, CutPoint] | None:
         """Summarize the history span and persist the summary (append-only).
@@ -491,9 +578,10 @@ class AgentLoop:
         except LLMError:
             self._compact_failures += 1
             if self._compact_failures >= 2:
-                self.compaction.enabled = False  # breaker (specs/08 §3.5)
+                self._compaction_breaker = True  # breaker(§7.2 闭包;config 只读,specs/08 §3.5)
             return None
         self._compact_failures = 0
+        self._compaction_breaker = False  # §7.2:压缩成功即复位熔断
         # fileOps merge across rounds (§3.6): previous summary's lists + what
         # this compressed span touched; appended to the summary tail so the
         # info survives --continue replays
@@ -611,6 +699,7 @@ class AgentLoop:
             is_error=response.is_error,
             error_message=response.error_message,
             stop_reason=response.stop_reason,
+            dropped_tool_uses=response.dropped_tool_uses,
         )
 
     def _start_prefetch(self, messages: list[SessionMessage]) -> None:
