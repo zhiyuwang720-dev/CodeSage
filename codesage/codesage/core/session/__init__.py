@@ -1,17 +1,13 @@
-"""Core domain layer (phase 04/12): session messages, API normalization, session storage.
+"""Session storage (phase 12): typed-entry JSONL, tree branches via lane pointers.
 
-Session storage migrated to the core/session package (phase 12); the export
-surface is unchanged — all existing imports keep working.
+The phase 04 core/session.py migrated into a package: entry models (entry.py),
+Session class + file enumeration (session.py), tree views (tree.py) and
+archiving (archive.py) land in later steps (S2/S5).
 """
 
-from .messages import SessionMessage, assistant_message, user_message
-from .normalize import NO_CONTENT_MESSAGE, normalize_for_api
-from .session import (
+from .entry import (
     ENTRY_TYPES,
-    Session,
     SessionEntry,
-    find_session,
-    list_sessions,
     make_bookmark_entry,
     make_branch_summary_entry,
     make_lane_entry,
@@ -19,17 +15,14 @@ from .session import (
     make_message_entry,
     make_model_change_entry,
     make_operation_entry,
-    most_recent_session,
     parse_entry,
 )
+from .session import Session, find_session, list_sessions, most_recent_session
 
 __all__ = [
     "ENTRY_TYPES",
-    "NO_CONTENT_MESSAGE",
     "Session",
     "SessionEntry",
-    "SessionMessage",
-    "assistant_message",
     "find_session",
     "list_sessions",
     "make_bookmark_entry",
@@ -40,7 +33,5 @@ __all__ = [
     "make_model_change_entry",
     "make_operation_entry",
     "most_recent_session",
-    "normalize_for_api",
     "parse_entry",
-    "user_message",
 ]
