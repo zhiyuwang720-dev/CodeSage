@@ -80,6 +80,23 @@ def build_tree(entries: list[SessionEntry]) -> TreeView:
     return TreeView(roots, nodes, lanes, active_name, active_leaf)
 
 
+def lane_names(entries: list[SessionEntry]) -> set[str]:
+    """文件里全部 lane 名(§4.4/§5 --lane 参数校验用);旧文件(无 lane entry,
+    §3.3 惰性推导)→ 默认单 lane {"main"}。"""
+    names = {e.data.get("name") for e in entries if e.type == "lane"}
+    return names or {"main"}
+
+
+def numbered_entries(entries: list[SessionEntry]) -> list[tuple[int, SessionEntry]]:
+    """文件序 1-based 序号(§1.4.1 提示语 entry 序号 + §6 /tree 渲染共用):
+    /tree 的行 = message + operation,应用状态 entry(lane/bookmark/summary/
+    meta/model_change)是行内标注不占号 —— 与 §6 示例 ①-⑩ 连续编号一致。"""
+    return [
+        (i, e)
+        for i, e in enumerate((e for e in entries if e.type in ("message", "operation")), 1)
+    ]
+
+
 def linear_messages(
     entries: list[SessionEntry], lane: str | None = None
 ) -> list[SessionMessage]:

@@ -24,7 +24,14 @@ from .session import (
     list_sessions,
     most_recent_session,
 )
-from .tree import TreeNode, TreeView, build_tree, linear_messages
+from .tree import (
+    TreeNode,
+    TreeView,
+    build_tree,
+    lane_names,
+    linear_messages,
+    numbered_entries,
+)
 
 __all__ = [
     "ENTRY_TYPES",
@@ -35,8 +42,10 @@ __all__ = [
     "build_tree",
     "find_open_operations",
     "find_session",
+    "lane_names",
     "linear_messages",
     "list_sessions",
+    "numbered_entries",
     "make_bookmark_entry",
     "make_branch_summary_entry",
     "make_lane_entry",

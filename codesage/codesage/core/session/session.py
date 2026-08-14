@@ -28,6 +28,7 @@ from .entry import (
     make_operation_entry,
     parse_entry,
 )
+from .tree import lane_names, linear_messages
 
 #: 应用状态 entry 类型(§3.2 PI-10 部分采纳):不进入模型上下文,只被读取器消费
 _APP_STATE_TYPES = frozenset({"lane", "bookmark", "branch_summary", "meta", "model_change"})
@@ -140,6 +141,25 @@ class Session:
         chain = self._chain(entries, leaf, last_message_uuid)
         self._cursor = chain[-1].uuid if chain else None  # 重建游标:续写挂活跃 lane 最新消息
         return [entry.as_message() for entry in chain]
+
+    def load_lane(self, lane: str) -> list[SessionMessage]:
+        """§4.4/§5 --continue --lane:指定 lane 的线性视图(linear_messages 的
+        便捷封装,load() 的 lane 参数版)—— 同时重建游标/活跃 lane 到该 lane
+        的 leaf,后续 append_message 续写挂在命名 lane 上而非活跃 lane(否则
+        --lane 选分支后新消息会挂回原分支,语义断裂)。未知 lane 抛 ValueError
+        (CLI 捕获报错);旧文件(无 lane entry)只认默认 main。"""
+        entries, _ = self._read()
+        if lane not in lane_names(entries):
+            raise ValueError(f"lane not found: {lane}")
+        chain = linear_messages(entries, lane)
+        self._lane, self._cursor = lane, chain[-1].uuid if chain else None
+        return chain
+
+    @property
+    def entries(self) -> list[SessionEntry]:
+        """§7.2/§10 读面:全部 entry(CLI 的 find_open_operations/编号渲染、
+        审计消费;复用 _read 解析,坏行跳过容错)。"""
+        return self._read()[0]
 
     def _read(self) -> tuple[list[SessionEntry], str | None]:
         entries: list[SessionEntry] = []
