@@ -2496,3 +2496,90 @@ async def test_tasks_env_override_chain(tmp_path, monkeypatch):
     # ID 按列表目录独立分配:新会话目录从 1 重新开始,env 目录不受影响
     assert (tmp_path / "sess-wins" / "1.json").exists()
     assert sorted(p.name for p in (tmp_path / "env-list").glob("*.json")) == ["1.json"]
+
+
+# ---- 12 S3: operation log + meta/model_change + branch_summary (spec §7-8) ----
+
+async def test_s3_operation_entry_before_tool_result_and_parent_chain(tmp_path):
+    """12 §7.1/§3.4:engine append 产生 message entry 带 parent 链;operation
+    entry(真实执行前)先于 tool_result 消息落盘。"""
+    import json
+
+    session = Session("s1", tmp_path)
+    llm = FakeLLM(
+        [
+            lambda i: tool_use_event("Echo", "t1", '{"text": "x"}'),
+            lambda i: text_event("got it"),
+        ]
+    )
+    await _collect(_loop(llm, session=session))
+    lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    messages = [ln for ln in lines if ln["type"] == "message"]
+    assert [ln["type"] for ln in lines if ln["type"] != "lane"] == [
+        "message", "message", "operation", "message", "message",
+    ]
+    # parent 链:首条消息无 parent,其后消息依次挂前一条消息
+    assert messages[0]["parent"] is None
+    assert [m["parent"] for m in messages[1:]] == [m["uuid"] for m in messages[:-1]]
+    # operation entry:tool_started + 工具名 + 截断 args_summary
+    op = [ln for ln in lines if ln["type"] == "operation"][0]
+    assert op["kind"] == "tool_started"
+    assert op["tool"] == "Echo"
+    assert op["args_summary"] == "{'text': 'x'}"  # str(tool_input) 原始形状
+
+
+async def test_s3_compact_appends_branch_summary(tmp_path):
+    """12 §4.5:压缩后 branch_summary entry 落盘(摘要文本 + leaf = 切点后
+    锚点消息 uuid,保留清单 #14);消息链不改、被覆盖消息不删。"""
+    import json
+
+    session = Session("s1", tmp_path)
+    hist = _big_history()
+    llm = FakeLLM([lambda i: text_event("answer")], summary_text="compacted")
+    loop = _loop(llm, history=hist, compaction=_tiny_compaction(), session=session)
+    await _collect(loop)
+    lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    summaries = [ln for ln in lines if ln["type"] == "branch_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["content"] == "compacted"
+    # leaf = 压缩切点后第一条消息 uuid(锚点消息在内存链里,非落盘消息)
+    anchor_uuids = {m.uuid for m in [*hist, user_message("hi")]}
+    assert summaries[0]["leaf"] in anchor_uuids
+    # 消息链不删:3 条落盘消息(user + summary + assistant)原样保留
+    messages = [ln for ln in lines if ln["type"] == "message"]
+    assert [m["content"] for m in messages[:2]] == ["hi", "compacted"]
+    assert messages[2]["content"][0]["text"] == "answer"
+
+
+async def test_s3_build_loop_meta_first_line_and_model_change(tmp_path, monkeypatch):
+    """12 §8.1/§8.2/§10.1:build_loop 装配 —— 新建会话首行 = meta entry
+    (model/show_thinking/cwd/system_prompt_hash/session_id);恢复已有会话且
+    meta.model 与请求 model 不同 → 追加 model_change entry。"""
+    import json
+
+    from codesage.cli.assemble import build_loop
+
+    monkeypatch.setenv("CODESAGE_CONFIG_DIR", str(tmp_path))
+    loop = build_loop(cwd=tmp_path, model="main", session_id="s-meta")
+    session = loop.session
+    lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    first = lines[0]
+    assert first["type"] == "meta"
+    assert first["model"] == "main"
+    assert first["show_thinking"] is False
+    assert first["cwd"] == str(tmp_path)
+    assert len(first["system_prompt_hash"]) == 12
+    assert first["session_id"] == "s-meta"
+
+    # --continue 且 model 与 meta.model 不同 → model_change entry(装配时注入)
+    loop2 = build_loop(cwd=tmp_path, model="sonnet", session=session)
+    lines2 = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert lines2[-1]["type"] == "model_change"
+    assert lines2[-1]["from"] == "main"
+    assert lines2[-1]["to"] == "sonnet"
+    assert session.meta["model"] == "main"  # meta 首行不变,变更只追加
+
+    # 请求 model 与 meta.model 相同(main) → 不追加 model_change
+    build_loop(cwd=tmp_path, model="main", session=session)
+    lines3 = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert all(ln["type"] != "model_change" for ln in lines3[len(lines2):])

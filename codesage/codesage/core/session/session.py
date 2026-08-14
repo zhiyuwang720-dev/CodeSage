@@ -14,15 +14,23 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from ..messages import SessionMessage
 from .entry import (
     SessionEntry,
     make_bookmark_entry,
+    make_branch_summary_entry,
     make_lane_entry,
+    make_meta_entry,
     make_message_entry,
+    make_model_change_entry,
+    make_operation_entry,
     parse_entry,
 )
+
+#: 应用状态 entry 类型(§3.2 PI-10 部分采纳):不进入模型上下文,只被读取器消费
+_APP_STATE_TYPES = frozenset({"lane", "bookmark", "branch_summary", "meta", "model_change"})
 
 _SANITIZE_PROJECT = re.compile(r"[^A-Za-z0-9]+")
 
@@ -82,6 +90,38 @@ class Session:
         """§6 书签:追加命名 bookmark entry(指向被标记 entry;重名 = 追加,
         读端后者胜 —— 永不删除)。"""
         return self._append(make_bookmark_entry(name, entry_id))
+
+    def append_operation(
+        self, kind: str, tool: str | None = None, args_summary: str | None = None
+    ) -> SessionEntry:
+        """§7.1 操作日志(单向 tool_started):工具调用发起点追加;args_summary
+        截断 200 字符 —— 应用状态,不进模型上下文。"""
+        if args_summary is not None and len(args_summary) > 200:
+            args_summary = args_summary[:200]
+        return self._append(make_operation_entry(kind, tool=tool, args_summary=args_summary))
+
+    def append_meta(self, **fields: Any) -> SessionEntry:
+        """§8.1/§8.3 meta 追加:首行 = 会话自描述锚点;标题等第二个 meta entry
+        追加在后(append-only 无法回改首行),读端合并、后者胜。"""
+        return self._append(make_meta_entry(**fields))
+
+    def append_model_change(self, to: str, from_: str | None = None) -> SessionEntry:
+        """§8.2 会话内模型指针切换(审计/恢复不用猜当时配置)。"""
+        return self._append(make_model_change_entry(to, from_=from_))
+
+    def append_branch_summary(self, text: str, leaf: str) -> SessionEntry:
+        """§4.5 分支摘要快照:摘要文本 + leaf(压缩切点后第一条消息 uuid,
+        保留清单 #14「summary 挂 leafUuid」);不改消息链、不删被覆盖消息。"""
+        return self._append(make_branch_summary_entry(text, leaf))
+
+    @property
+    def meta(self) -> dict | None:
+        """§8.1/§8.3 读端:合并全部 meta entry(后者胜,含 title);无 meta → None。"""
+        merged: dict = {}
+        for entry in self._read()[0]:
+            if entry.type == "meta":
+                merged.update(entry.data)
+        return merged or None
 
     def load(self) -> list[SessionMessage]:
         """Replay the log; corrupt lines are skipped, not fatal.
@@ -186,3 +226,22 @@ def most_recent_session(root: Path) -> Path | None:
 def find_session(root: Path, session_id: str) -> Path | None:
     """Locate a session file by id (root-level or inside any project_key subdir)."""
     return next((p for p in list_sessions(root) if p.stem == session_id), None)
+
+
+def find_open_operations(entries: list[SessionEntry]) -> list[SessionEntry]:
+    """§7.2 活跃 lane 上最后一段 operation(纯函数):从文件末尾往前扫,跳过
+    应用状态 entry(lane/bookmark/branch_summary/meta/model_change);遇到
+    operation → 收集并继续(同一段内的操作都未完成);遇到 message → 结束
+    (该消息即「后继消息」,其前的 operation 视为已完成)。中断检测启发式
+    (R6):无配对 end,末尾 operation 即视为未完成 —— 误报只产生提示,不
+    自动重放,无副作用。"""
+    open_ops: list[SessionEntry] = []
+    for entry in reversed(entries):
+        if entry.type in _APP_STATE_TYPES:
+            continue
+        if entry.type == "operation":
+            open_ops.append(entry)
+            continue
+        break  # message
+    open_ops.reverse()
+    return open_ops

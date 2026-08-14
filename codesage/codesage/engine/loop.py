@@ -589,6 +589,11 @@ class AgentLoop:
         summary_msg = summary_message(ops.append_to(summary))
         self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
         await self._persist(summary_msg)  # append-only: compaction appends one summary
+        # 12 §4.5:branch_summary 落盘快照(摘要文本 + leaf = 压缩切点后第一条
+        # 消息 uuid,保留清单 #14「summary 挂 leafUuid」);不改消息链、不删被
+        # 摘要覆盖的消息 —— compaction 也是「插入一个 entry」。无 session 跳过。
+        if self.session is not None and cut.index < len(messages):
+            self.session.append_branch_summary(summary, messages[cut.index].uuid)
         # PostCompact 钩子(§6.2):成功返回前,纯观察型(exit 2 与非阻塞等同)
         await self._dispatch_post_compact(trigger, summary_msg, cut)
         return summary_msg, cut
@@ -793,10 +798,23 @@ class AgentLoop:
             pre_hook=self._pre_tool_use_hook,  # PreToolUse 钩子(阶段 09 §5.1,先于权限引擎)
             post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
+            on_tool_start=self._record_tool_start,  # 12 §7.1:真实执行前记操作日志
             finalize=self.finalize,
             notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
         )
         return await queue.run()
+
+    def _record_tool_start(self, item: ScheduledTool) -> None:
+        """12 §7.1 操作日志埋点:工具真实执行前(权限闸通过后)追加 operation
+        entry —— 权限拒绝/未知工具/输入非法路径不记;无 session(单测)跳过;
+        args_summary 截断 200 字符。"""
+        if self.session is None:
+            return
+        self.session.append_operation(
+            kind="tool_started",
+            tool=item.tool.name,
+            args_summary=str(item.input)[:200],
+        )
 
     async def _notify(
         self, notification_type: str, message: str, *, title: str | None = None, **data: Any

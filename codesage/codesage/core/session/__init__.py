@@ -17,7 +17,13 @@ from .entry import (
     make_operation_entry,
     parse_entry,
 )
-from .session import Session, find_session, list_sessions, most_recent_session
+from .session import (
+    Session,
+    find_open_operations,
+    find_session,
+    list_sessions,
+    most_recent_session,
+)
 from .tree import TreeNode, TreeView, build_tree, linear_messages
 
 __all__ = [
@@ -27,6 +33,7 @@ __all__ = [
     "TreeNode",
     "TreeView",
     "build_tree",
+    "find_open_operations",
     "find_session",
     "linear_messages",
     "list_sessions",

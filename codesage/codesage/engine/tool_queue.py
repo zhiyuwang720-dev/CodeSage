@@ -82,6 +82,7 @@ class ToolUseQueue:
         post_hook: Any | None = None,  # async (ScheduledTool, ToolResult) -> None (阶段 09 §6.1)
         finalize: Any | None = None,  # async (ScheduledTool, ToolResult) -> ToolResult (PI-02)
         on_tool_event: Any | None = None,  # (event, tool_name, payload) lifecycle (PI-01)
+        on_tool_start: Any | None = None,  # (ScheduledTool) -> None 真实执行前(权限闸通过后)回调(12 §7.1)
         notify: Any | None = None,  # async (notification_type, message, **data) — 阶段 09 §2.5 通知 emit
     ):
         self._tools = tools
@@ -90,6 +91,7 @@ class ToolUseQueue:
         self._post_hook = post_hook
         self._finalize = finalize
         self._on_tool_event = on_tool_event
+        self._on_tool_start = on_tool_start
         self._notify = notify
 
     def _emit_tool_event(self, event: str, tool_name: str, payload: dict) -> None:
@@ -180,6 +182,17 @@ class ToolUseQueue:
                 return denied
 
         # ---- execute (PI-01: lifecycle events) ----
+        # 12 §7.1:真实执行前记录操作日志(权限拒绝路径在此前已返回,不会误记)
+        if self._on_tool_start is not None:
+            try:
+                self._on_tool_start(item)
+            except Exception:
+                # 操作日志是 best-effort 附加写入,失败不拖累工具执行
+                import logging
+
+                logging.getLogger("codesage.engine").warning(
+                    "on_tool_start %s failed", item.tool.name, exc_info=True
+                )
         self._emit_tool_event("start", item.tool.name, {"tool_use_id": item.tool_use_id})
         try:
             result = None
