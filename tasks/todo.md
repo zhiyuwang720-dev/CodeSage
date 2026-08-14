@@ -39,9 +39,9 @@
 - [x] **11 tasks 任务系统** (`feat/11-tasks`)(规格:`docs/specs/11-tasks.md`)✅ 2026-08-08
   - 验收:Task CRUD 全链路(TaskCreate/Get/List/Update 四工具 + `{config_dir}/tasks/{task_list_id}/` 持久化);blocks/blockedBy 双向依赖 + 环检测(mutation 三查预防 + validate_task_graph 四类全量验证);TodoWrite 并存零破坏;命名避让(TaskOutput/TaskStop);E2E(mock LLM 单轮 run TaskCreate×3→TaskList→TaskUpdate,会话隔离);双层锁(进程内 asyncio.Lock + 跨进程 O_EXCL 目录锁)
   - 验证:依赖图单测(环/缺失/重复/非对称)+ 存储单测(CRUD/高水位/并发)+ 锁单测(真实竞态)+ 工具 4 文件 + E2E;**918 passed, 9 skipped**
-- [ ] **12 session 会话生命周期** (`feat/12-session`)
+- [x] **12 session 会话生命周期** ✅ 2026-08-14(`feat/12-session`)
   - 验收:fork/continue/resume;sidechain 日志;归档
-  - 验证:会话恢复单测(摘要前 2 条 user 消息)
+  - 验证:会话恢复单测(摘要前 2 条 user 消息);**1008 passed, 9 skipped**;红线零改动(SessionMessage/04 测试)
 - [ ] **13 subagents 子代理** (`feat/13-subagents`)
   - 验收:agent 定义(frontmatter + 优先级合并);Task 工具;forkContext;前/后台;禁递归工具
   - 验证:嵌套调用单测
