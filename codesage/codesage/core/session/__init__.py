@@ -5,6 +5,13 @@ Session class + file enumeration (session.py), tree views (tree.py) and
 archiving (archive.py) land in later steps (S2/S5).
 """
 
+from .archive import (
+    SessionMeta,
+    active_sessions,
+    archive_session,
+    archived_sessions,
+    restore_session,
+)
 from .entry import (
     ENTRY_TYPES,
     SessionEntry,
@@ -37,8 +44,12 @@ __all__ = [
     "ENTRY_TYPES",
     "Session",
     "SessionEntry",
+    "SessionMeta",
     "TreeNode",
     "TreeView",
+    "active_sessions",
+    "archive_session",
+    "archived_sessions",
     "build_tree",
     "find_open_operations",
     "find_session",
@@ -46,6 +57,7 @@ __all__ = [
     "linear_messages",
     "list_sessions",
     "numbered_entries",
+    "restore_session",
     "make_bookmark_entry",
     "make_branch_summary_entry",
     "make_lane_entry",

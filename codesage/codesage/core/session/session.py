@@ -229,11 +229,16 @@ class Session:
 
 
 def list_sessions(root: Path) -> list[Path]:
-    """All session .jsonl files under *root* (incl. project_key subdirs), newest mtime first."""
+    """All active session .jsonl files under *root* (incl. project_key subdirs),
+    newest mtime first; any level of archive/ directory is excluded (§9.1/§10.2
+    red line — archived sessions are invisible to --continue/--session-id)."""
     if not root.exists():
         return []
-    files = list(root.glob("*.jsonl"))
-    files.extend(p for sub in root.iterdir() if sub.is_dir() for p in sub.glob("*.jsonl"))
+    files = [
+        p
+        for p in root.rglob("*.jsonl")
+        if "archive" not in p.relative_to(root).parts
+    ]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 

@@ -207,6 +207,8 @@ class AgentLoop:
         self.last_permission_denials: list[str] = []
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
         self._session_started = False
+        #: §8.3 标题提取门闩:每会话一次(续写会话靠读文件判据,见 _maybe_write_title)
+        self._title_written = False
         #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
         #: 一次性 prefix,注入后清除(与 _recovery_reminder 同款模式)
         self._hook_reminder: str | None = None
@@ -1183,6 +1185,29 @@ class AgentLoop:
     async def _persist(self, message: SessionMessage) -> None:
         if self.session is not None:
             self.session.append(message)
+            self._maybe_write_title(message)
+
+    def _maybe_write_title(self, message: SessionMessage) -> None:
+        """12 §8.3 标题提取(轻量):首条**有意义** user prompt(非工具结果
+        载体/非 reminder/非 meta)→ 追加第二个 meta entry 带 title(≤80 字符,
+        读端合并、后者胜 —— 首行 meta 已落盘,append-only 无法回改)。标题
+        已存在(续写会话)→ 置门闩不再写。"""
+        if self._title_written or message.role != "user" or message.is_reminder or message.is_meta:
+            return
+        if isinstance(message.content, list):
+            if any(b.type == "tool_result" for b in message.content):
+                return
+            text = " ".join(b.text or "" for b in message.content if b.type == "text")
+        else:
+            text = message.content
+        text = " ".join(text.split())[:80]
+        if not text:
+            return
+        if self.session.meta and self.session.meta.get("title"):
+            self._title_written = True
+            return
+        self.session.append_meta(title=text)
+        self._title_written = True
 
 
 def _render_prefetch(sections: list[tuple[str, str]]) -> str:

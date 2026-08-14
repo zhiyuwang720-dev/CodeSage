@@ -2502,8 +2502,9 @@ async def test_tasks_env_override_chain(tmp_path, monkeypatch):
 # ---- 12 S3: operation log + meta/model_change + branch_summary (spec §7-8) ----
 
 async def test_s3_operation_entry_before_tool_result_and_parent_chain(tmp_path):
-    """12 §7.1/§3.4:engine append 产生 message entry 带 parent 链;operation
-    entry(真实执行前)先于 tool_result 消息落盘。"""
+    """12 §7.1/§3.4/§8.3:engine append 产生 message entry 带 parent 链;operation
+    entry(真实执行前)先于 tool_result 消息落盘;首条 user prompt 提取为标题
+    meta entry(§8.3,落盘在首条消息后)。"""
     session = Session("s1", tmp_path)
     llm = FakeLLM(
         [
@@ -2515,8 +2516,11 @@ async def test_s3_operation_entry_before_tool_result_and_parent_chain(tmp_path):
     lines = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
     messages = [ln for ln in lines if ln["type"] == "message"]
     assert [ln["type"] for ln in lines if ln["type"] != "lane"] == [
-        "message", "message", "operation", "message", "message",
+        "message", "meta", "message", "operation", "message", "message",
     ]
+    # §8.3:首条有意义 user prompt(hi)→ 标题 meta entry(≤80 字符,后者胜)
+    title = [ln for ln in lines if ln["type"] == "meta"][-1]
+    assert title["title"] == "hi"
     # parent 链:首条消息无 parent,其后消息依次挂前一条消息
     assert messages[0]["parent"] is None
     assert [m["parent"] for m in messages[1:]] == [m["uuid"] for m in messages[:-1]]
