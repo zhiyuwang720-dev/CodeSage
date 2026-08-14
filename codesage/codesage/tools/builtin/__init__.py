@@ -1,6 +1,7 @@
 """Builtin tool set, organized by category (mirrors Kode's tools/src/tools/)."""
 
 from ..base import Tool
+from .agent.agent import AgentTool
 from .filesystem.edit import EditTool
 from .filesystem.ls import LSTool
 from .filesystem.read import ReadTool
@@ -33,6 +34,7 @@ BUILTIN_TOOLS: list[Tool] = [
     TaskListTool(),
     TaskUpdateTool(),
     WebFetchTool(),
+    AgentTool(),
 ]
 
 __all__ = ["BUILTIN_TOOLS"]

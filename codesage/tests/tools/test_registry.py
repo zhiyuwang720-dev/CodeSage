@@ -10,6 +10,7 @@ def test_builtin_registration():
         "LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash",
         "TaskOutput", "TaskStop", "TodoWrite",
         "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "WebFetch",
+        "Agent",
     ]
 
 
@@ -28,11 +29,12 @@ def test_register_lookup_and_override():
 def test_specs_generated_for_engine():
     registry = ToolRegistry(get_builtin_tools())
     specs = registry.specs()
-    assert len(specs) == 15
+    assert len(specs) == 16
     assert {s.name for s in specs} == {
         "LS", "Read", "Write", "Edit", "Glob", "Grep", "Bash",
         "TaskOutput", "TaskStop", "TodoWrite",
         "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "WebFetch",
+        "Agent",
     }
     # every spec carries a schema with properties
     for spec in specs:

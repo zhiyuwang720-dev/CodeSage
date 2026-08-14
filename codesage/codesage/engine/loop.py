@@ -753,6 +753,7 @@ class AgentLoop:
             self._tool_ctx = ToolUseContext(
                 cwd=self.cwd, abort_event=self.abort,
                 task_list_id=self.session.session_id if self.session else "",
+                parent_loop=self,  # 阶段 13 §5.5:Agent 工具取父 loop 快照
             )
         ctx = self._tool_ctx
         for block in tool_uses:
