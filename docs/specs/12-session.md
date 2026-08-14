@@ -52,6 +52,25 @@
 - **12 新增**:`core/session/` 包(从单文件 session.py 升级:entry 模型 + 树视图 + lane + 操作日志 + 归档;§3.1 包结构)、五个斜杠命令、`cli/__init__.py` 的 `--lane` 参数、`assemble.py` 的 lane 装配。
 - **语义微调**(红线,需回归):`core/session.py` 的 `Session` 类**原地升级**(存储格式从「纯消息行」升级为「typed-entry 行」,旧文件兼容读);`Session.load()` 的**返回语义保持**「沿活跃 lane 的线性消息列表」(引擎零改动);`SessionMessage` **零改动**(消息 entry 用 `type` 标记包裹,复用其 to_dict)。
 
+### 1.4 用户体验设计原则(依据 `docs/reference/user-experience.md` 第 14 章)
+
+阶段 12 的交互设计依据 Claude Code UX 设计文档提炼的**五条原则**落地。**原则决定「为什么这么设计」,§6-§9 是「怎么做」**;本条是交互相关裁决的论证层,实施时若交互细节与原则冲突,以原则为准:
+
+| UX 原则(来源) | 12 的落位 |
+|---|---|
+| **可观察的自主性**(14.1「信任但实时验证」):Agent 自由行动但每步可见;中断成本远低于撤销成本 | append-only 永不删除 + `/tree` 全树可见 = **「撤销」的树状替代**:走错分支 → `/fork` 新分支,零破坏零复制(§4.2);任何历史状态都在玻璃箱里,不存在「看不见的改动」;fork 比撤销好 —— 撤销丢失备选历史,fork 保留所有可能(对齐「所有分支保存在单个文件中」的动机) |
+| **最小化打断**(14.1):只在真正需要权限确认时才中断用户流 | `--continue` 中断恢复**只提示不弹窗**(§7.3);`/tree` `/fork` 是查询式命令,不打断主流程;恢复不自动重放(副作用不可重放,重放是 13 的职责) |
+| **工具透明度建立信任**(14.4 + 14.13 洞察 #3):工具调用流式可见,状态用色码编码(ToolUseLoader 四态色) | `operation` entry 把工具透明度**持久化**:当轮的透明是流式渲染,跨会话的透明靠操作日志 —— 重开会话仍能看到「上次中断于哪个工具调用」(§7) |
+| **自动恢复减少干扰**(14.5 + 14.13 洞察 #4):尽可能自动恢复,「需要用户干预的错误」才打扰 | `--continue` 检测未完成操作 → 提示 + 原样继续(§7.3);工具副作用不可重放 = 「需要用户干预」,所以提示而非静默;提示不自动重放,对齐「用户无感知的自动恢复 vs 明确文案的干预错误」分界 |
+| **非对称误差预算**(14.13「宁可多做一点无用功,不让用户看到瑕疵」):拿不准时朝优雅降级方向取舍 | 恢复保 2 条 user 消息(保留清单 #14,§4.5)、`/tree` 上下文窗口前 5 后 3(§6)—— 都朝「多给上下文」方向取舍:宁可多渲染几行,不可漏掉用户关心的历史(分页 20 行是信息密度问题,见下条,不属于此原则) |
+
+**交互规格补充**(可测,实施必须遵守;**格式与符号**在 S4/S5 用测试断言固化 —— 结构断言,不逐字比对文案内容):
+
+1. **提示语文案**(对齐 14.5「干预错误要有明确文案」):**三段式只约束「注意类」提示**(§7.3 中断恢复类)—— 前缀 `[!]` 仅用于「需要用户注意但不阻断」、正文给出**事实 + 位置**(entry 序号)+ 动作建议;**「完成类」输出**(fork/bookmark 成功、会话列表)用平铺格式,不受三段式约束。`/sessions` 列表头:`id / title / messages / branches / time`,无标题会话显示 `(untitled)`。**固化的是格式与符号,不是文案内容**:S4/S5 用**结构断言**测注意类提示(前缀 + entry 序号 + 动作建议三要素,不逐字比对文案),留出文案迭代空间(见 R11)。
+2. **信息密度分层**(对齐 14.11「成本精度分档」思想):概览少信息、细节全信息 —— `/sessions` 一行一会话,id 显示层截断取**区分度最高的段**(实现注:本项目 id 为 `session-YYYYMMDD-HHMMSS-ffffff` 前缀形态,前 4 位恒 "sess" 零区分度,取尾部微秒时间戳段加 `…` 前缀,同秒会话可辨;规格以「前 4 位十六进制(3f9a…)」为示意,实际截断形态以区分度为准);`/tree` 每行截断 80 字符;全量内容走 `/tree <entryId>` 上下文窗口。**截断是显示层行为,数据层全量保留**(append-only)。
+3. **符号即语义,颜色只是增强**(对齐 14.4 状态色编码 + 无障碍):`/tree` 渲染中活跃 lane `→`、书签 `✓`、未完成操作(§7.2)`!` 前缀 —— 符号是语义本体,颜色(活跃 lane 绿/书签黄/未完成红)是增强;不支持颜色时仅符号仍可读。**测试断言符号,不断言颜色**。
+4. **即时反馈**(对齐 14.3「边做边看」):`build_tree` 是纯函数 O(n),`/tree` 全量渲染目标 <10ms(ponytail:超过 1000 entry 时按页截断已控,无需缓存);fork/bookmark 是追加写,无回读 —— 命令不感知文件增长。
+
 ## 2. 核心裁决:单文件 typed-entry JSONL + lane 指针(对齐 Pi,用户指定)
 
 **裁决:会话文件从「纯消息 JSONL」升级为「typed-entry JSONL」,所有分支(消息链 + lane 指针 + 书签 + 摘要 + 操作日志)写在同一文件,append-only 不变。**
@@ -245,7 +264,7 @@ COMMANDS.append(SlashCommand("bookmark", _cmd_bookmark, "标记书签: /bookmark
 **`/tree` 渲染**(对齐用户产品需求 + Pi 形态):
 
 ```
-session 3f9a…  (7 entries, 2 branches)
+session 3f9a…  (9 messages, 2 branches)
 main ───────────────────────────────────
   ✓ ① user  2026-08-12T10:00  "修复 auth 登录 bug"(★ auth-fix)
     ② user  2026-08-12T10:01  "再试一次,加日志"
@@ -254,20 +273,23 @@ main ─────────────────────────
     ⑤ tool_result …   "2 failed"
     ⑥ assistant  …  "方案 A 失败,换 B"
     ⑦ assistant  …  "方案 B 通过"
-main-1 ── fork @ ② ────────────────────
+→ main-1 ── fork @ ② ──────────────────
     ⑧ user  2026-08-12T10:15  "从 ② 继续,换方案 C"
     ⑨ assistant  …
+  ! ⑩ operation 2026-08-12T10:16  tool_started Bash("npm run deploy")
 ```
 
 - 每行:`书签 ✓` + 序号 + 类型(角色/工具块)+ 时间 + 内容截断(80 字符,ponytail 注释:超长截断阈值后续可配置)。
-- 分支:`lane` entry 渲染为分支头,缩进对齐;活跃 lane 高亮(`→` 标记,文本模式用颜色码)。
+- 分支:`lane` entry 渲染为分支头,缩进对齐;**活跃 lane 行首 `→` 标记**(示例中 main-1 为活跃 lane);**未完成操作**(§7.2 `find_open_operations` 命中)的行前缀 `!`(示例 ⑩)。
 - 筛选:`/tree --type user|assistant|tool_use|tool_result|bookmark|summary|operation`(用户需求「按消息类型筛选」;类型映射自 message 的 role/content block 类型 + 应用状态 entry 类型)。
 - 只显示书签:`/tree --bookmarks`(用户需求「条目标记为书签」的查看面)。
 - 页码:`/tree [n]` 翻页(每页 20 行,ponytail);`/tree <entryId>` 显示该 entry 所在分支的上下文窗口(前 5 后 3,含 parent 链标注)。
 
-**`/bookmark <entryId> <name>`**:追加 bookmark entry;重名覆盖语义 = 追加新 entry(旧书签保留,读取时后者胜 —— 追加式不删除,对齐「永不删除」)。
+**`/bookmark <entryId> <name>`**:追加 bookmark entry;重名覆盖语义 = 追加新 entry(旧书签保留,读取时后者胜 —— 追加式不删除,对齐「永不删除」);输出 `bookmarked <entryId> as <name>`(完成类平铺格式,§1.4.1)。
 
 **`/fork <entryId> [name]`**:§4.2;输出 `forked at <entryId> → lane <name>`。
+
+> **渲染与无障碍遵循 §1.4**:`→`/`✓`/`!` 符号是语义本体(色码是增强,测试只断言符号);截断(80 字符/20 行一页)是显示层行为,数据层全量保留;上下文窗口(前 5 后 3)朝「多给上下文」方向取舍(非对称误差预算,§1.4)。
 
 ## 7. 会话操作日志与中断恢复(PI-07)
 
@@ -298,8 +320,8 @@ def find_open_operations(entries: list[SessionEntry]) -> list[SessionEntry]:
 - `--continue` 启动时调 `find_open_operations`;若存在未完成操作,打印提示:
 
 ```
-Continuing session 3f9a… (12 messages)
-[!] 上次运行中断于工具调用: Bash("npm test")(entry ④) —— 从该点继续
+Continuing session 3f9a… (9 messages)
+[!] 上次运行中断于工具调用: Bash("npm run deploy")(entry ⑩) —— 从该点继续
 ```
 
 - 恢复语义:**提示 + 原样继续**(不自动重放操作 —— 工具副作用不可重放,重放是 13 子代理/编排的职责;12 只提供「中断点可见性」)。模型看到提示后自决策(对齐主规格 #2「工具失败转 tool_result 交模型自愈」的自愈精神)。
@@ -359,6 +381,14 @@ def archived_sessions(root: Path) -> list[SessionMeta]: ...  # 仅 archive/
 /sessions --all      # 两者
 ```
 
+**渲染示例**(信息密度分层 §1.4:id 显示层截断取区分度最高的段(实现:尾部时间戳段,见 §1.4 交互规格 2)+ 一行一会话 + 无标题 `(untitled)`):
+
+```
+id      title                  messages  branches  time
+3f9a…   "修复 auth 登录 bug"    9         2         2026-08-12T10:30
+1b42…   (untitled)              4         1         2026-08-11T22:05
+```
+
 - 与 07 `--session-id` 组合:从列表里挑 id → `--session-id <id> --continue`。
 - 交互式选择菜单:**裁剪**(§1.2),列表 + 参数组合已覆盖脚本/手动两用。
 
@@ -372,10 +402,10 @@ def archived_sessions(root: Path) -> list[SessionMeta]: ...  # 仅 archive/
 | `tests/core/test_tree.py` **新增** | `session/tree.py` | 单链树退化;分支渲染(多根 + lane 解析);类型筛选;书签挂载;活跃 lane 判定 |
 | `tests/core/test_fork.py` **新增** | `session/session.py` + tree | fork 追加 lane;fork 后写消息挂新分支;线性视图随活跃 lane 变化;命名 main-1 递增;单文件断言(分支后文件数不变) |
 | `tests/core/test_operations.py` **新增** | `session/session.py` + tree | operation 追加;find_open_operations 命中(末尾 operation)与不命中(末尾是消息);中断点标注 |
-| `tests/core/test_archive.py` **新增** | `session/archive.py` | 归档移动(project 子目录);active/archived 枚举;restore;list_sessions 排除 archive |
+| `tests/core/test_archive.py` **新增** | `session/archive.py` | 归档移动(project 子目录);active/archived 枚举;restore;list_sessions 排除 archive;/sessions 表头 + `(untitled)` 渲染断言(§9.2) |
 | `tests/core/test_session.py` **既有,零改动** | 04 | 旧格式 roundtrip/append/load/损坏行 —— **04 契约回归红线** |
-| `tests/cli/test_commands_tree.py` **新增** | `cli/commands.py` | /tree 渲染含分支;--type 筛选;--bookmarks;/fork 输出;/bookmark 追加 |
-| `tests/cli/test_resume_inject.py` **新增** | `cli/__init__.py` resume 区块 | --resume 注入 branch_summary 摘要 + leaf 链前 2 条 user 为上下文起点;跨 lane 过滤(多分支文件选对分支摘要);07 resume 行为回归(无摘要时 = 旧逻辑) |
+| `tests/cli/test_commands_tree.py` **新增** | `cli/commands.py` | /tree 渲染含分支;--type 筛选;--bookmarks;/fork 输出;/bookmark 输出;**符号断言**(`→`/`✓`/`!` 独立于颜色,§1.4.3);**80 字符截断断言**(显示层截断、数据层全量保留,§1.4.2) |
+| `tests/cli/test_resume_inject.py` **新增** | `cli/__init__.py` resume 区块 | --resume 注入 branch_summary 摘要 + leaf 链前 2 条 user 为上下文起点;跨 lane 过滤(多分支文件选对分支摘要);07 resume 行为回归(无摘要时 = 旧逻辑);**提示语结构断言**(有/无中断两态:[!] 前缀 + entry 序号 + 动作建议三要素,不逐字比对文案,§1.4.1) |
 | `tests/engine/test_loop.py` **追加** | 装配 | E2E:会话文件首行 meta;engine append 产生 message entry 带 parent 链;compact 落 branch_summary entry;model_change entry(装配时注入) |
 
 ### 10.2 不能破坏的既有契约(12 改动红线)
@@ -401,9 +431,9 @@ def archived_sessions(root: Path) -> list[SessionMeta]: ...  # 仅 archive/
 | S1 | entry 模型 + 序列化 + 旧格式兼容 | `core/session/entry.py`、`session.py` 迁移改造(append 变 append_message,load 兼容双格式) | `test_entry.py` 绿 + `test_session.py`(04)零改动通过 |
 | S2 | 树视图 + lane 解析 + fork + bookmark | `core/session/tree.py`;`session.py::fork/append_bookmark` | `test_tree.py` + `test_fork.py` 绿 |
 | S3 | 操作日志 + meta/model_change + branch_summary | `session.py::append_operation/append_meta`;`find_open_operations`;loop 埋点(工具轮 + 装配 meta + compact 落盘) | `test_operations.py` 绿;loop E2E 断言 entry 形状 |
-| S4 | CLI 入口升级:`--lane` 参数 + `--resume` 摘要注入(branch_summary → leaf 链上前 2 条 user 为上下文起点,§4.5 跨 lane 过滤)+ `--continue` 中断恢复提示 | `cli/__init__.py`(resume 区块改造);`cli/assemble.py` lane 装配 | **resume 改造新测试**(摘要注入 + 跨 lane 过滤)+ 07 resume 既有测试回归 |
-| S5 | 斜杠命令 + 归档:`/tree` `/fork` `/bookmark` `/sessions` + `/archive`(`--restore`) | `cli/commands.py` 追加;`session/archive.py` | `test_commands_tree.py` + `test_archive.py` 绿 |
-| S6 | 红线固化 + 理解文档 | `docs/modules/12-session.md` | 全量回归绿(918 + 新增);04 会话测试零改动 |
+| S4 | CLI 入口升级:`--lane` 参数 + `--resume` 摘要注入(branch_summary → leaf 链上前 2 条 user 为上下文起点,§4.5 跨 lane 过滤)+ `--continue` 中断恢复提示(**按 §1.4.1 三段式「注意类」:[!] + 事实 + entry 序号 + 动作建议;「完成类」平铺输出**) | `cli/__init__.py`(resume 区块改造);`cli/assemble.py` lane 装配 | **resume 改造新测试**(摘要注入 + 跨 lane 过滤 + **提示语结构断言**:[!] 前缀/序号/动作建议三要素,不逐字比对文案)+ 07 resume 既有测试回归 |
+| S5 | 斜杠命令 + 归档:`/tree` `/fork` `/bookmark` `/sessions` + `/archive`(`--restore`)(**渲染按 §1.4.2 信息密度分层 + §1.4.3 符号即语义**:→/✓/! 符号为语义本体、80 字符截断(数据层全量保留)、`/sessions` 表头 + `(untitled)`、fork/bookmark 完成类平铺输出) | `cli/commands.py` 追加;`session/archive.py` | `test_commands_tree.py`(符号/截断断言)+ `test_archive.py`(表头断言)绿 |
+| S6 | 红线固化 + 理解文档(**§1.4 四条交互规格对照自检写入 modules 文档**) | `docs/modules/12-session.md` | 全量回归绿(918 + 新增);04 会话测试零改动;**§1.4 自检四项通过**:① 提示语三段式(注意类三要素齐备)② 信息密度分层(截断仅显示层)③ 符号可读(去色仍可辨 →/✓/!)④ 即时反馈(`/tree` 全量渲染 <10ms) |
 
 依赖:S1 → S2 → S3 → S4 → S5;S6 收尾。步骤间每步独立提交。依赖外部:04(消息/会话契约)、07(cli resume/commands)、10(压缩摘要管线)—— 全部已就绪,零新依赖(Ask first 不触发)。
 
@@ -421,6 +451,7 @@ def archived_sessions(root: Path) -> list[SessionMeta]: ...  # 仅 archive/
 | R8 | 归档移动破坏会话 id 枚举(04 list_sessions 语义) | §9.1 显式红线:list_sessions 排除 archive/,04 相关用例回归;归档路径可逆(--restore) |
 | R9 | 文件体积(单文件含全分支历史 + 摘要快照) | 追加式单文件是用户指定(「所有分支保存在单个文件中」);体积由压缩(branch_summary 快照)与归档(§9)共同缓解;树渲染按页截断(§6) |
 | R10 | 多进程并发写(13 场景) | §3.5 格式预留(每行自包含);12 保持单写者,不实现锁(04 的兑现点在 13) |
+| R11 | 交互文案/渲染被测试固化后,后续调整成本(§1.4 文案表 + 符号断言) | 固化的只是**格式与符号**,文案内容仍是可改的字符串;符号即语义的设计让换肤(颜色)不触碰测试;若 UX 迭代需要改符号本身,属 07 cli 渲染层的演进(§1.2 口径:UI 面留 cli 后续强化) |
 
 ## 13. 与路线图的关系
 
@@ -434,4 +465,4 @@ def archived_sessions(root: Path) -> list[SessionMeta]: ...  # 仅 archive/
 
 ---
 
-*附:探索依据(2026-08-12)探索确认 07 已交付 --continue/--resume/--session-id(cli/__init__.py:72-76,128-165,resume 摘要 = 最后 10 条渲染)+ CC-09 斜杠命令注册表(cli/commands.py,SlashCommand 数据对象 + find_command,12 的五个新命令零范式直接注册);10 压缩管线(generate_summary/UPDATE 迭代/boundary 消息)已就绪,SessionSummaryRecord 裁决在 10-compact.md:50 明确「归阶段 12」;docs/pi-agent-core-analysis.md:102-105 的 PI 表把 PI-07/08 归 core/session、PI-09 标「阶段 12 升级」、PI-10 标「阶段 12/19」;pi-agent-core-analysis.md §2 记录了用户树状产品需求原文(「/tree 导航至任何先前位置并从那里继续;所有分支保存在单个文件中;可按消息类型筛选;条目标记为书签」)+ Pi 的 entry 链/lane 指针设计(types.ts:14-74/150-212, fork scope branch/tree, session.ts:338-351);Kode 对照(packages/core/src/logging/log/paths.ts)确认其 sidechain 为多文件命名分支,因用户指定单文件而否决;04 spec「不做:fork/resume/归档(阶段 12)」确认边界归属。*
+*附:探索依据(2026-08-12)探索确认 07 已交付 --continue/--resume/--session-id(cli/__init__.py:72-76,128-165,resume 摘要 = 最后 10 条渲染)+ CC-09 斜杠命令注册表(cli/commands.py,SlashCommand 数据对象 + find_command,12 的五个新命令零范式直接注册);10 压缩管线(generate_summary/UPDATE 迭代/boundary 消息)已就绪,SessionSummaryRecord 裁决在 10-compact.md:50 明确「归阶段 12」;docs/pi-agent-core-analysis.md:102-105 的 PI 表把 PI-07/08 归 core/session、PI-09 标「阶段 12 升级」、PI-10 标「阶段 12/19」;pi-agent-core-analysis.md §2 记录了用户树状产品需求原文(「/tree 导航至任何先前位置并从那里继续;所有分支保存在单个文件中;可按消息类型筛选;条目标记为书签」)+ Pi 的 entry 链/lane 指针设计(types.ts:14-74/150-212, fork scope branch/tree, session.ts:338-351);Kode 对照(packages/core/src/logging/log/paths.ts)确认其 sidechain 为多文件命名分支,因用户指定单文件而否决;04 spec「不做:fork/resume/归档(阶段 12)」确认边界归属;UX 依据(2026-08-13 修订)docs/reference/user-experience.md 第 14 章 —— 五条原则(可观察的自主性 14.1/最小化打断 14.1/工具透明度 14.4/自动恢复 14.5/非对称误差预算 14.13)映射为 §1.4,交互细节(符号即语义、信息密度分层、提示语文案、即时反馈)对齐 14.4 ToolUseLoader 色码、14.11 精度分档、14.3 流式即时性。*

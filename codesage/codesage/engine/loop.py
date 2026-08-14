@@ -207,6 +207,8 @@ class AgentLoop:
         self.last_permission_denials: list[str] = []
         #: SessionStart 门闩(§6.2):首个 run() 置位,AgentLoop 生命周期内只触发一次
         self._session_started = False
+        #: §8.3 标题提取门闩:每会话一次(续写会话靠读文件判据,见 _maybe_write_title)
+        self._title_written = False
         #: updatedSystemReminder/additionalContext 累积(§7.1/§7.2):下一次请求的
         #: 一次性 prefix,注入后清除(与 _recovery_reminder 同款模式)
         self._hook_reminder: str | None = None
@@ -589,6 +591,11 @@ class AgentLoop:
         summary_msg = summary_message(ops.append_to(summary))
         self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
         await self._persist(summary_msg)  # append-only: compaction appends one summary
+        # 12 §4.5:branch_summary 落盘快照(摘要文本 + leaf = 压缩切点后第一条
+        # 消息 uuid,保留清单 #14「summary 挂 leafUuid」);不改消息链、不删被
+        # 摘要覆盖的消息 —— compaction 也是「插入一个 entry」。无 session 跳过。
+        if self.session is not None and cut.index < len(messages):
+            self.session.append_branch_summary(summary, messages[cut.index].uuid)
         # PostCompact 钩子(§6.2):成功返回前,纯观察型(exit 2 与非阻塞等同)
         await self._dispatch_post_compact(trigger, summary_msg, cut)
         return summary_msg, cut
@@ -793,10 +800,23 @@ class AgentLoop:
             pre_hook=self._pre_tool_use_hook,  # PreToolUse 钩子(阶段 09 §5.1,先于权限引擎)
             post_hook=self._post_tool_use_hook,  # PostToolUse 钩子(阶段 09 §6.1)
             on_tool_event=self.on_tool_event,
+            on_tool_start=self._record_tool_start,  # 12 §7.1:真实执行前记操作日志
             finalize=self.finalize,
             notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
         )
         return await queue.run()
+
+    def _record_tool_start(self, item: ScheduledTool) -> None:
+        """12 §7.1 操作日志埋点:工具真实执行前(权限闸通过后)追加 operation
+        entry —— 权限拒绝/未知工具/输入非法路径不记;无 session(单测)跳过;
+        args_summary 截断 200 字符。"""
+        if self.session is None:
+            return
+        self.session.append_operation(
+            kind="tool_started",
+            tool=item.tool.name,
+            args_summary=str(item.input)[:200],
+        )
 
     async def _notify(
         self, notification_type: str, message: str, *, title: str | None = None, **data: Any
@@ -1165,6 +1185,29 @@ class AgentLoop:
     async def _persist(self, message: SessionMessage) -> None:
         if self.session is not None:
             self.session.append(message)
+            self._maybe_write_title(message)
+
+    def _maybe_write_title(self, message: SessionMessage) -> None:
+        """12 §8.3 标题提取(轻量):首条**有意义** user prompt(非工具结果
+        载体/非 reminder/非 meta)→ 追加第二个 meta entry 带 title(≤80 字符,
+        读端合并、后者胜 —— 首行 meta 已落盘,append-only 无法回改)。标题
+        已存在(续写会话)→ 置门闩不再写。"""
+        if self._title_written or message.role != "user" or message.is_reminder or message.is_meta:
+            return
+        if isinstance(message.content, list):
+            if any(b.type == "tool_result" for b in message.content):
+                return
+            text = " ".join(b.text or "" for b in message.content if b.type == "text")
+        else:
+            text = message.content
+        text = " ".join(text.split())[:80]
+        if not text:
+            return
+        if self.session.meta and self.session.meta.get("title"):
+            self._title_written = True
+            return
+        self.session.append_meta(title=text)
+        self._title_written = True
 
 
 def _render_prefetch(sections: list[tuple[str, str]]) -> str:

@@ -24,11 +24,18 @@ from pathlib import Path
 
 from .. import __version__
 from ..config import paths
-from ..core import Session, find_session, most_recent_session
+from ..core import Session, SessionMessage, find_session, most_recent_session
+from ..core.session import (
+    find_open_operations,
+    lane_names,
+    linear_messages,
+    numbered_entries,
+)
+from ..engine import AgentSession
+from ..engine.compaction import summary_message
 from .assemble import apply_tool_filter, build_loop, session_root
 from .permission_prompt import request_permission
-from .render import CYAN, _c, render_message
-from ..engine import AgentSession
+from .render import CYAN, DIM, _c, render_message
 from .repl import _install_single_shot_sigint, repl_loop, run_single_turn
 
 
@@ -74,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                               help="continue the most recent conversation (history as context, same session file)")
     resume_group.add_argument("--resume", action="store_true", help="resume the most recent session (summary + new session)")
     resume_group.add_argument("--session-id", metavar="ID", help="resume a specific session by id")
+    parser.add_argument("--lane", metavar="NAME", help="continue/resume along a named branch (spec §4.4/§5; unknown lane → exit 1)")
     parser.add_argument("--allowedTools", metavar="N1,N2", help="comma-separated tool allowlist")
     parser.add_argument("--disallowedTools", metavar="N1,N2", help="comma-separated tool denylist")
     parser.add_argument("--version", action="version", version=f"codesage {__version__}")
@@ -157,12 +165,31 @@ def main(argv: list[str] | None = None) -> int:
     if resumed is not None:
         if continue_mode:
             # --continue: load prior turns as context and keep appending to
-            # the same session file (chains across runs)
+            # the same session file (chains across runs). 12 §4.4/§5:--lane
+            # 选分支 —— 线性视图换 lane 并重置续写游标;未知 lane → 报错退出。
             session = Session(resumed.stem, root, project_key=project_key)
-            history = session.load()
+            try:
+                history = session.load_lane(args.lane) if args.lane else session.load()
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
             print(_c(f"Continuing session {resumed.stem} ({len(history)} messages)", CYAN), file=sys.stderr)
+            _print_interrupt_notice(session)  # §7.3 中断恢复提示(注意类三段式)
         else:
-            _print_history_summary(resumed, root)
+            # --resume/--session-id:12 §4.5 branch_summary 摘要注入(沿目标
+            # lane 找最近摘要,leaf 必须落在该 lane 链上,跨 lane 过滤);未命中
+            # → 07 旧逻辑(最后 10 条渲染)。resume 是新会话:history 只注入,
+            # session 不传 build_loop(仍新建文件)。
+            resumed_session = Session(resumed.stem, root, project_key=project_key)
+            try:
+                history = resume_inject_history(resumed_session, args.lane)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            if history is not None:
+                print(f"[resuming {resumed.stem}: {len(history)} message(s), branch summary]")
+            else:
+                _print_history_summary(resumed, root)
 
     loop = build_loop(
         cwd=cwd,
@@ -220,6 +247,58 @@ def _enable_interactive_hook_logging() -> None:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         h.addHandler(handler)
+
+
+def resume_inject_history(
+    session: Session, lane: str | None = None
+) -> list[SessionMessage] | None:
+    """12 §4.5 --resume 摘要注入(可测纯逻辑):沿目标 lane(缺省活跃,--lane
+    指定)按文件序倒序找最近 branch_summary,其 leaf 必须落在该 lane 链上
+    (跨 lane 过滤 —— 别的分支的摘要跳过,继续往前找);命中 → [摘要 boundary
+    消息(10 的 is_compaction_summary 模式,summary_message)+ leaf 链往前
+    2 条 user 消息(保留清单 #14)];未命中 → None(调用方走 07 旧逻辑)。
+    未知 lane 抛 ValueError(CLI 捕获报错)。"""
+    entries = session.entries
+    if lane is not None and lane not in lane_names(entries):
+        raise ValueError(f"lane not found: {lane}")
+    chain = linear_messages(entries, lane)
+    chain_ids = {m.uuid for m in chain}
+    for entry in reversed(entries):
+        if entry.type != "branch_summary":
+            continue
+        if entry.data.get("leaf") not in chain_ids:
+            continue  # 别的分支的摘要(leaf ∉ 目标 lane 链):跳过
+        # 真实 user 输入 = 字符串内容且非摘要载体(排除 tool_result 载体/
+        # 既存压缩摘要);取 leaf(切点)之前的最近 2 条为上下文起点(§4.5,
+        # 压缩发生时 leaf = 切点后第一条消息 —— 保的是摘要前的 user)
+        leaf = entry.data.get("leaf")
+        idx = next((i for i, m in enumerate(chain) if m.uuid == leaf), len(chain))
+        users = [
+            m
+            for m in chain[:idx]
+            if m.role == "user"
+            and isinstance(m.content, str)
+            and not m.is_compaction_summary
+        ]
+        return [summary_message(entry.data.get("content", ""))] + users[-2:]
+    return None
+
+
+def _print_interrupt_notice(session: Session) -> None:
+    """§7.3 --continue 中断恢复提示(§1.4.1 注意类三段式:[!] 前缀 + 事实 +
+    entry 序号 + 动作建议):启动时检测活跃 lane 末段未完成操作
+    (find_open_operations),命中 → 打印提示;未命中 → 维持既有
+    "Continuing session ..." 输出。只提示不重放(工具副作用不可重放,
+    重放是 13 子代理的职责)。"""
+    entries = session.entries
+    ops = find_open_operations(entries)
+    if not ops:
+        return
+    op = ops[-1]
+    num = next((n for n, e in numbered_entries(entries) if e.uuid == op.uuid), None)
+    tool, args_summary = op.data.get("tool"), op.data.get("args_summary")
+    label = f'{tool}("{args_summary}")' if tool else op.data.get("kind") or op.type
+    print(f"[!] 上次运行中断于工具调用: {label}(entry {num}) —— 从该点继续", file=sys.stderr)
 
 
 def _print_history_summary(path: Path, root: Path, limit: int = 10) -> None:

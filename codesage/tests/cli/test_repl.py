@@ -237,8 +237,12 @@ def test_match_commands_prefix_suggestions():
     assert _match_commands("hello") == []
     assert _match_commands("/") == _match_commands("/")  # 全部指令
     names = [c.name for c in _match_commands("/")]
-    assert names == ["mode", "show-thinking", "compact", "help", "quit"]
+    assert names == [
+        "mode", "show-thinking", "compact", "tree", "fork",
+        "bookmark", "sessions", "archive", "help", "quit",
+    ]
     assert [c.name for c in _match_commands("/co")] == ["compact"]
+    assert [c.name for c in _match_commands("/tr")] == ["tree"]
     assert [c.name for c in _match_commands("/h")] == ["help"]  # alias h
     assert [c.name for c in _match_commands("/q")] == ["quit"]  # alias q
     assert _match_commands("/x") == []

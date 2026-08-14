@@ -7,6 +7,7 @@ audit sink + session.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from ..ai import LLMClient
@@ -59,6 +60,28 @@ def build_loop(
     )
     if session is None:
         session = Session(session_id or _new_session_id(), session_root(), project_key=project_key)
+        # 12 §8.1:新建会话首行写 meta entry(会话自描述锚点;show_thinking
+        # 缺省 False,system_prompt_hash = sha256 截断,pointer 名不解析字面量)
+        resolved_prompt = system_prompt if system_prompt is not None else get_base_prompt(str(cwd))
+        session.append_meta(
+            model=model,
+            show_thinking=False,
+            cwd=str(cwd),
+            system_prompt_hash=hashlib.sha256(resolved_prompt.encode("utf-8")).hexdigest()[:12],
+            session_id=session.session_id,
+        )
+    elif session.meta is not None:
+        # 12 §8.2/§10.1:恢复已有会话(--continue)时模型指针切换 → 追加
+        # model_change entry(装配时注入)。当前模型 = 最后一条 model_change 的
+        # `to`(无则回退 meta.model 首行快照)—— 避免每次 --continue 重复追加
+        # 污染 model_change 历史(§8.2「切换时追加」语义)。
+        current = session.meta.get("model")
+        for e in reversed(session._read()[0]):
+            if e.type == "model_change":
+                current = e.data.get("to")
+                break
+        if current not in (None, model):
+            session.append_model_change(to=model, from_=current)
 
     return AgentLoop(
         AgentLoopConfig(
