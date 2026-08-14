@@ -1,6 +1,7 @@
 """AgentLoop tests: termination, self-healing, abort, permissions (mock LLM)."""
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -2503,8 +2504,6 @@ async def test_tasks_env_override_chain(tmp_path, monkeypatch):
 async def test_s3_operation_entry_before_tool_result_and_parent_chain(tmp_path):
     """12 §7.1/§3.4:engine append 产生 message entry 带 parent 链;operation
     entry(真实执行前)先于 tool_result 消息落盘。"""
-    import json
-
     session = Session("s1", tmp_path)
     llm = FakeLLM(
         [
@@ -2530,8 +2529,8 @@ async def test_s3_operation_entry_before_tool_result_and_parent_chain(tmp_path):
 
 async def test_s3_compact_appends_branch_summary(tmp_path):
     """12 §4.5:压缩后 branch_summary entry 落盘(摘要文本 + leaf = 切点后
-    锚点消息 uuid,保留清单 #14);消息链不改、被覆盖消息不删。"""
-    import json
+    第一条消息 uuid,保留清单 #14);消息链不改、被覆盖消息不删。"""
+    from codesage.engine import find_cut_point
 
     session = Session("s1", tmp_path)
     hist = _big_history()
@@ -2542,9 +2541,10 @@ async def test_s3_compact_appends_branch_summary(tmp_path):
     summaries = [ln for ln in lines if ln["type"] == "branch_summary"]
     assert len(summaries) == 1
     assert summaries[0]["content"] == "compacted"
-    # leaf = 压缩切点后第一条消息 uuid(锚点消息在内存链里,非落盘消息)
-    anchor_uuids = {m.uuid for m in [*hist, user_message("hi")]}
-    assert summaries[0]["leaf"] in anchor_uuids
+    # leaf = 压缩切点后第一条消息 uuid:同参数重算切点,锚点 = 内存链(未落盘)
+    cut = find_cut_point(hist + [user_message("hi")], keep_recent=200)
+    assert cut is not None and cut.index < len(hist)
+    assert summaries[0]["leaf"] == hist[cut.index].uuid
     # 消息链不删:3 条落盘消息(user + summary + assistant)原样保留
     messages = [ln for ln in lines if ln["type"] == "message"]
     assert [m["content"] for m in messages[:2]] == ["hi", "compacted"]
@@ -2554,9 +2554,8 @@ async def test_s3_compact_appends_branch_summary(tmp_path):
 async def test_s3_build_loop_meta_first_line_and_model_change(tmp_path, monkeypatch):
     """12 §8.1/§8.2/§10.1:build_loop 装配 —— 新建会话首行 = meta entry
     (model/show_thinking/cwd/system_prompt_hash/session_id);恢复已有会话且
-    meta.model 与请求 model 不同 → 追加 model_change entry。"""
-    import json
-
+    请求 model 与当前模型(最后 model_change 的 to,无则 meta.model)不同 →
+    追加 model_change entry;重复同模型不追加。"""
     from codesage.cli.assemble import build_loop
 
     monkeypatch.setenv("CODESAGE_CONFIG_DIR", str(tmp_path))
@@ -2579,7 +2578,14 @@ async def test_s3_build_loop_meta_first_line_and_model_change(tmp_path, monkeypa
     assert lines2[-1]["to"] == "sonnet"
     assert session.meta["model"] == "main"  # meta 首行不变,变更只追加
 
-    # 请求 model 与 meta.model 相同(main) → 不追加 model_change
-    build_loop(cwd=tmp_path, model="main", session=session)
+    # 重复切:同一 model 第二次 --continue 不再追加(§8.2「切换时追加」防污染)
+    build_loop(cwd=tmp_path, model="sonnet", session=session)
     lines3 = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
     assert all(ln["type"] != "model_change" for ln in lines3[len(lines2):])
+
+    # 切回 main → 真实切换,追加 model_change(from = 当前模型 sonnet)
+    build_loop(cwd=tmp_path, model="main", session=session)
+    lines4 = [json.loads(line) for line in session.path.read_text(encoding="utf-8").splitlines()]
+    assert lines4[-1]["type"] == "model_change"
+    assert lines4[-1]["from"] == "sonnet"
+    assert lines4[-1]["to"] == "main"

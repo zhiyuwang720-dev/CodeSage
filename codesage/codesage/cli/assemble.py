@@ -70,10 +70,18 @@ def build_loop(
             system_prompt_hash=hashlib.sha256(resolved_prompt.encode("utf-8")).hexdigest()[:12],
             session_id=session.session_id,
         )
-    elif (prev := session.meta) is not None and prev.get("model") not in (None, model):
-        # 12 §8.2/§10.1:恢复已有会话(--continue)时模型指针不同 → 追加
-        # model_change entry(装配时注入),审计/恢复不用猜当时配置
-        session.append_model_change(to=model, from_=prev.get("model"))
+    elif session.meta is not None:
+        # 12 §8.2/§10.1:恢复已有会话(--continue)时模型指针切换 → 追加
+        # model_change entry(装配时注入)。当前模型 = 最后一条 model_change 的
+        # `to`(无则回退 meta.model 首行快照)—— 避免每次 --continue 重复追加
+        # 污染 model_change 历史(§8.2「切换时追加」语义)。
+        current = session.meta.get("model")
+        for e in reversed(session._read()[0]):
+            if e.type == "model_change":
+                current = e.data.get("to")
+                break
+        if current not in (None, model):
+            session.append_model_change(to=model, from_=current)
 
     return AgentLoop(
         AgentLoopConfig(

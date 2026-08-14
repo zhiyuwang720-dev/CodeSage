@@ -9,6 +9,7 @@ the model sees the failure and self-heals.
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -102,8 +103,6 @@ class ToolUseQueue:
             self._on_tool_event(event, tool_name, payload)
         except Exception:
             # UI/telemetry callbacks are best-effort; log and continue
-            import logging
-
             logging.getLogger("codesage.engine").warning(
                 "on_tool_event %s(%s) failed", event, tool_name, exc_info=True
             )
@@ -188,8 +187,6 @@ class ToolUseQueue:
                 self._on_tool_start(item)
             except Exception:
                 # 操作日志是 best-effort 附加写入,失败不拖累工具执行
-                import logging
-
                 logging.getLogger("codesage.engine").warning(
                     "on_tool_start %s failed", item.tool.name, exc_info=True
                 )
