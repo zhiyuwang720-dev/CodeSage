@@ -136,7 +136,10 @@ def _resolve_entry_id(entries: list[SessionEntry], ref: str) -> str | None:
         return next(
             (e.uuid for n, e in numbered_entries(entries) if n == int(ref)), None
         )
-    return ref if any(e.uuid == ref for e in entries) else None
+    # 只认 message/operation(P2#4:meta/lane/bookmark 的 uuid 不是可导航 entry)
+    return ref if any(
+        e.uuid == ref and e.type in ("message", "operation") for e in entries
+    ) else None
 
 
 def _bookmark_map(entries: list[SessionEntry]) -> dict[str, str]:

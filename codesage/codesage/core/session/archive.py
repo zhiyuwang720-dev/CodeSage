@@ -105,6 +105,8 @@ def archive_session(root: Path, session_id: str) -> Path:
     archive_dir = path.parent / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     dest = archive_dir / path.name
+    if dest.exists():
+        raise ValueError(f"archive target already exists: {dest}")  # 不覆盖(永不删除)
     os.replace(path, dest)
     return dest
 
@@ -118,5 +120,7 @@ def restore_session(root: Path, session_id: str) -> Path:
     if target is None:
         raise ValueError(f"archived session not found: {session_id}")
     dest = target.path.parent.parent / target.path.name
+    if dest.exists():
+        raise ValueError(f"restore target already exists: {dest}")  # 不覆盖
     os.replace(target.path, dest)
     return dest
