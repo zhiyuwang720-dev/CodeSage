@@ -19,7 +19,23 @@ from ..config import paths
 from ..core import Session
 from ..core.messages import SessionMessage
 from ..engine import AgentLoop, AgentLoopConfig
+from ..permissions import normalize_mode
 from ..tools import Tool, ToolError, ToolRegistry, ToolResult
+
+#: 权限模式等级(§7 只收窄不放宽):plan < default < yolo
+_MODE_RANK = {"plan": 0, "default": 1, "yolo": 2}
+
+
+def _min_mode(parent: str, declared: str | None) -> str:
+    """生效模式 = min(父模式, 声明模式);声明缺失 = 继承父(§7)。
+
+    声明值先经 normalize_mode 归一化(未知/大小写/空白 → default),只收窄
+    精神:识别不了就保守,垃圾值绝不漏进 loop.mode。
+    """
+    if declared is None:
+        return parent
+    d = normalize_mode(declared).value  # 未知 → default(权限链边界同款兜底)
+    return parent if _MODE_RANK.get(parent, 1) <= _MODE_RANK[d] else d
 
 #: 编译期禁递归:Agent 工具从子代理工具池剔除(L1 元工具层,spec §4)。
 SUBAGENT_DISALLOWED_TOOL_NAMES: frozenset[str] = frozenset({"Agent"})
@@ -213,13 +229,18 @@ class SubagentRunner:
         system = build_subagent_system_prompt(
             parent.system_prompt, req.name or agent_id, body, agent_id, cwd
         )
+        # 注:Agent 工具输入暂不读 permission_mode 参数(§8 参数链只参数化 model/
+        # max_turns),request 级仅编程入口可达;当前实际生效面 = 定义级声明。
+        declared = req.permission_mode or (definition.permission_mode if definition else None)
         session = Session(agent_id, self._root)
         return AgentLoop(
             AgentLoopConfig(
                 client=parent.client,
                 tools=tools,
                 permissions=parent.permissions,
-                request_permission=None,  # §7.2:ask 自动 deny(S4 完整收窄)
+                # §7.2 ask 自动 deny;§7.3 fork bubble:fork(name=None)继承父
+                # 回调 —— 权限请求冒泡到父终端,普通子代理保持 None
+                request_permission=parent.request_permission if req.name is None else None,
                 system_prompt=system,
                 compaction=parent.compaction,  # R2:子代理长任务同样需要压缩
                 model=model,
@@ -232,7 +253,8 @@ class SubagentRunner:
                 history=self._build_history(),  # fork 时注入父历史三件套(§5.2)
                 hooks=parent.hooks,  # 透传:子代理内部事件照常(R12 翻倍已知)
             ),
-            mode=parent.mode,
+            # §7:生效模式 = min(父模式, 声明模式),只收窄不放宽
+            mode=_min_mode(normalize_mode(parent.mode).value, declared),
         )
 
     async def run(self) -> ToolResult:

@@ -29,3 +29,7 @@ pi
 !/docs/modules/
 Kode-CLI/
 .omc/
+
+# local runtime state
+.codesage/
+codesage/sessions/
