@@ -1,4 +1,5 @@
-"""Agent: spawn a subagent by definition name; foreground nested run (S2).
+"""Agent: spawn a subagent by definition name, or fork the current context
+(name 缺省,S3 §5.2); foreground nested run (S2).
 
 契约声明(§5.5):needs_permissions()=True 且不进 SYSTEM_TOOLS —— 走完整
 决策链 + 审计(每次决策恰一条);is_concurrency_safe=True —— 子代理独立
@@ -39,13 +40,15 @@ class AgentTool(Tool):
     input_schema = {
         "type": "object",
         "properties": {
-            "name": {"type": "string", "description": "Agent definition name"},
+            "name": {"type": "string",
+                     "description": "Agent definition name; omit to fork "
+                                    "the current conversation context (forkContext)"},
             "prompt": {"type": "string",
                        "description": "Self-contained task description"},
             "model": {"type": "string", "description": "Model override"},
             "max_turns": {"type": "integer", "description": "Turn cap override"},
         },
-        "required": ["prompt", "name"],
+        "required": ["prompt"],  # name 可选:缺省 → forkContext(§5.2,CC 隐式语义)
     }
     is_concurrency_safe = True  # §5.5:并行前提(独立 ToolUseContext/abort)
     user_facing_name = "Agent"
@@ -54,10 +57,12 @@ class AgentTool(Tool):
         return True  # spawn 是重操作:完整决策链 + 审计(与任务四工具刻意不同)
 
     def validate_input(self, input: dict[str, Any]) -> None:
-        for field in ("prompt", "name"):
-            value = input.get(field)
-            if not isinstance(value, str) or not value.strip():
-                raise ToolError(f"{field} is required")
+        prompt = input.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ToolError("prompt is required")
+        name = input.get("name")
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ToolError("name must be a non-empty string")
         if "max_turns" in input and (not isinstance(input["max_turns"], int)
                                      or input["max_turns"] <= 0):
             raise ToolError("max_turns must be a positive integer")
@@ -89,9 +94,10 @@ class AgentTool(Tool):
             return ToolResult("[Agent 工具仅在引擎注入 parent_loop 时可用]",
                               is_error=True, metadata={"subagent_output": True})
         registry = AgentRegistry.from_default_paths(cwd=ctx.cwd)
+        raw_name = input.get("name")
         req = SubagentRequest(
             prompt=str(input["prompt"]).strip(),
-            name=str(input["name"]).strip(),
+            name=raw_name.strip() if isinstance(raw_name, str) else None,  # None → fork
             model=input.get("model"),
             max_turns=input.get("max_turns"),
         )

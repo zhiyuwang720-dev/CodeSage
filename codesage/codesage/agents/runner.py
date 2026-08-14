@@ -30,6 +30,12 @@ ASYNC_AGENT_ALLOWED_TOOLS: frozenset[str] = frozenset(
      "TaskCreate", "TaskGet", "TaskList", "TaskUpdate"}
 )
 
+#: forkContext(§5.2):历史截断上限 —— 只继承最近 60 条消息,防父历史过长
+#: 撑爆子代理上下文(R1 对齐配对:截断后仍须 tool_result 数 == tool_use 数)。
+FORK_MAX_MESSAGES = 60
+#: fork 占位文本:父工具输出不注入子代理(§10 切断父子双向传播面)。
+FORK_TOOL_RESULT_PLACEHOLDER = "[tool_result omitted (fork context)]"
+
 
 def assemble_subagent_tools(
     parent_pool: list[Tool],
@@ -72,6 +78,58 @@ def build_subagent_system_prompt(
 
 def _new_agent_id() -> str:
     return datetime.now().strftime("agent-%Y%m%d-%H%M%S-%f")
+
+
+def build_fork_history(
+    messages: list[SessionMessage], max_messages: int = FORK_MAX_MESSAGES
+) -> list[SessionMessage]:
+    """spec §5.2 fork 三件套(纯函数,单测硬断言面):
+
+    1. assistant 消息仅保留 tool_use 块(块级过滤,内容不变;纯 text 整条丢弃)
+    2. tool_result 消息 → 占位文本,与 tool_use 1:1 顺序配对
+    3. 最后 user 消息 = req.prompt,由 run(user_input) 注入,不在此构造
+
+    截断(R1):取最近 *max_messages* 条后,首条 tool_result 丢弃、末条
+    tool_use 丢弃;返回前硬断言 tool_result 数 == tool_use 数 —— 防孤儿
+    tool_result 打爆 API。配对被打破(畸形流)→ ValueError 防御性拒绝。
+    """
+    out: list[SessionMessage] = []
+    for msg in messages:
+        if msg.role == "assistant":
+            if not isinstance(msg.content, list):
+                continue  # 纯文本 assistant:整条丢弃
+            blocks = [b for b in msg.content if b.type == "tool_use"]
+            if blocks:
+                out.append(SessionMessage(role="assistant", content=blocks))
+        elif isinstance(msg.content, list) and any(
+            b.type == "tool_result" for b in msg.content
+        ):
+            out.append(SessionMessage(role="user", content=FORK_TOOL_RESULT_PLACEHOLDER))
+        elif msg.content:  # 普通用户文本原样保留(空消息丢弃)
+            out.append(msg)
+    if len(out) > max_messages:
+        out = out[-max_messages:]
+    # 边界对齐(R1 硬性,无条件):首条 tool_result → 其配对 tool_use 在窗口外
+    # 丢弃;末条 tool_use → 其 tool_result 未写入 —— 截断窗口外,或即 fork
+    # 调用自身(执行时尚未回填 tool_result,必须剔除防自引用)。
+    while out and out[0].content == FORK_TOOL_RESULT_PLACEHOLDER:
+        out.pop(0)
+    while out and isinstance(out[-1].content, list) and any(
+        b.type == "tool_use" for b in out[-1].content
+    ):
+        out.pop()
+    tool_uses = sum(
+        len([b for b in m.content if b.type == "tool_use"])
+        for m in out
+        if isinstance(m.content, list)
+    )
+    tool_results = sum(m.content == FORK_TOOL_RESULT_PLACEHOLDER for m in out)
+    if tool_results != tool_uses:
+        raise ValueError(
+            f"fork history pairing broken: {tool_results} tool_result vs "
+            f"{tool_uses} tool_use"
+        )
+    return out
 
 
 def _assistant_text(msg: SessionMessage) -> str | None:
@@ -117,6 +175,20 @@ class SubagentRunner:
         #: 排除面),测试注入 tmp_path 避免污染真实配置目录。
         self._root = session_root or paths.config_dir() / "sessions" / "subagents"
 
+    def _build_history(self) -> list[SessionMessage]:
+        """spec §5.2 fork 历史:定义名子代理 = 空历史;fork(name=None)= 父
+        历史三件套。主路径从父 loop._active_messages(12 线性投影)构造;
+        文件定位(session_id + lane 经 load_lane)为后备 —— 跨进程/重开
+        场景(§5.3,resume 工具入口留 19)。"""
+        if self.req.name is not None:
+            return []
+        parent = self.parent
+        messages = parent._active_messages
+        if messages is None:
+            lane = getattr(parent.session, "_lane", None) or "main"
+            messages = parent.session.load_lane(lane)
+        return build_fork_history(messages)
+
     def _resolve_definition(self) -> "AgentDefinition | None":
         if self.req.name is None:
             return None  # forkContext(S3):无定义,继承父上下文
@@ -157,7 +229,7 @@ class SubagentRunner:
                 session=session,
                 settings=parent.settings,
                 session_permissions=parent.session_permissions,
-                history=[],  # fork 历史在 S3 注入
+                history=self._build_history(),  # fork 时注入父历史三件套(§5.2)
                 hooks=parent.hooks,  # 透传:子代理内部事件照常(R12 翻倍已知)
             ),
             mode=parent.mode,
@@ -166,15 +238,36 @@ class SubagentRunner:
     async def run(self) -> ToolResult:
         """前台:嵌套 run 到终态,回收本轮最后 assistant text(§5.4)。
 
-        子代理的任何崩溃(会话写失败等)都降级为错误 tool_result 交父自愈,
-        绝不向上传播炸掉父 run(与未知名同款防御)。
+        操作日志(§11.3):run 开始记 step_attempt,终态记 step_completed/
+        step_failed —— 写在父会话文件(审计视角:父发起了子代理步骤),与
+        find_open_operations 的 kind 感知配对。子代理的任何崩溃都降级为
+        错误 tool_result 交父自愈,绝不向上传播炸掉父 run。
         """
-        loop = self._assemble()
+        parent, req = self.parent, self.req
+        name = req.name or "forkContext"
+        summary = f"{name}:{req.prompt[:100]}"
+        if parent.session is not None:  # 与引擎 _record_tool_start 同款守卫
+            parent.session.append_operation("step_attempt", tool="Agent", args_summary=summary)
+        try:
+            result = await self._run_once()
+        except Exception:  # noqa: BLE001 - 装配期失败(未知名 agent 等)同样记终态
+            if parent.session is not None:
+                parent.session.append_operation("step_failed", tool="Agent", args_summary=summary)
+            raise  # 原样上抛:引擎转错误 tool_result 交父自愈(S2 行为不变)
+        if parent.session is not None:
+            parent.session.append_operation(
+                "step_failed" if result.is_error else "step_completed",
+                tool="Agent", args_summary=summary,
+            )
+        return result
+
+    async def _run_once(self) -> ToolResult:
         if self.parent.abort.is_set():
             return ToolResult(
                 "[子代理未启动:父会话已中止]", is_error=True,
                 metadata={"subagent_output": True},
             )
+        loop = self._assemble()
         watcher = asyncio.create_task(_propagate_abort(self.parent.abort, loop.abort))
         last_text: str | None = None
         try:
