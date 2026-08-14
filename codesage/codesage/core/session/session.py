@@ -16,7 +16,13 @@ import re
 from pathlib import Path
 
 from ..messages import SessionMessage
-from .entry import SessionEntry, make_lane_entry, make_message_entry, parse_entry
+from .entry import (
+    SessionEntry,
+    make_bookmark_entry,
+    make_lane_entry,
+    make_message_entry,
+    parse_entry,
+)
 
 _SANITIZE_PROJECT = re.compile(r"[^A-Za-z0-9]+")
 
@@ -46,6 +52,36 @@ class Session:
         self._append(make_lane_entry(name=self._lane, leaf=entry.uuid))
         self._cursor = entry.uuid
         return entry
+
+    def append_lane(self, name: str, leaf: str) -> SessionEntry:
+        """§3.4 fork 用:追加新 lane entry 并重置游标(活跃 lane=name,parent
+        游标=leaf) —— 后续 append_message 的新消息挂 leaf 而非旧游标。"""
+        self._lane, self._cursor = name, leaf
+        return self._append(make_lane_entry(name=name, leaf=leaf))
+
+    def fork(self, entry_id: str, *, name: str | None = None) -> str:
+        """§4.2 从 entry_id 分支:追加新 lane entry(leaf = entry_id 本身,分支
+        起点)并重置游标(活跃 lane=新名,parent 游标=entry_id) —— 后续
+        append_message 的新消息挂 fork 点,绕过原分支后续消息。name 缺省 =
+        "main-{n}"(n = 既有分支计数 + 1,默认 main 恒计入)。返回 lane name。"""
+        if name is None:
+            name = self._next_branch_name()
+        self.append_lane(name, entry_id)
+        return name
+
+    def _next_branch_name(self) -> str:
+        """分支命名:main、main-1、main-2…(n = 文件里不同 lane 名个数,默认
+        main 恒计入 —— 空文件/旧文件首分支也是 main-1)。"""
+        entries, _ = self._read()
+        existing = {e.data.get("name") for e in entries if e.type == "lane"}
+        existing.discard(None)
+        existing.add("main")
+        return f"main-{len(existing)}"
+
+    def append_bookmark(self, entry_id: str, name: str) -> SessionEntry:
+        """§6 书签:追加命名 bookmark entry(指向被标记 entry;重名 = 追加,
+        读端后者胜 —— 永不删除)。"""
+        return self._append(make_bookmark_entry(name, entry_id))
 
     def load(self) -> list[SessionMessage]:
         """Replay the log; corrupt lines are skipped, not fatal.
@@ -118,12 +154,14 @@ class Session:
         chain.reverse()
         return chain
 
-    def _append(self, entry: SessionEntry) -> None:
-        """与 04 相同的追加写:append-only + flush + fsync(§3.4)。"""
+    def _append(self, entry: SessionEntry) -> SessionEntry:
+        """与 04 相同的追加写:append-only + flush + fsync(§3.4);返回 entry
+        供 append_bookmark 等调用方链式返回。"""
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(entry.to_json() + "\n")
             f.flush()
             os.fsync(f.fileno())
+        return entry
 
     @property
     def exists(self) -> bool:

@@ -18,12 +18,17 @@ from .entry import (
     parse_entry,
 )
 from .session import Session, find_session, list_sessions, most_recent_session
+from .tree import TreeNode, TreeView, build_tree, linear_messages
 
 __all__ = [
     "ENTRY_TYPES",
     "Session",
     "SessionEntry",
+    "TreeNode",
+    "TreeView",
+    "build_tree",
     "find_session",
+    "linear_messages",
     "list_sessions",
     "make_bookmark_entry",
     "make_branch_summary_entry",
