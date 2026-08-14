@@ -269,10 +269,13 @@ def resume_inject_history(
         if entry.data.get("leaf") not in chain_ids:
             continue  # 别的分支的摘要(leaf ∉ 目标 lane 链):跳过
         # 真实 user 输入 = 字符串内容且非摘要载体(排除 tool_result 载体/
-        # 既存压缩摘要);保留最近 2 条作为上下文起点
+        # 既存压缩摘要);取 leaf(切点)之前的最近 2 条为上下文起点(§4.5,
+        # 压缩发生时 leaf = 切点后第一条消息 —— 保的是摘要前的 user)
+        leaf = entry.data.get("leaf")
+        idx = next((i for i, m in enumerate(chain) if m.uuid == leaf), len(chain))
         users = [
             m
-            for m in chain
+            for m in chain[:idx]
             if m.role == "user"
             and isinstance(m.content, str)
             and not m.is_compaction_summary
