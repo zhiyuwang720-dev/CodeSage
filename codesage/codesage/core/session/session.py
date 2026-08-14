@@ -93,7 +93,10 @@ class Session:
         → 单 lane main 兜底(R4)。"""
         for entry in reversed(entries):
             if entry.type == "lane":
-                return entry.data["name"], entry.data["leaf"]
+                name, leaf = entry.data.get("name"), entry.data.get("leaf")
+                if name is None or leaf is None:
+                    continue  # 语义损坏行(缺字段):跳过,退回上一个合法 lane
+                return name, leaf
         return "main", last_message_uuid
 
     @staticmethod

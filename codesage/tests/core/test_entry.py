@@ -158,6 +158,20 @@ def test_dangling_lane_pointer_falls_back(tmp_path):
     assert [m.content for m in session.load()] == ["a"]
 
 
+def test_malformed_lane_line_falls_back_to_previous_lane(tmp_path):
+    """缺字段 lane 行(语义损坏)与合法 lane 行混合:load 不炸,退回上一个合法 lane。"""
+    session = Session("s1", tmp_path)
+    session.append(user_message("a"))
+    with open(session.path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "lane", "uuid": "bad", "timestamp": "t",
+                            "name": "main"}) + "\n")  # 缺 leaf
+    assert [m.content for m in session.load()] == ["a"]
+    session.append(user_message("b"))
+    lines = [json.loads(line) for line in open(session.path, encoding="utf-8")]
+    messages = [line for line in lines if line["type"] == "message"]
+    assert messages[-1]["parent"] == messages[-2]["uuid"]
+
+
 def test_cycle_in_parent_chain_terminates(tmp_path):
     """手写坏文件成环 → load 有界返回,不死循环。"""
     session = Session("s1", tmp_path)
