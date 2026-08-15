@@ -152,6 +152,9 @@ def test_agent_tool_validation():
     with pytest.raises(ToolError, match="max_turns"):
         tool.validate_input({"name": "x", "prompt": "p", "max_turns": 0})
     tool.validate_input({"name": "x", "prompt": "p", "max_turns": 5})  # ok
+    with pytest.raises(ToolError, match="isolation"):
+        tool.validate_input({"prompt": "x", "isolation": "evil"})  # 白名单:仅 worktree
+    tool.validate_input({"prompt": "x", "isolation": "worktree"})  # ok
 
 
 # ---- 前台嵌套 run(§5.4)----

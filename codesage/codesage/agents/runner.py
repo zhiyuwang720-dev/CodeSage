@@ -26,6 +26,12 @@ from ..engine import AgentLoop, AgentLoopConfig
 from ..hooks import HookInput
 from ..permissions import normalize_mode
 from ..tools import Tool, ToolError, ToolRegistry, ToolResult
+from .worktree import (  # S7 §5.1/§5.4
+    WorktreeError,
+    cleanup_worktree,
+    create_worktree,
+    worktree_branch,
+)
 
 #: 权限模式等级(§7 只收窄不放宽):plan < default < yolo
 _MODE_RANK = {"plan": 0, "default": 1, "yolo": 2}
@@ -210,6 +216,9 @@ class SubagentRunner:
         self._root = session_root or paths.config_dir() / "sessions" / "subagents"
         self._session_path: Path | None = None  # 后台完成通知的 payload(S5)
         self._mailbox: "Mailbox | None" = None  # 终态注销 inbox 用(S5)
+        self._worktree: Path | None = None  # S7:isolation=worktree 时创建的 worktree
+        self._worktree_branch: str = ""  # S7:worktree 分支名(保留场景回填 metadata)
+        self._base_cwd: Path | None = None  # S7:创建 worktree 的父目录(清理锚点)
 
     def _build_history(self) -> list[SessionMessage]:
         """spec §5.2 fork 历史:定义名子代理 = 空历史;fork(name=None)= 父
@@ -245,6 +254,20 @@ class SubagentRunner:
         max_turns = req.max_turns or (definition.max_turns if definition else None) or 50
         model = req.model or (definition.model if definition else None) or parent.model
         cwd = (req.cwd or parent.cwd).resolve()
+        # §5.4 worktree 隔离(S7):effectiveIsolation = 工具参数 > 定义。
+        # 与 cwd 参数互斥(重定向语义重叠,双指歧义 → 明确报错);创建失败
+        # → ToolError 交父自愈,绝不降级到父工作区执行(隔离承诺不可静默放弃)。
+        isolation = req.isolation or (definition.isolation if definition else None)
+        if isolation == "worktree":
+            if req.cwd is not None:
+                raise ToolError("cwd is mutually exclusive with isolation=worktree")
+            self._base_cwd = cwd
+            try:
+                self._worktree = create_worktree(cwd, agent_id)
+            except WorktreeError as exc:
+                raise ToolError(str(exc)) from None
+            self._worktree_branch = worktree_branch(agent_id)
+            cwd = self._worktree
         body = (definition.body or definition.description) if definition else ""
         system = build_subagent_system_prompt(
             parent.system_prompt, req.name or agent_id, body, parent.task_list_id, cwd
@@ -314,6 +337,7 @@ class SubagentRunner:
         summary = f"{name}:{req.prompt[:100]}"
         if parent.session is not None:  # 与引擎 _record_tool_start 同款守卫
             parent.session.append_operation("step_attempt", tool="Agent", args_summary=summary)
+        result: ToolResult | None = None
         try:
             result = await self._run_once()
         except asyncio.CancelledError:
@@ -326,6 +350,11 @@ class SubagentRunner:
                 parent.session.append_operation("step_failed", tool="Agent", args_summary=summary)
             await self._notify_done("failed", "[子代理装配失败]")
             raise  # 原样上抛:引擎转错误 tool_result 交父自愈(S2 行为不变)
+        finally:
+            # §5.4 终态单点清理:成功/失败/取消三路径一致 —— worktree 无变更
+            # 自动删除;有变更保留并回填 metadata。异常路径 result 为 None:
+            # 照常清理(失败/取消不留半成品 worktree 垃圾),metadata 无从回填。
+            self._cleanup_worktree(result)
         status = "failed" if result.is_error else "completed"
         if parent.session is not None:
             parent.session.append_operation(
@@ -356,6 +385,31 @@ class SubagentRunner:
             content=json.dumps({"agent_id": self._agent_id, "status": "async_launched"}),
             metadata={"subagent_output": True},
         )
+
+    def _cleanup_worktree(self, result: ToolResult | None) -> None:
+        """§5.4 收尾:worktree 内无未提交变更 → git worktree remove 自动清理
+        (连带删分支);有变更 → 保留。保留的路径必须送达父模型 —— 引擎
+        tool_result 块只带 content(metadata 不进父消息流),因此追加进 content
+        兑现「供宿主导入」契约(M1);成功/异常/取消三路径一致:取消/失败
+        (result=None)时路径记入父会话操作日志,不留无声孤儿(L1)。"""
+        if self._worktree is None or self._base_cwd is None:
+            return
+        if cleanup_worktree(self._base_cwd, self._agent_id):
+            return
+        tail = (f"\n\n[worktree 已保留:{self._worktree}"
+                f"(分支 {self._worktree_branch});改动待合并回主工作区]")
+        if result is not None:
+            result.content += tail
+            result.metadata.update({
+                "worktree_path": str(self._worktree),
+                "worktree_branch": self._worktree_branch,
+            })
+        elif self.parent.session is not None:
+            self.parent.session.append_operation(
+                "step_failed", tool="Agent",
+                args_summary=(f"{self.req.name or 'forkContext'}: 取消/失败,"
+                              f"保留 worktree {self._worktree}"),
+            )
 
     async def _notify_done(self, status: str, summary: str) -> None:
         """后台完成通知(§6.2)双通道:Mailbox 广播(订阅者自取)+ 父引擎

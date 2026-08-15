@@ -8,6 +8,7 @@ only ever holds whitelisted fields.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(slots=True, frozen=True)
@@ -27,6 +28,7 @@ class AgentDefinition:
     max_turns: int | None = 50  # None = inherit parent value
     permission_mode: str | None = None  # None = inherit parent mode
     fork_context: bool = False  # True → loader forces model='inherit'
+    isolation: Literal["worktree"] | None = None  # S7;工具参数 > 定义(effectiveIsolation)
     hooks: dict | None = None  # parsed & stored only; execution in phase 19
     background: bool = False  # stored only; explicit run_in_background wins
     color: str | None = None  # stored only

@@ -53,6 +53,11 @@ class AgentTool(Tool):
             "run_in_background": {"type": "boolean", "description": "true → "
                                   "立即返回,子代理后台执行(§6.1);完成经 "
                                   "Mailbox/通知通道,可用 SendMessage 与它对谈"},
+            "isolation": {"type": "string", "enum": ["worktree"],
+                          "description": "worktree → 在独立 git worktree 中执行"
+                                         "(§5.4,防多代理并发改同一文件)。需要 "
+                                         "git 仓库;从 HEAD 检出,父工作区未提交"
+                                         "变更不可见;worktree 内有改动时保留供合并"},
         },
         "required": ["prompt"],  # name 可选:缺省 → forkContext(§5.2,CC 隐式语义)
     }
@@ -79,6 +84,9 @@ class AgentTool(Tool):
         bg = input.get("run_in_background")
         if bg is not None and not isinstance(bg, bool):
             raise ToolError("run_in_background must be a boolean")
+        iso = input.get("isolation")
+        if iso is not None and iso != "worktree":
+            raise ToolError("isolation must be \"worktree\"")
 
     def spec(self) -> Any:
         """动态描述:列出当前可用 agents(registry 按进程 cwd 解析)。
@@ -115,6 +123,7 @@ class AgentTool(Tool):
             max_turns=input.get("max_turns"),
             address_name=input.get("address_name"),  # §6.3 SendMessage 寻址名
             run_in_background=bool(input.get("run_in_background")),  # §6.1 后台
+            isolation=input.get("isolation"),  # §5.4 worktree 隔离
         )
         runner = SubagentRunner(ctx.parent_loop, req, registry)
         if req.run_in_background:

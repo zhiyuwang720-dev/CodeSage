@@ -172,6 +172,8 @@ def build_definition(
         max_turns=max_turns,
         permission_mode=fm.get("permission_mode"),
         fork_context=fork_context,
+        # S7:白名单仅接受字面量 "worktree",其余值 → None(未知值不产生半有效配置)
+        isolation=fm.get("isolation") if fm.get("isolation") in ("worktree",) else None,
         hooks=dict(hooks) if isinstance(hooks, dict) else hooks,  # copy: frozen dataclass sharing a cached dict
         background=bool(fm.get("background", False)),
         color=fm.get("color"),
