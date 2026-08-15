@@ -490,7 +490,7 @@ def test_protocols_exist():
 
 
 def test_events_constant():
-    """八事件表(§2.2)。"""
+    """八事件表(§2.2)+ 13 §11.2 追加六事件(SubagentStart/Stop + Task* 四件)。"""
     assert EVENTS == (
         "SessionStart",
         "UserPromptSubmit",
@@ -500,4 +500,10 @@ def test_events_constant():
         "PreCompact",
         "PostCompact",
         "Notification",
+        "SubagentStart",
+        "SubagentStop",
+        "TaskCreated",
+        "TaskUpdated",
+        "TaskCompleted",
+        "TaskDeleted",
     )

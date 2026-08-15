@@ -45,6 +45,8 @@ class TaskCreateTool(Tool):
                 description=str(input["description"]).strip(),
                 active_form=input.get("activeForm"),
                 metadata=input.get("metadata"),
+                # 13 §11.1 自动 owner 分配:teammate 创建即归属自己
+                owner=ctx.agent_name,
             )
         except TaskStoreError as exc:
             return ToolResult(str(exc), is_error=True)

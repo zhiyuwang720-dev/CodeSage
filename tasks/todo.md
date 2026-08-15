@@ -42,9 +42,9 @@
 - [x] **12 session 会话生命周期** ✅ 2026-08-14(`feat/12-session`)
   - 验收:fork/continue/resume;sidechain 日志;归档
   - 验证:会话恢复单测(摘要前 2 条 user 消息);**1008 passed, 9 skipped**;红线零改动(SessionMessage/04 测试)
-- [ ] **13 subagents 子代理** (`feat/13-subagents`)
-  - 验收:agent 定义(frontmatter + 优先级合并);Task 工具;forkContext;前/后台;禁递归工具
-  - 验证:嵌套调用单测
+- [x] **13 subagents 子代理** ✅ 2026-08-15(`feat/13-subagents`)
+  - 验收:agent 定义(frontmatter + 优先级合并 + 内建三类型 general-purpose/Explore/Plan);Agent 工具(前台嵌套 + 后台 + forkContext + worktree 隔离);SendMessage 队友通信;禁递归工具
+  - 验证:嵌套调用单测(结果回收/fork 三件套/递归拒绝/前后台/失败传播/权限矩阵/worktree 隔离);**1122 passed, 9 skipped**
 - [ ] **14 skills 技能系统** (`feat/14-skills`)
   - 验收:skill 发现/加载/契约;allowed_tools;斜杠命令机制
   - 验证:技能加载与权限联动单测

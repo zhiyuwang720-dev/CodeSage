@@ -231,13 +231,15 @@ class Session:
 def list_sessions(root: Path) -> list[Path]:
     """All active session .jsonl files under *root* (incl. project_key subdirs),
     newest mtime first; any level of archive/ directory is excluded (§9.1/§10.2
-    red line — archived sessions are invisible to --continue/--session-id)."""
+    red line — archived sessions are invisible to --continue/--session-id);
+    subagents/ 一并排除(13 §5.3 R8 —— 子代理转录不污染 --continue//sessions)。"""
     if not root.exists():
         return []
     files = [
         p
         for p in root.rglob("*.jsonl")
         if "archive" not in p.relative_to(root).parts
+        and "subagents" not in p.relative_to(root).parts
     ]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -259,7 +261,10 @@ def find_open_operations(entries: list[SessionEntry]) -> list[SessionEntry]:
     operation → 收集并继续(同一段内的操作都未完成);遇到 message → 结束
     (该消息即「后继消息」,其前的 operation 视为已完成)。中断检测启发式
     (R6):无配对 end,末尾 operation 即视为未完成 —— 误报只产生提示,不
-    自动重放,无副作用。"""
+    自动重放,无副作用。kind 感知(13 §11.3):段以 step_completed/
+    step_failed 收尾 → 相邻配对完整,视为已完成不报 —— 消除「正常完成的
+    后台子代理停在文件末尾 → --continue 误报中断」;孤 step_attempt 照旧
+    命中。"""
     open_ops: list[SessionEntry] = []
     for entry in reversed(entries):
         if entry.type in _APP_STATE_TYPES:
@@ -269,4 +274,6 @@ def find_open_operations(entries: list[SessionEntry]) -> list[SessionEntry]:
             continue
         break  # message
     open_ops.reverse()
+    if open_ops and open_ops[-1].data.get("kind") in ("step_completed", "step_failed"):
+        return []
     return open_ops

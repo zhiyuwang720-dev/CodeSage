@@ -12,9 +12,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..ai import ContentBlock, Message, ToolSpec
+
+if TYPE_CHECKING:  # 引擎在构造点注入;tools → engine 反向 import 是环
+    from ..engine.loop import AgentLoop
 
 
 class ToolError(Exception):
@@ -40,6 +43,9 @@ class ToolUseContext:
     #: 任务系统归属列表(阶段 11 §8.1):引擎在唯一构造点注入 session id,
     #: 默认值保证既有构造点零破坏;TaskCreate/TaskGet/TaskList/TaskUpdate 使用。
     task_list_id: str = "default"
+    #: 当前 agent 名(13 §11.1):主会话 None,子代理 = 定义名/forkContext;
+    #: TaskCreate 自动 owner 分配的来源(「teammate 创建即归属自己」)。
+    agent_name: str | None = None
     #: path -> mtime_ns / sha256 recorded by ReadTool; Edit/Write verify
     #: against these so external changes are never silently overwritten.
     read_file_timestamps: dict[str, float] = field(default_factory=dict)
@@ -49,6 +55,9 @@ class ToolUseContext:
     read_cache: dict[tuple[str, int, int], tuple[int, str]] = field(default_factory=dict)
     #: set by the engine to abort a running tool (Bash kills its process tree).
     abort_event: asyncio.Event | None = None
+    #: 引擎注入的本 loop 引用(阶段 13 §5.5):Agent 工具执行器经此取父 loop
+    #: 快照(parent 系统提示/有效模型/父 cwd/max_budget)并嵌套运行子代理。
+    parent_loop: "AgentLoop | None" = None
 
 
 @dataclass(slots=True)

@@ -10,15 +10,19 @@ graph.validate_task_graph 读取时诊断(§5)。
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from ...config.atomic import atomic_write, read_json_lossy
 from ...config.paths import config_dir
 from .types import Task, TaskStatus, TaskSummary, TaskUpdate
+
+logger = logging.getLogger("codesage.tasks.storage")
 
 _SANITIZE_TASK_LIST_ID = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -45,15 +49,43 @@ def resolve_task_list_id(explicit: str | None = None) -> str:
     return os.getenv("CODESAGE_TASK_LIST_ID", "").strip() or "default"
 
 
-@contextmanager
-def _dir_lock(dir: Path, *, retries: int = 30, delay_s: float = 0.05, stale_s: float = 10.0):
-    """目录级跨进程锁:O_EXCL 原子创建锁文件,持锁期间独占(§4.2,镜像 Kode acquireFileLock)。
+def _pid_alive(pid: int) -> bool:
+    """pid 活性检查(13 §11.4 R3 升级):进程不存在 → False。
 
-    失败路径:锁文件 mtime 超 stale_s 视为死锁残留(unlink 重试);重试
-    retries 次、间隔 delay_s(总等待约 1.5s);超限抛 TaskStoreError。
-    退出只删自己持有的锁(pid 校验,防 stale 误判后误删后继者的新锁)。
-    ponytail: 锁获取在事件循环内 sleep —— 仅跨进程冲突时发生(单进程不可达),
-    13 引入真实跨进程前挪进 asyncio.to_thread 即可,API 不变(§4 R2)。
+    Windows 无 os.kill(pid, 0) 语义 → ctypes OpenProcess;POSIX 用
+    kill 0 探测(PermissionError = 存在但不可信号,算存活)。
+    OpenProcess 失败一律视为死:Windows 对不存在的 pid 也可能返回
+    ERROR_ACCESS_DENIED(防 pid 枚举),「拒绝 = 存活」会把死锁误判为
+    活锁而永不回收 —— 误回收(旧实现同款,无回归)比卡死可接受。
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _acquire_lock(dir: Path, *, retries: int = 30, delay_s: float = 0.05,
+                  stale_s: float = 10.0) -> Path:
+    """同步锁体(在 asyncio.to_thread 线程内执行):O_EXCL 创建锁文件。
+
+    失败路径(13 §11.4):mtime 超 stale_s 且锁内 pid 已死 → 死锁残留
+    unlink 重试 —— 与既有时间超时相比,pid 活性检查消除「活进程长任务
+    持锁超时被误回收」窗口(R3);pid 存活则继续等。超限抛 TaskStoreError。
     """
     dir.mkdir(parents=True, exist_ok=True)  # 锁文件在目录内:目录先存在
     lock_path = dir / ".lock"
@@ -64,7 +96,12 @@ def _dir_lock(dir: Path, *, retries: int = 30, delay_s: float = 0.05, stale_s: f
             # PermissionError: Windows AV 瞬时占用,与 atomic.py:41-46 先例同构
             try:
                 if time.time() - lock_path.stat().st_mtime > stale_s:
-                    lock_path.unlink()
+                    try:
+                        holder_pid = int(lock_path.read_text().split()[0])
+                    except (OSError, ValueError, IndexError):
+                        holder_pid = -1
+                    if not _pid_alive(holder_pid):  # 锁主进程已死 → 真陈旧
+                        lock_path.unlink()
             except OSError:
                 pass
             time.sleep(delay_s)
@@ -79,20 +116,29 @@ def _dir_lock(dir: Path, *, retries: int = 30, delay_s: float = 0.05, stale_s: f
             except OSError:
                 pass
             raise
-        break
-    else:
-        raise TaskStoreError("Failed to acquire task store lock")
+        return lock_path
+    raise TaskStoreError("Failed to acquire task store lock")
+
+
+def _release_lock(lock_path: Path) -> None:
+    """退出只删自己持有的锁:stale 误判时后继者已建新锁,删它会放行双写者。"""
+    try:
+        if lock_path.read_text().split()[0] == str(os.getpid()):
+            lock_path.unlink()
+    except OSError:
+        pass
+
+
+@asynccontextmanager
+async def _dir_lock(dir: Path, **kw):
+    """目录级跨进程锁 async 入口(13 §11.4 R2):锁体(含重试 sleep)挪
+    asyncio.to_thread,阻塞不卡事件循环;API 形态 from with → async with。
+    kw 透传 _acquire_lock(测试用短重试/大 stale 窗口)。"""
+    lock_path = await asyncio.to_thread(_acquire_lock, dir, **kw)
     try:
         yield
     finally:
-        # 仅删自己持有的锁:stale 误判时后继者已建新锁,删它会放行双写者
-        # ponytail: read pid → unlink 间仍存 TOCTOU 残余窗口(他进程 stale 回收
-        # 重建后,本进程可能误删新锁);13 引入真实跨进程前升级 pid 活性检查(#3)
-        try:
-            if lock_path.read_text().split()[0] == str(os.getpid()):
-                lock_path.unlink()
-        except OSError:
-            pass
+        await asyncio.to_thread(_release_lock, lock_path)
 
 
 def _task_path(dir: Path, task_id: str) -> Path:
@@ -172,11 +218,27 @@ def _add_edge(tasks: dict[str, Task], source: Task, target: Task) -> None:
 
 
 class TaskStore:
-    """一任务一文件存储;mutation 全过 asyncio.Lock + 目录级文件锁,读不锁(§4)。"""
+    """一任务一文件存储;mutation 全过 asyncio.Lock + 目录级文件锁,读不锁(§4)。
 
-    def __init__(self, root: Path | None = None) -> None:
+    on_change(13 §11.2):mutation 后单点回调,引擎注入 hooks.dispatch 包装
+    → TaskCreated/TaskUpdated/TaskCompleted/TaskDeleted 事件;无订阅方为
+    None(零路径)。回调在锁外调用、异常吞日志(fail-open,不拖慢 mutation)。
+    """
+
+    def __init__(self, root: Path | None = None,
+                 on_change: "Callable[[str, Task, str], Awaitable[None]] | None" = None) -> None:
         self._root = root or config_dir() / "tasks"
         self._in_proc = asyncio.Lock()  # 进程内单飞:mutation 全部过它
+        self.on_change = on_change
+
+    async def _emit(self, event: str, task: Task, task_list_id: str) -> None:
+        """mutation 后单点触发(§11.2);订阅方故障仅日志。"""
+        if self.on_change is None:
+            return
+        try:
+            await self.on_change(event, task, task_list_id)
+        except Exception:  # noqa: BLE001 - fail-open:钩子故障不炸 mutation
+            logger.exception("task on_change handler failed for %s", event)
 
     def _dir(self, task_list_id: str) -> Path:
         return self._root / _sanitize_task_list_id(task_list_id)
@@ -194,20 +256,27 @@ class TaskStore:
     # ---- mutation(锁内) ----
 
     async def create(self, task_list_id: str, *, subject: str, description: str,
-                     active_form: str | None = None, metadata: dict | None = None) -> Task:
-        """创建任务:ID 自增(高水位防删除后重用)。空 subject/description 拒绝(防御外部调用)。"""
+                     active_form: str | None = None, metadata: dict | None = None,
+                     owner: str | None = None) -> Task:
+        """创建任务:ID 自增(高水位防删除后重用)。空 subject/description 拒绝。
+
+        owner(13 §11.1 自动分配):缺省 None,工具层从 ToolUseContext 注入
+        当前 agent 名 —— 「teammate 创建即归属自己」。
+        """
         if not subject.strip() or not description.strip():
             raise TaskStoreError("subject and description are required")
         task_list_id = resolve_task_list_id(task_list_id)
         async with self._in_proc:
             dir = self._dir(task_list_id)
             dir.mkdir(parents=True, exist_ok=True)
-            with _dir_lock(dir):
+            async with _dir_lock(dir):
                 tid = _next_id(dir)
                 task = Task(id=tid, subject=subject.strip(), description=description.strip(),
-                            active_form=active_form, metadata=metadata or {})
+                            active_form=active_form, metadata=metadata or {},
+                            owner=owner or None)
                 _write_task(dir, task)
-                return task
+        await self._emit("TaskCreated", task, task_list_id)
+        return task
 
     async def update(self, task_list_id: str, update: TaskUpdate) -> Task:
         """读-改-写契约:目录锁内重读任务文件再 patch(§4,锁外 get 结果不可作 patch 基础)。
@@ -223,7 +292,7 @@ class TaskStore:
         fields = update.model_fields_set
         async with self._in_proc:
             dir = self._dir(task_list_id)
-            with _dir_lock(dir):
+            async with _dir_lock(dir):
                 task = _read_task(dir, task_id)
                 if task is None:
                     raise TaskStoreError(f"Task not found: {task_id}")
@@ -245,6 +314,7 @@ class TaskStore:
                         raise TaskStoreError(f"Adding dependency {dep} -> {task_id} would create a cycle")
                     _add_edge(others, others[dep], task)
                 # 应用字段(状态机:非 completed → completed 允许;completed 拒绝回退)
+                was_completed = task.status == TaskStatus.COMPLETED
                 if "subject" in fields and update.subject is not None:
                     task.subject = update.subject
                 if "description" in fields and update.description is not None:
@@ -269,17 +339,22 @@ class TaskStore:
                 _write_task(dir, task)
                 for dep in dict.fromkeys(add_blocks + add_blocked_by):
                     _write_task(dir, others[dep])
-                return task
+        # §11.2:状态机语义 — 进入 completed 报 TaskCompleted,其余报 TaskUpdated
+        await self._emit(
+            "TaskCompleted" if task.status == TaskStatus.COMPLETED and not was_completed
+            else "TaskUpdated", task, task_list_id)
+        return task
 
     async def delete(self, task_list_id: str, task_id: str) -> None:
         """真删:高水位更新 + 删文件 + 清理其余任务对它的引用(§3.4,引用清理 best-effort)。"""
         task_list_id = resolve_task_list_id(task_list_id)
         async with self._in_proc:
             dir = self._dir(task_list_id)
-            with _dir_lock(dir):
+            async with _dir_lock(dir):
                 path = _task_path(dir, task_id)
                 if not path.exists():
                     raise TaskStoreError(f"Task not found: {task_id}")
+                task = _read_task(dir, task_id)
                 mark = max(_read_highwatermark(dir), int(task_id) if task_id.isdigit() else 0)
                 # 高水位写失败 → 中止删除:文件已删时扫描兜底不成立,避免 ID 重用窗口(#2)
                 if not _write_highwatermark(dir, mark):
@@ -298,6 +373,48 @@ class TaskStore:
                             _write_task(dir, other)  # 单任务写原子;失败不致命
                         except OSError:
                             pass
+        if task is not None:
+            await self._emit("TaskDeleted", task, task_list_id)
+
+    async def claim(self, task_list_id: str, task_id: str, agent: str) -> Task:
+        """原子认领(13 §11.1,CC claimTaskWithBusyCheck):owner 设 agent。
+
+        目录锁内 busy 检查:任务 in_progress 且 owner 非本 agent → 拒绝
+        (队友进行中的任务不可抢);pending/空闲任务直接归属,状态不自动
+        改(模型负责 in_progress 升级,认领与状态解耦)。
+        """
+        task_list_id = resolve_task_list_id(task_list_id)
+        async with self._in_proc:
+            dir = self._dir(task_list_id)
+            async with _dir_lock(dir):
+                task = _read_task(dir, task_id)
+                if task is None:
+                    raise TaskStoreError(f"Task not found: {task_id}")
+                if task.status == TaskStatus.IN_PROGRESS and task.owner not in (None, agent):
+                    raise TaskStoreError(
+                        f"Task #{task_id} is in progress by {task.owner}")
+                task.owner = agent
+                _write_task(dir, task)
+        await self._emit("TaskUpdated", task, task_list_id)
+        return task
+
+    async def unassign_agent(self, task_list_id: str, agent: str) -> int:
+        """清空某 agent 的全部 owner(CC unassignTeammateTasks):只回退非
+        completed 任务(11 R6 语义 —— completed 的归属是历史记录,不动)。
+
+        返回回退条数;锁内遍历+写,缺失任务跳过。
+        """
+        task_list_id = resolve_task_list_id(task_list_id)
+        cleared = 0
+        async with self._in_proc:
+            dir = self._dir(task_list_id)
+            async with _dir_lock(dir):
+                for task in self._read_all(dir).values():
+                    if task.owner == agent and task.status != TaskStatus.COMPLETED:
+                        task.owner = None
+                        _write_task(dir, task)
+                        cleared += 1
+        return cleared
 
     # ---- 只读(不锁) ----
 
