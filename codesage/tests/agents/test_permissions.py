@@ -199,6 +199,37 @@ async def test_ask_auto_denied_without_parent_callback(tmp_path, subagent_runner
     assert ask_events[0].decision == "ask"  # 引擎决策 ask;无回调 → 执行面自动 deny
 
 
+async def test_send_message_permission_contract(tmp_path, subagent_runner):
+    """SendMessage 与 Agent 同契约(§6.3):needs_permissions=True,子代理调用
+    走完整决策链 + 审计(不在 allow 白名单 → ask 自动 deny)。"""
+    sink = CountingSink()
+    llm = FakeLLM([
+        lambda i: tool_use_event("Agent", "a1",
+                                 '{"name": "general-purpose", "prompt": "ping teammate", '
+                                 '"run_in_background": true}'),
+        lambda i: tool_use_event("SendMessage", "s1", '{"to": "bob", "message": "hi"}'),
+        lambda i: text_event("denied, fine"),
+        lambda i: text_event("parent done"),
+    ])
+    parent = _make_parent(llm, tmp_path, sink=sink)
+    # 父工具池补 SendMessage;子代理是后台 → 工具池 ∩ ASYNC 白名单
+    from codesage.tools.builtin.interaction.send_message import SendMessageTool
+    parent.tools.register(SendMessageTool())
+    async for _msg in parent.run("go"):
+        pass
+    # 后台子代理是独立 task,父 run 可能先完成 —— 等其终态(done 回调清集合)
+    # 再断言审计,否则 SendMessage 决策发生在断言之后(时序竞争)。
+    for _ in range(100):
+        if not parent._subagent_tasks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert parent.last_stop_reason == "completed"
+    sm_events = [e for e in sink.events if e.tool_name == "SendMessage"]
+    assert len(sm_events) == 1
+    assert sm_events[0].decision == "ask"  # 引擎决策 ask,与 Agent 同链
+
+
 # ---- fork bubble(§7.3)----
 
 

@@ -65,6 +65,13 @@ _MATCH_VALUE_KEYS = {
     "PreCompact": "trigger",
     "PostCompact": "trigger",
     "Notification": "notification_type",
+    # 13 §11.2:Subagent* 按 agent_name 精确匹配;Task* 按 task_list_id 精确匹配
+    "SubagentStart": "agent_name",
+    "SubagentStop": "agent_name",
+    "TaskCreated": "task_list_id",
+    "TaskUpdated": "task_list_id",
+    "TaskCompleted": "task_list_id",
+    "TaskDeleted": "task_list_id",
 }
 
 

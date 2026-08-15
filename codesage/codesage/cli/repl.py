@@ -180,6 +180,7 @@ async def repl_loop(
             bar.move_to_input()  # back to the fixed prompt line
     finally:
         bar.disable()
+        loop.cancel_subagents()  # 13 §6.1 R3:退出统一取消后台子代理
 
 
 def _render_notification(notification_type: str, message: str) -> str:

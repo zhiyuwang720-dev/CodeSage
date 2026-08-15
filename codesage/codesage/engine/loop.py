@@ -227,6 +227,19 @@ class AgentLoop:
         #: One ToolUseContext per loop: carries read-freshness state and the
         #: abort channel across tool calls (phase 03 read-first guard).
         self._tool_ctx: ToolUseContext | None = None
+        #: 后台子代理任务集合(13 §6.1 R3):launch 注册,完成回调清理;父循环
+        #: 结束(REPL 退出)统一 cancel,防悬挂。
+        self._subagent_tasks: set["asyncio.Task"] = set()
+        #: 队友消息 inbox(13 §6.3):SendMessage 投递目标;runner 构造子代理
+        #: loop 时注入 Queue 并注册进 Mailbox,每轮迭代前 drain 注入 Message 流。
+        #: 父 loop 默认 None(父不接收队友消息)。
+        self._inbox: asyncio.Queue[str] | None = None
+
+    def cancel_subagents(self) -> None:
+        """R3:进程退出统一取消后台子代理(转录已逐行 fsync,不丢已产出)。"""
+        for task in list(self._subagent_tasks):
+            if not task.done():
+                task.cancel()
 
     # ---- public entry ----
 
@@ -330,6 +343,22 @@ class AgentLoop:
                         yield steer_msg
                         await self._persist(steer_msg)
                         state.messages.append(steer_msg)
+
+                # 13 §6.3:队友 SendMessage → user 角色注入(与 steer 同款 drain,
+                # 引擎既有入口零新通道)。队友消息非用户提交:不过 UserPromptSubmit
+                # 钩子;照常 yield + persist(转录可审计)。
+                if self._inbox is not None:
+                    team_msgs: list[str] = []
+                    while True:
+                        try:
+                            team_msgs.append(self._inbox.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                    for text in team_msgs:
+                        team_msg = user_message(text)
+                        yield team_msg
+                        await self._persist(team_msg)
+                        state.messages.append(team_msg)
 
                 # LLM call (checkpoint 1: abort before and after)
                 try:

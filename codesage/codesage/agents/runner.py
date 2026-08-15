@@ -5,11 +5,14 @@ S2 delivers the foreground path: `assemble_subagent_tools` (compiled-time
 recursion ban), `build_subagent_system_prompt` (spec §9) and
 `SubagentRunner.run()` — a nested AgentLoop run whose final assistant text
 becomes the tool_result, with the parent abort cascading down.
+S5 adds `launch()` (background + Mailbox notify), SendMessage inbox plumbing
+and the SubagentStart/SubagentStop hook events.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +21,9 @@ from typing import Literal
 from ..config import paths
 from ..core import Session
 from ..core.messages import SessionMessage
+from ..core.tasks import MailMessage, SUBAGENT_DONE, get_mailbox
 from ..engine import AgentLoop, AgentLoopConfig
+from ..hooks import HookInput
 from ..permissions import normalize_mode
 from ..tools import Tool, ToolError, ToolRegistry, ToolResult
 
@@ -41,9 +46,11 @@ def _min_mode(parent: str, declared: str | None) -> str:
 SUBAGENT_DISALLOWED_TOOL_NAMES: frozenset[str] = frozenset({"Agent"})
 #: 后台子代理白名单(L3,spec §4):能干活(read/search/bash/edit/write/task 协作),
 #: 排除需交互弹窗的元工具;权限仍走 min 收窄 + 审计,ask→deny 无 UI 阻塞。
+#: SendMessage 为队友协作工具,与 Task×4 同族(§6.3,CC IN_PROCESS_TEAMMATE_
+#: ALLOWED_TOOLS 实测 = Task×4 + SendMessage)。
 ASYNC_AGENT_ALLOWED_TOOLS: frozenset[str] = frozenset(
     {"Read", "Grep", "Glob", "LS", "Bash", "Edit", "Write",
-     "TaskCreate", "TaskGet", "TaskList", "TaskUpdate"}
+     "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage"}
 )
 
 #: forkContext(§5.2):历史截断上限 —— 只继承最近 60 条消息,防父历史过长
@@ -161,6 +168,13 @@ async def _propagate_abort(src: asyncio.Event, dst: asyncio.Event) -> None:
     dst.set()
 
 
+def _consume_exception(task: asyncio.Task) -> None:
+    """后台任务 done 回调:消费未检索异常,防 "never retrieved" 警告。run() 已
+    记 step_failed 终态,此处只需排掉 Task 层的异常引用。"""
+    if not task.cancelled():
+        task.exception()
+
+
 @dataclass(slots=True)
 class SubagentRequest:
     prompt: str  # 必填,自包含(CC §8.2 三理由)
@@ -187,9 +201,14 @@ class SubagentRunner:
         self.parent = parent
         self.req = req
         self.registry = registry
+        #: 会话 id 生成于构造期:launch() 立即返回 async_launched 需要它,_assemble
+        #: 复用(会话文件/Subagent* 事件/Mailbox 寻址的同一 id)。
+        self._agent_id = _new_agent_id()
         #: 子会话根;默认 {config_dir}/sessions/subagents(S5 前 list_sessions
         #: 排除面),测试注入 tmp_path 避免污染真实配置目录。
         self._root = session_root or paths.config_dir() / "sessions" / "subagents"
+        self._session_path: Path | None = None  # 后台完成通知的 payload(S5)
+        self._mailbox: "Mailbox | None" = None  # 终态注销 inbox 用(S5)
 
     def _build_history(self) -> list[SessionMessage]:
         """spec §5.2 fork 历史:定义名子代理 = 空历史;fork(name=None)= 父
@@ -218,7 +237,7 @@ class SubagentRunner:
     def _assemble(self) -> AgentLoop:
         parent, req = self.parent, self.req
         definition = self._resolve_definition()
-        agent_id = _new_agent_id()
+        agent_id = self._agent_id
         tools = ToolRegistry(
             assemble_subagent_tools(parent.tools.all(), definition, req.run_in_background)
         )
@@ -233,7 +252,7 @@ class SubagentRunner:
         # max_turns),request 级仅编程入口可达;当前实际生效面 = 定义级声明。
         declared = req.permission_mode or (definition.permission_mode if definition else None)
         session = Session(agent_id, self._root)
-        return AgentLoop(
+        loop = AgentLoop(
             AgentLoopConfig(
                 client=parent.client,
                 tools=tools,
@@ -256,14 +275,24 @@ class SubagentRunner:
             # §7:生效模式 = min(父模式, 声明模式),只收窄不放宽
             mode=_min_mode(normalize_mode(parent.mode).value, declared),
         )
+        # §6.3:队友消息 inbox —— 注册进 Mailbox(agent_id + address_name 双寻址
+        # 名),目标 loop 每轮迭代前 drain 注入 Message 流(引擎 _inbox 字段)。
+        inbox = asyncio.Queue()
+        loop._inbox = inbox
+        self._mailbox = get_mailbox()
+        self._mailbox.register(agent_id, inbox)
+        if req.address_name:
+            self._mailbox.register(req.address_name, inbox)
+        return loop
 
     async def run(self) -> ToolResult:
-        """前台:嵌套 run 到终态,回收本轮最后 assistant text(§5.4)。
+        """嵌套 run 到终态,回收本轮最后 assistant text(§5.4);前后台共用。
 
         操作日志(§11.3):run 开始记 step_attempt,终态记 step_completed/
         step_failed —— 写在父会话文件(审计视角:父发起了子代理步骤),与
         find_open_operations 的 kind 感知配对。子代理的任何崩溃都降级为
-        错误 tool_result 交父自愈,绝不向上传播炸掉父 run。
+        错误 tool_result 交父自愈,绝不向上传播炸掉父 run。后台终态额外
+        Mailbox 通知(§6.2,前台父阻塞消费结果不通知)。
         """
         parent, req = self.parent, self.req
         name = req.name or "forkContext"
@@ -272,16 +301,65 @@ class SubagentRunner:
             parent.session.append_operation("step_attempt", tool="Agent", args_summary=summary)
         try:
             result = await self._run_once()
+        except asyncio.CancelledError:
+            # 父 abort 级联取消:转录已 fsync,只需记失败终态(R10 影响低)。
+            if parent.session is not None:
+                parent.session.append_operation("step_failed", tool="Agent", args_summary=summary)
+            raise
         except Exception:  # noqa: BLE001 - 装配期失败(未知名 agent 等)同样记终态
             if parent.session is not None:
                 parent.session.append_operation("step_failed", tool="Agent", args_summary=summary)
+            await self._notify_done("failed", "[子代理装配失败]")
             raise  # 原样上抛:引擎转错误 tool_result 交父自愈(S2 行为不变)
+        status = "failed" if result.is_error else "completed"
         if parent.session is not None:
             parent.session.append_operation(
                 "step_failed" if result.is_error else "step_completed",
                 tool="Agent", args_summary=summary,
             )
+        await self._notify_done(status, str(result.content))
         return result
+
+    def launch(self) -> ToolResult:
+        """后台(§6.1):create_task 注册进父 _subagent_tasks,立即返回
+        async_launched;父 abort → 级联 cancel(R10,转录已 fsync 保留部分成果)。
+        """
+        task = asyncio.create_task(self.run())
+        self.parent._subagent_tasks.add(task)
+        task.add_done_callback(self.parent._subagent_tasks.discard)
+        task.add_done_callback(_consume_exception)
+
+        async def _cancel_on_abort() -> None:
+            await self.parent.abort.wait()
+            task.cancel()
+
+        watcher = asyncio.create_task(_cancel_on_abort())
+        self._abort_watcher = watcher  # 泄漏回归断言锚点(完成即 done)
+        # 子代理先完成 → watcher 一并取消,防常驻 pending 任务泄漏(R10)。
+        task.add_done_callback(lambda _t: watcher.cancel())
+        return ToolResult(
+            content=json.dumps({"agent_id": self._agent_id, "status": "async_launched"}),
+            metadata={"subagent_output": True},
+        )
+
+    async def _notify_done(self, status: str, summary: str) -> None:
+        """后台完成通知(§6.2)双通道:Mailbox 广播(订阅者自取)+ 父引擎
+        _notify 通道(状态栏/UI 消费)。摘要截断 200,详情让模型 Read 转录。"""
+        if not self.req.run_in_background:
+            return
+        get_mailbox().notify(MailMessage(
+            kind=SUBAGENT_DONE,
+            agent_id=self._agent_id,
+            payload={
+                "status": status,
+                "summary": summary[:200],
+                "session_path": str(self._session_path or ""),
+            },
+        ))
+        await self.parent._notify(  # 阶段 09 §2.5:通知 UI 消费路径
+            "subagent_done", f"后台子代理 {self.req.name or 'forkContext'} {status}",
+            status=status, agent_id=self._agent_id,
+        )
 
     async def _run_once(self) -> ToolResult:
         if self.parent.abort.is_set():
@@ -290,25 +368,57 @@ class SubagentRunner:
                 metadata={"subagent_output": True},
             )
         loop = self._assemble()
+        self._session_path = loop.session.path
         watcher = asyncio.create_task(_propagate_abort(self.parent.abort, loop.abort))
         last_text: str | None = None
         try:
+            await self._emit_event("SubagentStart", loop)
             async for msg in loop.run(self.req.prompt):
                 if msg.role == "assistant" and not (msg.is_meta or msg.is_error):
                     text = _assistant_text(msg)
                     if text:
                         last_text = text
         except Exception as exc:  # noqa: BLE001 - 子代理崩溃不炸父 run
+            await self._emit_event("SubagentStop", loop, status="failed",
+                                   summary=str(exc)[:200])
             return ToolResult(
                 f"[子代理异常:{type(exc).__name__}]", is_error=True,
                 metadata={"agent_id": loop.session.session_id, "subagent_output": True},
             )
         finally:
             watcher.cancel()
+            self._unregister_inbox()
         reason = loop.last_stop_reason or "completed"
         content = last_text or f"[子代理无文本输出:{reason}]"
+        await self._emit_event("SubagentStop", loop, status="failed" if reason in (
+            "error", "max_turns", "interrupted") else "completed", summary=content)
         return ToolResult(
             content=content,
             is_error=reason in ("error", "max_turns", "interrupted"),
             metadata={"agent_id": loop.session.session_id, "subagent_output": True},
         )
+
+    async def _emit_event(self, event: str, loop: AgentLoop, **extra: str) -> None:
+        """Subagent* 事件单点触发(§11.2):agent_name = 定义名或 forkContext;
+        SubagentStop 的 additionalContext 累积进父 loop 一次性 _hook_reminder
+        (§6.2 消费路径 2)。无钩子订阅 → 零路径,不进管线。"""
+        hooks = self.parent.hooks
+        if hooks is None or not hooks.has_hooks_for_event(event):
+            return
+        result = await hooks.dispatch(event, input=HookInput(
+            session_id=loop.session.session_id,
+            cwd=str(loop.cwd),
+            session_path=str(loop.session.path),
+            extra={"agent_name": self.req.name or "forkContext",
+                   "agent_id": self._agent_id, **extra},
+        ), abort_event=loop.abort)  # §6.3:钩子批次 abort 感知(与引擎各派发点一致)
+        if result.additional_context:
+            self.parent._accumulate_hook_reminder(result.additional_context)
+
+    def _unregister_inbox(self) -> None:
+        """终态注销(§6.3):目标消失后 SendMessage 投递 → 明确报错(R16)。"""
+        if self._mailbox is None:
+            return
+        self._mailbox.unregister(self._agent_id)
+        if self.req.address_name:
+            self._mailbox.unregister(self.req.address_name)

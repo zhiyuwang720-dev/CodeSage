@@ -47,6 +47,12 @@ class AgentTool(Tool):
                        "description": "Self-contained task description"},
             "model": {"type": "string", "description": "Model override"},
             "max_turns": {"type": "integer", "description": "Turn cap override"},
+            "address_name": {"type": "string",
+                             "description": "SendMessage addressing name "
+                                            "(§6.3; defaults to agent_id)"},
+            "run_in_background": {"type": "boolean", "description": "true → "
+                                  "立即返回,子代理后台执行(§6.1);完成经 "
+                                  "Mailbox/通知通道,可用 SendMessage 与它对谈"},
         },
         "required": ["prompt"],  # name 可选:缺省 → forkContext(§5.2,CC 隐式语义)
     }
@@ -63,9 +69,16 @@ class AgentTool(Tool):
         name = input.get("name")
         if name is not None and (not isinstance(name, str) or not name.strip()):
             raise ToolError("name must be a non-empty string")
+        address_name = input.get("address_name")
+        if address_name is not None and (not isinstance(address_name, str)
+                                         or not address_name.strip()):
+            raise ToolError("address_name must be a non-empty string")
         if "max_turns" in input and (not isinstance(input["max_turns"], int)
                                      or input["max_turns"] <= 0):
             raise ToolError("max_turns must be a positive integer")
+        bg = input.get("run_in_background")
+        if bg is not None and not isinstance(bg, bool):
+            raise ToolError("run_in_background must be a boolean")
 
     def spec(self) -> Any:
         """动态描述:列出当前可用 agents(registry 按进程 cwd 解析)。
@@ -100,6 +113,10 @@ class AgentTool(Tool):
             name=raw_name.strip() if isinstance(raw_name, str) else None,  # None → fork
             model=input.get("model"),
             max_turns=input.get("max_turns"),
+            address_name=input.get("address_name"),  # §6.3 SendMessage 寻址名
+            run_in_background=bool(input.get("run_in_background")),  # §6.1 后台
         )
         runner = SubagentRunner(ctx.parent_loop, req, registry)
+        if req.run_in_background:
+            return runner.launch()  # 立即返回 async_launched,父循环不阻塞
         return await runner.run()

@@ -6,6 +6,7 @@ from .filesystem.edit import EditTool
 from .filesystem.ls import LSTool
 from .filesystem.read import ReadTool
 from .filesystem.write import WriteTool
+from .interaction.send_message import SendMessageTool
 from .interaction.task_create import TaskCreateTool
 from .interaction.task_get import TaskGetTool
 from .interaction.task_list import TaskListTool
@@ -33,6 +34,7 @@ BUILTIN_TOOLS: list[Tool] = [
     TaskGetTool(),
     TaskListTool(),
     TaskUpdateTool(),
+    SendMessageTool(),  # 13 §6.3:队友通信原语(与 Task×4 同族)
     WebFetchTool(),
     AgentTool(),
 ]

@@ -14,7 +14,8 @@ from typing import Any, Callable
 
 logger = logging.getLogger("codesage.hooks")
 
-# 事件表(§2.2):八个事件
+# 事件表(§2.2):八个事件 + 13 §11.2 追加六事件(SubagentStart/Stop 触发点 = runner
+# 单点;Task* 四事件触发点 = on_change(S6 落地),期间为死配置)
 EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
@@ -24,6 +25,12 @@ EVENTS = (
     "PreCompact",
     "PostCompact",
     "Notification",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCreated",
+    "TaskUpdated",
+    "TaskCompleted",
+    "TaskDeleted",
 )
 
 # 通知类型枚举(§2.5):四个通知源
@@ -105,6 +112,15 @@ _EVENT_OUTPUT_FIELDS: dict[str, set[str]] = {
     "PreCompact": _COMMON_OUTPUT_FIELDS,
     "PostCompact": _COMMON_OUTPUT_FIELDS,
     "Notification": _COMMON_OUTPUT_FIELDS,
+    # 13 §11.2 字段面扩展:SubagentStop 追加 additionalContext(后台结果注入下一次
+    # 请求,§6.2 消费路径 2);其余五事件仅接受通用字段 —— 事件名感知校验保留,
+    # 其它事件不接受 additionalContext(安全位语义不变)
+    "SubagentStart": _COMMON_OUTPUT_FIELDS,
+    "SubagentStop": _COMMON_OUTPUT_FIELDS | {"additionalContext"},
+    "TaskCreated": _COMMON_OUTPUT_FIELDS,
+    "TaskUpdated": _COMMON_OUTPUT_FIELDS,
+    "TaskCompleted": _COMMON_OUTPUT_FIELDS,
+    "TaskDeleted": _COMMON_OUTPUT_FIELDS,
 }
 
 # 校验失败时附带的期望 schema(§4.10.5:钩子作者不用查文档)
