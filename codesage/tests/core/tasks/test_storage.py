@@ -276,3 +276,120 @@ async def test_resolve_task_list_id_fallback(monkeypatch):
     monkeypatch.setenv("CODESAGE_TASK_LIST_ID", "env-list")
     assert resolve_task_list_id() == "env-list"
     assert resolve_task_list_id("explicit") == "explicit"  # explicit 优先
+
+
+# ---- 13 §11.1:owner 自动分配 / claim / unassign ----
+
+async def test_create_owner_from_agent(store):
+    """owner 参数注入:teammate 创建即归属自己;缺省 None。"""
+    t1 = await store.create("l", subject="1", description="d", owner="worker-1")
+    assert t1.owner == "worker-1"
+    t2 = await store.create("l", subject="2", description="d")
+    assert t2.owner is None
+    assert store.get("l", t1.id).owner == "worker-1"  # 落盘一致
+
+
+async def test_claim_assigns_owner(store):
+    t = await store.create("l", subject="1", description="d")
+    claimed = await store.claim("l", t.id, "worker-2")
+    assert claimed.owner == "worker-2"
+    assert store.get("l", t.id).owner == "worker-2"
+
+
+async def test_claim_busy_check_rejects_other_agent(store):
+    """in_progress 且 owner 非本 agent → 拒绝(队友进行中的任务不可抢)。"""
+    t = await store.create("l", subject="1", description="d", owner="worker-1")
+    await store.update("l", _upd(t.id, status=TaskStatus.IN_PROGRESS))
+    with pytest.raises(TaskStoreError, match="in progress by worker-1"):
+        await store.claim("l", t.id, "worker-2")
+
+
+async def test_claim_same_owner_or_idle_allowed(store):
+    """owner 是自己或任务空闲 → 直接认领(忙检只挡他人 in_progress)。"""
+    t = await store.create("l", subject="1", description="d", owner="worker-1")
+    await store.update("l", _upd(t.id, status=TaskStatus.IN_PROGRESS))
+    assert (await store.claim("l", t.id, "worker-1")).owner == "worker-1"  # 自己
+
+    t2 = await store.create("l", subject="2", description="d")  # pending 无 owner
+    assert (await store.claim("l", t2.id, "worker-3")).owner == "worker-3"
+
+
+async def test_claim_unknown_task_raises(store):
+    with pytest.raises(TaskStoreError, match="not found"):
+        await store.claim("l", "99", "worker-1")
+
+
+async def test_unassign_agent_clears_owner_only_non_completed(store):
+    """unassign:清空该 agent 的 owner;completed 的归属是历史,不动(11 R6)。"""
+    t1 = await store.create("l", subject="1", description="d", owner="worker-1")
+    t2 = await store.create("l", subject="2", description="d", owner="worker-1")
+    t3 = await store.create("l", subject="3", description="d", owner="worker-1")
+    await store.update("l", _upd(t1.id, status=TaskStatus.COMPLETED))
+
+    cleared = await store.unassign_agent("l", "worker-1")
+    assert cleared == 2  # t1 completed 不回退
+    assert store.get("l", t1.id).owner == "worker-1"
+    assert store.get("l", t2.id).owner is None
+    assert store.get("l", t3.id).owner is None
+
+
+async def test_unassign_agent_only_matches_own_agent(store):
+    t1 = await store.create("l", subject="1", description="d", owner="worker-1")
+    await store.create("l", subject="2", description="d", owner="worker-2")
+    assert await store.unassign_agent("l", "worker-1") == 1
+    assert store.get("l", t1.id).owner is None
+    assert store.get("l", "2").owner == "worker-2"
+
+
+# ---- 13 §11.2:on_change 单点触发(事件名 + 触发点 + fail-open)----
+
+async def test_on_change_fires_per_mutation(store):
+    """四个 mutation 各触发恰一次,事件名与语义对应;锁外调用(回调内再读不卡)。"""
+    events = []
+
+    async def on_change(event, task, task_list_id):
+        events.append((event, task.id, task_list_id))
+
+    store.on_change = on_change
+    t1 = await store.create("l", subject="1", description="d", owner="w1")
+    assert events == [("TaskCreated", t1.id, "l")]
+    events.clear()
+
+    await store.update("l", _upd(t1.id, subject="2"))
+    assert events == [("TaskUpdated", t1.id, "l")]
+    events.clear()
+
+    await store.update("l", _upd(t1.id, status=TaskStatus.COMPLETED))
+    assert events == [("TaskCompleted", t1.id, "l")]
+    events.clear()
+
+    await store.delete("l", t1.id)
+    assert events == [("TaskDeleted", t1.id, "l")]
+    events.clear()
+
+
+async def test_on_change_completed_then_updated_is_updated(store):
+    """completed 之后的普通更新不算再次 completed(状态机语义,§11.2)。"""
+    events = []
+    store.on_change = lambda e, t, l: events.append((e, t.id))
+    t1 = await store.create("l", subject="1", description="d")
+    await store.update("l", _upd(t1.id, status=TaskStatus.COMPLETED))
+    await store.update("l", _upd(t1.id, subject="2"))
+    assert [e for e, _ in events] == ["TaskCreated", "TaskCompleted", "TaskUpdated"]
+
+
+async def test_on_change_fail_open(store):
+    """回调异常 → mutation 不受影响(仅日志)。"""
+    def boom(event, task, task_list_id):
+        raise RuntimeError("hook died")
+
+    store.on_change = boom
+    t1 = await store.create("l", subject="1", description="d")
+    assert store.get("l", t1.id) is not None  # 创建成功,钩子故障不拖垮
+
+
+async def test_on_change_none_skips_dispatch(store):
+    events = []
+    t1 = await store.create("l", subject="1", description="d")
+    await store.update("l", _upd(t1.id, status=TaskStatus.COMPLETED))
+    assert events == []  # 无回调 = 零路径

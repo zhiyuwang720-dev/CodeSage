@@ -359,7 +359,7 @@ TaskCreated / TaskUpdated / TaskCompleted / TaskDeleted
 - **输出字段面扩展**:`SubagentStop` 合法输出字段追加 `additionalContext`(09 §4.4 字段面扩展,安全位语义不变—— 事件名感知校验保留,其它事件不接受该字段)—— §6.2 消费路径 2 的前置
 - Task* 触发点 = **存储层单点**:`TaskStore` 构造加可选 `on_change` 回调(引擎注入 hooks.emit 包装),防工具层重复触发(11 §12「emit 点已定,零重构」兑现)
 - agent 钩子执行体:裁(§1.2)
-- **实现期注意**:Task* 事件名在 S5 追加、on_change 触发点在 S6 落地,期间事件是死配置(无触发点),S5 闸门注明
+- **实现期注意**:Task* 事件名在 S5 追加、on_change 触发点在 S6 落地,期间事件是死配置(无触发点),S5 闸门注明;S6 落地后接线条件 = loop 构造时 hooks 已订阅 Task* 事件(无订阅保持零路径)
 
 ### 11.3 step_attempt 埋点与操作日志配对(12 §7.3/§13 兑现)
 
@@ -373,7 +373,7 @@ TaskCreated / TaskUpdated / TaskCompleted / TaskDeleted
 ### 11.4 锁升级(11 R2/R3 兑现)
 
 - 锁获取挪 `asyncio.to_thread`(跨进程 O_EXCL 文件锁阻塞调不卡事件循环;API 不变)
-- 锁文件含 pid+时间戳,现有 stale 超时 → **pid 活性检查**:锁文件 pid 不存在或非本进程视为陈旧(11 R3 升级)
+- 锁文件含 pid+时间戳,现有 stale 超时 → **pid 活性检查**:mtime 超限后校验锁内 pid —— **pid 已死 → 陈旧可回收;pid 存活 → 继续等待**(消除「活进程长任务持锁被误回收」窗口,11 R3 升级;`unlink` 只删自己 pid 持有的锁)
 - 12 R10 的「会话文件多进程锁」**13 不兑现,推迟 19**:13 无跨进程写同一会话文件场景(§1.3 单写者);12 §3.5 每行自包含格式已预留,19 裁决
 
 ## 12. 测试计划

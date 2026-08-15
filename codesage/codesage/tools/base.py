@@ -43,6 +43,9 @@ class ToolUseContext:
     #: 任务系统归属列表(阶段 11 §8.1):引擎在唯一构造点注入 session id,
     #: 默认值保证既有构造点零破坏;TaskCreate/TaskGet/TaskList/TaskUpdate 使用。
     task_list_id: str = "default"
+    #: 当前 agent 名(13 §11.1):主会话 None,子代理 = 定义名/forkContext;
+    #: TaskCreate 自动 owner 分配的来源(「teammate 创建即归属自己」)。
+    agent_name: str | None = None
     #: path -> mtime_ns / sha256 recorded by ReadTool; Edit/Write verify
     #: against these so external changes are never silently overwritten.
     read_file_timestamps: dict[str, float] = field(default_factory=dict)

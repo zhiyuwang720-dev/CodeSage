@@ -26,6 +26,7 @@ from ..ai import ContentBlock, LLMClient, LLMError, LLMRequest, Message, StreamE
 from ..ai.retry import is_ptl_error, is_ptl_text
 from ..hooks import HookDispatchResult, HookInput, HookManager  # 阶段 09:事件钩子(HookManager 协议/实现)
 from ..core import Session, SessionMessage, assistant_message, normalize_for_api, user_message
+from ..core.tasks import get_task_store
 from ..permissions import PermissionDecision, PermissionEngine, PermissionMode, ToolAuditEvent
 from ..permissions.store import load_permission_rules
 from ..tools import ToolError, ToolRegistry, ToolResult, ToolUseContext
@@ -234,6 +235,34 @@ class AgentLoop:
         #: loop 时注入 Queue 并注册进 Mailbox,每轮迭代前 drain 注入 Message 流。
         #: 父 loop 默认 None(父不接收队友消息)。
         self._inbox: asyncio.Queue[str] | None = None
+        #: 任务列表归属(13 §11.1):默认本会话 id;子代理装配时覆盖为父的
+        #: task_list_id —— 「teammate 共享同一列表」的继承机制。
+        self.task_list_id: str = self.session.session_id if self.session is not None else ""
+        #: 本 loop 的 agent 名(13 §11.1 自动 owner 分配):主会话 None,
+        #: 子代理装配时 = 定义名/forkContext。
+        self._agent_name: str | None = None
+        #: Task* 事件接线(13 §11.2):hooks 有订阅时挂到任务存储单例的单点
+        #: 回调上(存储层触发,mutation 后锁外调用)。
+        if self.hooks is not None and any(
+            self.hooks.has_hooks_for_event(ev) for ev in ("TaskCreated", "TaskUpdated",
+                                                          "TaskCompleted", "TaskDeleted")
+        ):
+            get_task_store().on_change = self._dispatch_task_event
+
+    async def _dispatch_task_event(self, event: str, task: "Any", task_list_id: str) -> None:
+        """存储层 on_change 回调(§11.2):事件 → hooks.dispatch;fail-open,
+        异常仅日志不炸 mutation。matcher 按 task_list_id 匹配(09 §2.2 列)。
+        """
+        try:
+            await self.hooks.dispatch(event, input=HookInput(
+                session_id=self.session.session_id if self.session else "",
+                cwd=str(self.cwd),
+                session_path=str(self.session.path) if self.session else "",
+                extra={"task_id": task.id, "task_list_id": task_list_id,
+                       "status": task.status.value},
+            ), abort_event=self.abort)
+        except Exception:  # noqa: BLE001 - fail-open(09 通知同款语义)
+            logger.exception("task event dispatch failed for %s", event)
 
     def cancel_subagents(self) -> None:
         """R3:进程退出统一取消后台子代理(转录已逐行 fsync,不丢已产出)。"""
@@ -777,11 +806,12 @@ class AgentLoop:
     async def _execute_tools(self, state: RunState, tool_uses: list[ContentBlock]) -> list[ScheduledTool]:
         scheduled: list[ScheduledTool] = []
         if self._tool_ctx is None:
-            # §11-8.1:注入 session id 作任务列表归属;无会话传空串,
-            # 让 resolve_task_list_id 的 env > default 链在引擎路径同样生效
+            # §11-8.1:注入任务列表归属;13 §11.1:子代理装配时覆盖
+            # task_list_id(与父共享同一列表)并带 agent_name(自动 owner 来源)
             self._tool_ctx = ToolUseContext(
                 cwd=self.cwd, abort_event=self.abort,
-                task_list_id=self.session.session_id if self.session else "",
+                task_list_id=self.task_list_id,
+                agent_name=self._agent_name,
                 parent_loop=self,  # 阶段 13 §5.5:Agent 工具取父 loop 快照
             )
         ctx = self._tool_ctx

@@ -3,6 +3,7 @@ declarations, foreground nested run, forkContext 三件套, step_attempt 埋点
 (mock LLM)."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from codesage.agents import (
     SubagentRunner,
     assemble_subagent_tools,
 )
+from codesage.tools.builtin.interaction.task_create import TaskCreateTool
 from codesage.agents.types import AgentDefinition
 from codesage.ai import ContentBlock, LLMResponse, StreamEvent
 from codesage.core import Session, SessionMessage, find_open_operations, user_message
@@ -522,3 +524,101 @@ def test_list_sessions_excludes_subagents(tmp_path):
     Session("agent-2", root / "subagents").append(user_message("c"))
     Session("archived", root / "archive").append(user_message("d"))
     assert [p.stem for p in list_sessions(root)] == ["s1"]
+
+
+# ---- 13 §11.1:task_list_id 继承 / 自动 owner / 共享同一列表 ----
+
+def test_assemble_inherits_parent_task_list_id(tmp_path):
+    """子 loop.task_list_id == 父的(与父共享同一任务列表);_agent_name:
+    定义名子代理 = 定义名,fork = 唯一 agent_id(防身份碰撞)。"""
+    parent = _make_parent(FakeLLM([lambda i: text_event("x")]), tmp_path)
+    parent.task_list_id = "team-a"  # 模拟父已继承/显式设置
+
+    runner = SubagentRunner(parent, SubagentRequest(prompt="p", name="general-purpose"),
+                            AgentRegistry(), session_root=tmp_path / "subagents")
+    loop = runner._assemble()
+    assert loop.task_list_id == "team-a"
+    assert loop._agent_name == "general-purpose"
+
+    # forkContext(无 name):owner 身份 = 唯一 agent_id,列表仍共享
+    runner = SubagentRunner(parent, SubagentRequest(prompt="p"),
+                            AgentRegistry(), session_root=tmp_path / "subagents")
+    loop = runner._assemble()
+    assert loop.task_list_id == "team-a"
+    assert loop._agent_name == runner._agent_id  # 非字面量 "forkContext"
+    assert loop._agent_name != "forkContext"
+
+
+def test_system_prompt_shares_parent_task_list(tmp_path):
+    """§9 静态引导:task_list_id 传父的,措辞为「共享同一任务列表」。"""
+    from codesage.agents.runner import build_subagent_system_prompt
+
+    prompt = build_subagent_system_prompt(
+        "base", "worker-1", "body", "team-a", tmp_path)
+    assert "任务列表 id=team-a" in prompt
+    assert "共享同一任务列表" in prompt
+    assert "独立列表" not in prompt  # 措辞已恢复,无旧分离语义残留
+
+
+async def test_task_create_auto_owner_shared_list_e2e(tmp_path, monkeypatch):
+    """E2E(13 §11.1):子代理 TaskCreate → owner 自动 = agent 名;任务落在父的
+    task_list_id 目录 —— 「teammate 协作同一张列表」。"""
+    from codesage.core import Session as _Session
+    from codesage.core.tasks import TaskStore
+    from codesage.tools.builtin.agent.agent import AgentTool as _AgentTool
+    import codesage.core.tasks.storage as storage_mod
+
+    monkeypatch.setattr(storage_mod, "_store", TaskStore(tmp_path / "store"))
+    session = _Session("parent-1", tmp_path / "sessions")
+    seen = []  # 子代理视角的 TaskList 输出收集(父 last_messages 不可见子工具结果)
+
+    class ListTool(Tool):
+        name = "TaskList"
+        description = "Lists tasks"
+        input_schema = {"type": "object", "properties": {}}
+        is_concurrency_safe = True
+
+        def needs_permissions(self, input):
+            return False
+
+        async def _run(self, input, ctx):
+            from codesage.core.tasks import get_task_store
+
+            tasks = get_task_store().list(ctx.task_list_id)
+            out = "\n".join(
+                f"#{t.id} [{t.status.value}] {t.subject} (owner={t.owner})" for t in tasks)
+            seen.append((ctx.task_list_id, out))
+            return ToolResult(out)
+
+    llm = FakeLLM([
+        lambda i: tool_use_event("Agent", "a1",
+                                 '{"name": "general-purpose", "prompt": "make a task"}'),
+        lambda i: tool_use_event("TaskCreate", "t1",
+                                 '{"subject": "Sub task", "description": "by teammate"}'),
+        lambda i: tool_use_event("TaskList", "t2", "{}"),  # 子代理读同一列表
+        lambda i: text_event("done"),
+        lambda i: text_event("parent final"),
+    ])
+    parent = AgentLoop(
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([_AgentTool(), ListTool(), TaskCreateTool()]),
+            permissions=PermissionEngine(),
+            system_prompt="parent system",
+            cwd=tmp_path,
+            session=session,
+            max_turns=10,
+            session_permissions={"allow": ["Agent"]},
+        )
+    )
+    async for _msg in parent.run("hi"):
+        pass
+
+    # 任务落在父会话 id 目录(共享列表),owner = 子代理定义名
+    task_file = tmp_path / "store" / "parent-1" / "1.json"
+    assert task_file.exists()
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    assert task["owner"] == "general-purpose"
+    # 子代理经同一 task_list_id 注入读到该任务(共享列表 + 自动 owner 双证)
+    assert seen == [("parent-1", "#1 [pending] Sub task (owner=general-purpose)")]
+    assert parent.last_stop_reason == "completed"

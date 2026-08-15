@@ -174,3 +174,114 @@ def test_matcher_match_values():
     # 缺字段 → None(不匹配)
     bare = HookInput(session_id="s", cwd=".", session_path="p")
     assert _match_value("SubagentStart", bare) is None
+
+
+# ---- 13 §11.2:on_change 触发点(S6 激活死配置)----
+
+
+async def test_task_events_dispatched_from_store_on_change(tmp_path, monkeypatch):
+    """engine 接线:store.on_change = loop._dispatch_task_event → TaskCreate 经
+    hooks.dispatch 触发 TaskCreated,extra 含 task_id/task_list_id/status。"""
+    from codesage.core import Session as _Session
+    from codesage.core.tasks import TaskStore
+    from codesage.tools.builtin.interaction.task_create import TaskCreateTool
+    import codesage.core.tasks.storage as storage_mod
+
+    monkeypatch.setattr(storage_mod, "_store", TaskStore(tmp_path / "store"))
+    hooks = SpyHooks()
+    llm = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "T1", "description": "d"}'),
+        lambda i: text_event("done"),
+    ])
+    parent = AgentLoop(
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([TaskCreateTool()]),
+            permissions=PermissionEngine(),
+            system_prompt="s",
+            cwd=tmp_path,
+            session=_Session("e2e-1", tmp_path / "sessions"),
+            max_turns=5,
+            hooks=hooks,
+        )
+    )
+    async for _msg in parent.run("go"):
+        pass
+
+    created = [i for e, i in hooks.calls if e == "TaskCreated"]
+    assert len(created) == 1
+    assert created[0].extra["task_id"] == "1"
+    assert created[0].extra["task_list_id"] == "e2e-1"
+    assert created[0].extra["status"] == "pending"
+
+
+async def test_task_events_not_wired_without_hooks(tmp_path, monkeypatch):
+    """hooks=None(或无订阅)→ 不接线:store.on_change 保持 None(零路径)。"""
+    from codesage.core import Session as _Session
+    from codesage.core.tasks import TaskStore
+    from codesage.tools.builtin.interaction.task_create import TaskCreateTool
+    import codesage.core.tasks.storage as storage_mod
+
+    store = TaskStore(tmp_path / "store")
+    monkeypatch.setattr(storage_mod, "_store", store)
+    llm = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "T1", "description": "d"}'),
+        lambda i: text_event("done"),
+    ])
+    parent = AgentLoop(
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([TaskCreateTool()]),
+            permissions=PermissionEngine(),
+            system_prompt="s",
+            cwd=tmp_path,
+            session=_Session("e2e-2", tmp_path / "sessions"),
+            max_turns=5,
+            hooks=None,
+        )
+    )
+    async for _msg in parent.run("go"):
+        pass
+    assert store.on_change is None
+    assert (tmp_path / "store" / "e2e-2" / "1.json").exists()  # 任务照常创建
+
+
+async def test_subagent_loop_does_not_hijack_parent_on_change(tmp_path, monkeypatch):
+    """HIGH 回归(单例 last-writer-wins):子代理 loop 构造后,存储单例
+    on_change 仍指向父 loop —— 父会话后续 TaskCreate 以父 session_id 派发。"""
+    from codesage.core import Session as _Session
+    from codesage.core.tasks import TaskStore
+    from codesage.tools.builtin.interaction.task_create import TaskCreateTool
+    import codesage.core.tasks.storage as storage_mod
+
+    store = TaskStore(tmp_path / "store")
+    monkeypatch.setattr(storage_mod, "_store", store)
+    hooks = SpyHooks()
+    parent = _make_parent(FakeLLM([lambda i: text_event("x")]), tmp_path, hooks=hooks)
+    # 子代理 run(会覆盖接线)→ 断言已恢复为父的
+    runner = _runner(parent, SubagentRequest(prompt="p", name="general-purpose"), tmp_path)
+    await runner.run()
+    # bound method 每次访问新建对象 → 经 __self__ 判属主
+    assert store.on_change is not None and store.on_change.__self__ is parent
+
+    # 父后续 TaskCreate → 事件以父 session_id 派发(而非子代理的)
+    llm2 = FakeLLM([
+        lambda i: tool_use_event("TaskCreate", "t1", '{"subject": "P", "description": "d"}'),
+        lambda i: text_event("done"),
+    ])
+    parent2 = AgentLoop(
+        AgentLoopConfig(
+            client=llm2,
+            tools=ToolRegistry([TaskCreateTool()]),
+            permissions=PermissionEngine(),
+            system_prompt="s",
+            cwd=tmp_path,
+            session=_Session("parent-1", tmp_path / "sessions"),
+            max_turns=5,
+            hooks=hooks,
+        )
+    )
+    async for _msg in parent2.run("go"):
+        pass
+    created = [i for e, i in hooks.calls if e == "TaskCreated"]
+    assert created[-1].session_id == "parent-1"  # 父名义,非子代理 session

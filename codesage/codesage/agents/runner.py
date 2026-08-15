@@ -21,7 +21,7 @@ from typing import Literal
 from ..config import paths
 from ..core import Session
 from ..core.messages import SessionMessage
-from ..core.tasks import MailMessage, SUBAGENT_DONE, get_mailbox
+from ..core.tasks import MailMessage, SUBAGENT_DONE, get_mailbox, get_task_store
 from ..engine import AgentLoop, AgentLoopConfig
 from ..hooks import HookInput
 from ..permissions import normalize_mode
@@ -87,13 +87,14 @@ def build_subagent_system_prompt(
     """spec §9:父系统提示 + agent 头/正文 + 任务引导(静态段落)+ 环境细节。
 
     forkContext 子代理用同一函数(base 原样复用即父前缀一致)。
-    task_list_id 传**子代理自己的**会话 id:引擎按会话注入 ToolUseContext,
-    父列表共享要等 S6 的继承机制(届时恢复「同一任务列表」措辞)。
+    task_list_id(13 §11.1)传**父的** task_list_id:子代理与父共享同一
+    任务列表 —— 「teammate 协作同一张列表」;引擎侧 loop.task_list_id
+    同步继承,两者一致(措辞与注入点不脱节)。
     """
     prompt = f"{base}\n\n# Agent: {name}\n\n{body}" if body else f"{base}\n\n# Agent: {name}"
     prompt += (
         f"\n\n任务与协作:你的任务列表 id={task_list_id}。TaskCreate/TaskGet/"
-        "TaskList/TaskUpdate 操作该列表(子代理独立列表,与父会话分离)。"
+        "TaskList/TaskUpdate 操作该列表(与主会话共享同一任务列表)。"
     )
     prompt += f"\n\n环境:工作目录 {cwd} (绝对路径)。平台:Windows。"
     return prompt
@@ -246,7 +247,7 @@ class SubagentRunner:
         cwd = (req.cwd or parent.cwd).resolve()
         body = (definition.body or definition.description) if definition else ""
         system = build_subagent_system_prompt(
-            parent.system_prompt, req.name or agent_id, body, agent_id, cwd
+            parent.system_prompt, req.name or agent_id, body, parent.task_list_id, cwd
         )
         # 注:Agent 工具输入暂不读 permission_mode 参数(§8 参数链只参数化 model/
         # max_turns),request 级仅编程入口可达;当前实际生效面 = 定义级声明。
@@ -275,6 +276,20 @@ class SubagentRunner:
             # §7:生效模式 = min(父模式, 声明模式),只收窄不放宽
             mode=_min_mode(normalize_mode(parent.mode).value, declared),
         )
+        # 13 §11.1:任务列表继承 —— 子代理与父共享同一列表(引擎按此注入
+        # ToolUseContext.task_list_id,agent_name 自动 owner 分配来源)。
+        # owner 身份:定义名子代理用定义名;fork 用唯一 agent_id —— 防并发
+        # fork 身份碰撞(claim busy check 把两个 fork 当成同一 agent;事件侧
+        # agent_name 仍按 spec 显示 "forkContext",此处只管 owner 身份)。
+        loop.task_list_id = parent.task_list_id
+        loop._agent_name = req.name or agent_id
+        # 13 §11.2(单例 last-writer-wins):子代理 loop 构造时若覆盖了父对
+        # 存储单例 on_change 的接线(子代理必然后构造),恢复父的 —— 否则
+        # 父会话自己的 Task* 事件将以子代理的 session_id 派发。
+        # 注:bound method 的 is 比较恒 False,须经 __self__ 判属主。
+        current = get_task_store().on_change
+        if current is not None and current.__self__ is loop:
+            get_task_store().on_change = parent._dispatch_task_event
         # §6.3:队友消息 inbox —— 注册进 Mailbox(agent_id + address_name 双寻址
         # 名),目标 loop 每轮迭代前 drain 注入 Message 流(引擎 _inbox 字段)。
         inbox = asyncio.Queue()
