@@ -86,7 +86,7 @@ def test_create_and_cleanup_without_changes_removes_worktree_and_branch(tmp_path
     repo = _git_repo(tmp_path)
     wt = create_worktree(repo, "agent-1")
     assert wt.is_dir()
-    assert wt == repo / ".claude" / "worktrees" / worktree_slug("agent-1")
+    assert wt == repo / ".codesage" / "worktrees" / worktree_slug("agent-1")
     _code, out, _ = _git(repo, "branch", "--list", worktree_branch("agent-1"))
     assert "worktree-" in out  # 分支已建
     assert cleanup_worktree(repo, "agent-1") is True
@@ -212,7 +212,7 @@ async def test_worktree_isolation_auto_cleanup_without_changes(tmp_path):
     )
     result = await runner.run()
     assert result.is_error is False
-    wt_root = repo / ".claude" / "worktrees"
+    wt_root = repo / ".codesage" / "worktrees"
     assert not wt_root.exists() or not list(wt_root.iterdir())  # 自动清理
 
 
@@ -233,7 +233,7 @@ async def test_worktree_isolation_child_changes_kept_with_metadata(tmp_path):
     assert result.is_error is False
     wt = Path(result.metadata["worktree_path"])
     assert result.metadata["worktree_branch"] == worktree_branch(runner._agent_id)
-    assert wt == repo / ".claude" / "worktrees" / worktree_slug(runner._agent_id)
+    assert wt == repo / ".codesage" / "worktrees" / worktree_slug(runner._agent_id)
     assert (wt / "out.txt").read_text(encoding="utf-8").strip() == "hi"  # 子 cwd = worktree
     assert not (repo / "out.txt").exists()  # 父工作区干净 —— 隔离生效
 
@@ -309,7 +309,7 @@ async def test_worktree_cleanup_on_cancellation(tmp_path):
     task.cancel()  # CancelledError 路径
     with pytest.raises(asyncio.CancelledError):
         await task
-    wt_root = repo / ".claude" / "worktrees"
+    wt_root = repo / ".codesage" / "worktrees"
     assert not wt_root.exists() or not list(wt_root.iterdir())
 
 
@@ -351,7 +351,7 @@ async def test_background_worktree_combo(tmp_path):
     assert "async_launched" in result.content
     while parent._subagent_tasks:  # 等后台任务终态
         await asyncio.sleep(0.05)
-    wt_dirs = list((repo / ".claude" / "worktrees").glob("*"))
+    wt_dirs = list((repo / ".codesage" / "worktrees").glob("*"))
     assert len(wt_dirs) == 1
     assert (wt_dirs[0] / "bg.txt").read_text(encoding="utf-8").strip() == "bg"
 
@@ -377,5 +377,5 @@ async def test_agent_tool_isolation_parameter_end_to_end(tmp_path, monkeypatch):
     async for _m in parent.run("go"):
         pass
     assert parent.last_stop_reason == "completed"
-    wt_root = repo / ".claude" / "worktrees"
+    wt_root = repo / ".codesage" / "worktrees"
     assert not wt_root.exists() or not list(wt_root.iterdir())  # 无变更 → 自动清理

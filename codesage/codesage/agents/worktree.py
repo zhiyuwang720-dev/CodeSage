@@ -24,7 +24,7 @@ def worktree_slug(agent_id: str) -> str:
     '+',每段仅 [a-zA-Z0-9._-],禁 '.'/'..' 段,总长 ≤64。
 
     agent_id 是本进程生成(agent-YYYYmmdd-HHMMSS-ffffff),理论上已安全;
-    校验是纵深防御 —— 防未来 id 来源变更把路径穿越注入 .claude/worktrees/ 外。
+    校验是纵深防御 —— 防未来 id 来源变更把路径穿越注入 .codesage/worktrees/ 外。
     """
     slug = agent_id.replace("/", "+")
     slug = "".join(c for c in slug if c.isalnum() or c in "._-+")[: _SLUG_MAX]
@@ -42,12 +42,14 @@ def is_safe_segment(segment: str) -> bool:
 
 
 def worktree_path(cwd: Path, agent_id: str) -> Path:
-    """worktree 落点:.claude/worktrees/<slug>。slug 逐段经 is_safe_segment
-    终检(L2 纵深防御最后一道闸):清洗逻辑出 bug 时拒绝而非静默穿越。"""
+    """worktree 落点:.codesage/worktrees/<slug>(项目级运行时目录,与
+    .codesage/settings.json 同前例;且 .codesage/ 已在 .gitignore —— 目录
+    天然不随仓库上传)。slug 逐段经 is_safe_segment 终检(L2 纵深防御最后
+    一道闸):清洗逻辑出 bug 时拒绝而非静默穿越。"""
     slug = worktree_slug(agent_id)
     if not all(is_safe_segment(seg) for seg in slug.split("+")):
         raise WorktreeError(f"unsafe worktree slug: {slug!r}")
-    return cwd / ".claude" / "worktrees" / slug
+    return cwd / ".codesage" / "worktrees" / slug
 
 
 def worktree_branch(agent_id: str) -> str:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..config import paths
 from ..config.agents_md import find_git_root
 from .loader import load_dir
 from .types import AgentDefinition
@@ -71,16 +72,18 @@ class AgentRegistry:
 
     @classmethod
     def from_default_paths(cls, cwd: Path | None = None) -> "AgentRegistry":
-        """User (~/.claude/agents) + project ({git root}/.claude/agents) + builtin.
+        """User ({config_dir}/agents) + project ({git root}/.codesage/agents) + builtin.
 
-        No git root → fall back to cwd as the project root (same precedent as
-        config/agents_md.py project instruction files; CC uses cwd as root).
+        目录随 CodeSage 数据根(默认 ~/.codesage,可 CODESAGE_CONFIG_DIR 覆盖)
+        与项目级配置前例(.codesage/settings.json),不复用 Claude Code 的
+        ~/.claude 布局。No git root → fall back to cwd as the project root
+        (same precedent as config/agents_md.py project instruction files).
         """
         start = (cwd or Path.cwd()).resolve()
         git_root = find_git_root(start)
         return cls(
-            user_dir=Path.home() / ".claude" / "agents",
-            project_dir=(git_root or start) / ".claude" / "agents",
+            user_dir=paths.config_dir() / "agents",
+            project_dir=(git_root or start) / ".codesage" / "agents",
         )
 
     def get(self, name: str) -> AgentDefinition:

@@ -229,7 +229,7 @@ def test_numeric_name_skipped(tmp_path):
 
 def test_from_default_paths_falls_back_to_cwd(tmp_path, monkeypatch):
     """No git root → project agents load from cwd (config/agents_md.py precedent)."""
-    agent_dir = tmp_path / ".claude" / "agents"
+    agent_dir = tmp_path / ".codesage" / "agents"
     agent_dir.mkdir(parents=True)
     _write_agent(agent_dir, "proj.md", "name: proj\ndescription: d\n")
     monkeypatch.chdir(tmp_path)
