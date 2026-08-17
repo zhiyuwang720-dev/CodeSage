@@ -12,6 +12,7 @@
 - **forkContext(S3,§5.2)**:name 缺省 = fork —— 继承父上下文,历史三件套:assistant 仅留 tool_use 块、tool_result → 占位文本(1:1 配对硬断言,防孤儿 tool_result)、末条 user = req.prompt;历史截断 FORK_MAX_MESSAGES=60。子代理会话 = sidechain 会话;父会话操作日志记 step_attempt/step_completed/step_failed 与 find_open_operations 配对。
 - **权限收窄(S4,§7)**:生效模式 = min(父模式,声明模式),只收窄不放宽;ask 在子代理内自动 deny(无 UI 阻塞);fork bubble:fork 继承父 request_permission 回调 —— 权限请求冒泡到父终端。
 - **后台 + Mailbox(S5,§6)**:`launch()` create_task 立即返回 async_launched;父 abort 级联 cancel;完成 → Mailbox 广播 SUBAGENT_DONE + 父 _notify 双通道;SendMessage 寻址(agent_id + address_name 双名),目标 loop 每轮迭代前 drain 注入;终态注销 inbox,目标消失后投递明确报错;L3 白名单 ASYNC_AGENT_ALLOWED_TOOLS(read/search/bash/edit/write/task 协作,排除交互元工具)。SubagentStart/SubagentStop 钩子事件(§11.2)。
+- **后台完成自动注入父上下文(§6.4,实现期对齐 CC)**:后台终态(完成/失败/取消)第三通道 —— `<task-notification>` XML user 消息进父 loop `_notifications` 队列,每轮迭代前 drain 注入父 Message 流(steer/_inbox 同构);父模型下一轮自然看到结果,长时间自动化无需用户转述;跨 turn 积压,取消路径同样通知。
 - **任务扩展(S6,§11)**:TaskStore `on_change` 单点回调 → TaskCreated/Updated/Completed/Deleted 事件(引擎注入 hooks dispatch wrapper,无订阅零路径);`create(owner=)` 自动归属(agent_name);claim busy check(in_progress 且 owner 非 self → 拒绝);unassign_agent 只回退非 completed;task_list_id 继承 —— 子代理与父共享同一任务列表;`_dir_lock` async 化(asyncio.to_thread)+ `_pid_alive` 回收陈旧锁。
 - **worktree 隔离(S7,§5.1/§5.4)**:`isolation="worktree"` 参数或定义字段 → `git worktree add` 从 HEAD 检出独立分支,子代理 cwd = worktree(父工作区未提交变更不可见是特性);终态无变更 → 自动 `worktree remove` + 删分支;有变更 → 保留,路径追加进 result.content + metadata 回填供宿主导入;非 git 仓库显式报错不降级。
 
@@ -34,6 +35,7 @@
 6. **S7 L2:is_safe_segment 终检** — slug 清洗逻辑有 bug 时静默穿越 .claude/worktrees/ → worktree_path 逐段终检,非法即拒绝。
 7. **S7 L1:取消路径孤儿 worktree** — CancelledError 时 result=None 无回填渠道 → 保留场景记入父会话操作日志(step_failed + worktree 路径),不留无声孤儿。
 8. **S7 工具参数 > 定义** — effectiveIsolation = req.isolation or definition.isolation;与 cwd 参数互斥(重定向语义重叠,双指歧义 → 明确 ToolError)。
+9. **S8+ 后台结果自动注入父上下文(§6.4)** — 用户裁定「长时间自动化任务必然需要自动注入」,按 CC 方式落地:`_notifications` 队列 + 迭代前 drain(user 角色,steer/_inbox 同构),消息 = `<task-notification>` XML(agent_id/status/summary 200/result 全量/session_path);发出点 = `_notify_done` 三通道之一(仅后台)。与 CC 差异:CC 经 REPL 命令队列(priority later)空闲自动消费 → 模型自动继续;CodeSage 注入时机 = 下一次迭代(同 turn 后续轮次或下一用户输入),REPL 空闲自动继续属后续增强面。
 
 ## 红线固化
 

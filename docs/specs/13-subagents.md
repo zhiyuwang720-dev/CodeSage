@@ -285,6 +285,17 @@ get_mailbox() -> Mailbox        # 进程内单例
 - **L3 白名单放行**:队友协作工具,与 Task×4 同族(CC `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS` 实测 = Task×4 + SendMessage)
 - **前台子代理**:父在嵌套阻塞中无法投递;实际消费方 = 后台/并行子代理互发 + 父指挥后台 —— 前台 inbox 存在但通常为空,不特殊处理
 
+### 6.4 后台完成自动注入父上下文(CC task-notification 对齐)
+
+后台子代理终态(完成/失败/取消)**自动注入父模型 Message 流**(CC `enqueueAgentNotification` → `<task-notification>` user 消息同款,实现期对齐裁决):
+
+- **注入位**:父 loop 每轮迭代前 drain `loop._notifications`(引擎字段,`steer`/`_inbox` 同构 drain)—— user 角色消息进 Message 流 + persist,模型下一轮自然看到
+- **消息形态**(XML 自描述,CC 同款标签,不改 system prompt):`<task-notification><agent_id><status><summary(截断 200)><result(全量)><session_path></task-notification>`;模型按标签语义处理,详情经 `session_path` Read 转录
+- **发出点**:runner `_notify_done` 三通道之一(Mailbox 广播 + `_notify` UI + 父上下文注入),仅后台;前台结果经 tool_result 回收不注入
+- **取消路径**:父 abort 时同样注入(status=cancelled/failed 由竞态决定:watcher cancel → cancelled;子代理自检 `parent.abort` → failed)—— 父模型需要知道子代理为何消失
+- **跨 turn 积压**:父 turn 结束后完成的子代理,通知积压队列,下一轮输入时注入(队列无界,进程单例生命周期)
+- **对齐 CC 差异**:CC 经 REPL 命令队列(priority 'later',用户输入不饿死)空闲自动消费 → 模型自动继续;CodeSage REPL 单 turn 结构下,注入时机 = 下一次迭代(同 turn 后续轮次或下一用户输入),自动化长任务下父 run 需保持迭代或等待通知唤醒(后续增强面)
+
 ## 7. 权限(只收窄,审计不变)
 
 等级表(现有枚举,只读):`plan < default < yolo`。

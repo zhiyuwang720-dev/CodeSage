@@ -344,6 +344,8 @@ class SubagentRunner:
             # 父 abort 级联取消:转录已 fsync,只需记失败终态(R10 影响低)。
             if parent.session is not None:
                 parent.session.append_operation("step_failed", tool="Agent", args_summary=summary)
+            # §6.4:取消同样自动注入父上下文(父模型需要知道子代理消失原因)
+            await self._notify_done("cancelled", f"{name}: 已取消")
             raise
         except Exception:  # noqa: BLE001 - 装配期失败(未知名 agent 等)同样记终态
             if parent.session is not None:
@@ -361,7 +363,7 @@ class SubagentRunner:
                 "step_failed" if result.is_error else "step_completed",
                 tool="Agent", args_summary=summary,
             )
-        await self._notify_done(status, str(result.content))
+        await self._notify_done(status, str(result.content), content=str(result.content))
         return result
 
     def launch(self) -> ToolResult:
@@ -411,9 +413,11 @@ class SubagentRunner:
                               f"保留 worktree {self._worktree}"),
             )
 
-    async def _notify_done(self, status: str, summary: str) -> None:
-        """后台完成通知(§6.2)双通道:Mailbox 广播(订阅者自取)+ 父引擎
-        _notify 通道(状态栏/UI 消费)。摘要截断 200,详情让模型 Read 转录。"""
+    async def _notify_done(self, status: str, summary: str, content: str | None = None) -> None:
+        """后台完成通知(§6.2/§6.4)三通道:Mailbox 广播(订阅者自取)+ 父引擎
+        _notify 通道(状态栏/UI 消费)+ 父上下文自动注入(CC task-notification
+        同款:user 角色消息,父模型下一轮自然看到,长时间自动化无需用户转
+        述)。摘要截断 200,完整结果进 <result> 段 + session_path 供 Read。"""
         if not self.req.run_in_background:
             return
         get_mailbox().notify(MailMessage(
@@ -425,6 +429,20 @@ class SubagentRunner:
                 "session_path": str(self._session_path or ""),
             },
         ))
+        # §6.4:父上下文自动注入 —— 失败/取消同样通知(父模型需要知道子代理
+        # 为什么消失);fail-open:父 loop 通道缺失/异常仅日志,不拖慢收尾。
+        try:
+            self.parent._notifications.put_nowait(
+                f"<task-notification>\n"
+                f"<agent_id>{self._agent_id}</agent_id>\n"
+                f"<status>{status}</status>\n"
+                f"<summary>{summary[:200]}</summary>"
+                + (f"\n<result>{content}</result>" if content else "")
+                + f"\n<session_path>{self._session_path or ''}</session_path>\n"
+                f"</task-notification>"
+            )
+        except Exception:  # noqa: BLE001 - fail-open,§2.5 通知同款语义
+            logger.exception("parent notification injection failed (fail-open)")
         await self.parent._notify(  # 阶段 09 §2.5:通知 UI 消费路径
             "subagent_done", f"后台子代理 {self.req.name or 'forkContext'} {status}",
             status=status, agent_id=self._agent_id,

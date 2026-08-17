@@ -14,7 +14,7 @@ from codesage.core import Session
 from codesage.core.tasks import get_mailbox, reset_mailbox
 from codesage.engine import AgentLoop, AgentLoopConfig
 from codesage.permissions import PermissionEngine
-from codesage.tools import Tool, ToolRegistry, ToolResult, ToolUseContext
+from codesage.tools import Tool, ToolError, ToolRegistry, ToolResult, ToolUseContext
 from codesage.tools.builtin.agent.agent import AgentTool
 from codesage.tools.builtin.interaction.send_message import SendMessageTool
 from codesage.tools.builtin.interaction.task_list import TaskListTool
@@ -251,3 +251,109 @@ async def test_send_message_by_address_name(tmp_path):
     assert not (await tool._run({"to": "agent-1", "message": "m2"}, ToolUseContext(cwd=tmp_path))).is_error
     assert inbox.get_nowait() == "m2"
     reset_mailbox()
+
+
+# ---- §6.4 后台完成自动注入父上下文(CC task-notification 同款)----
+
+
+async def test_background_completion_auto_injected_into_parent(tmp_path):
+    """后台完成 → <task-notification> 进父 _notifications:status/result 全量
+    进 <result> 段 + session_path 供 Read —— 父模型下一轮自动感知,无需用户
+    转述;前台完成 → 结果经 tool_result 回收,队列保持空。"""
+    llm = RecordingLLM([lambda i: text_event("child done")])
+    parent = _make_parent(llm, tmp_path)
+    runner = _runner(parent, SubagentRequest(prompt="bg", run_in_background=True), tmp_path)
+    runner.launch()
+    await _wait_task(next(iter(parent._subagent_tasks)))
+    msgs = []
+    while True:
+        try:
+            msgs.append(parent._notifications.get_nowait())
+        except asyncio.QueueEmpty:
+            break
+    assert len(msgs) == 1
+    text = msgs[0]
+    assert text.startswith("<task-notification>") and text.endswith("</task-notification>")
+    assert "<status>completed</status>" in text
+    assert "<result>child done</result>" in text
+    assert str(runner._session_path) in text  # 父模型可按此 Read 转录取详情
+
+    # 前台:父阻塞消费结果,不注入
+    parent = _make_parent(llm, tmp_path)
+    runner = _runner(parent, SubagentRequest(prompt="fg"), tmp_path)
+    result = await runner.run()
+    assert not result.is_error
+    assert parent._notifications.empty()
+
+
+def _text_content(content) -> str:
+    """消息 content(str 原样或 block 列表)→ 拼接文本。"""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for c in content:
+        if isinstance(c, str):
+            parts.append(c)
+        elif c.type == "text":
+            parts.append(c.text or "")
+    return "\n".join(parts)
+
+
+async def test_notification_injected_into_parent_message_flow(tmp_path):
+    """§6.4 注入位:父 loop 每轮迭代前 drain _notifications → user 角色进
+    Message 流(模型下一轮看到 + 流式渲染);跨 turn 积压(父 turn 结束时完成
+    的子代理,下一轮输入时注入)。"""
+    llm = RecordingLLM([
+        lambda i: tool_use_event("SendMessage", "s1", '{"to": "ghost", "message": "ping"}'),
+        lambda i: text_event("turn two"),
+    ])
+    parent = _make_parent(llm, tmp_path)
+    parent._notifications.put_nowait(
+        "<task-notification>\n<status>completed</status>\n<summary>bg done</summary>\n"
+        "</task-notification>"
+    )
+    yielded = []
+    async for msg in parent.run("go"):
+        yielded.append(msg)
+    hits = [_text_content(m.content) for m in yielded]
+    assert any("<task-notification>" in t for t in hits), f"yielded={hits!r}"
+    assert len(llm.requests) >= 2
+    texts = [_text_content(m.content) for m in llm.requests[1]]
+    assert any("bg done" in t for t in texts)  # 第二次 LLM 调用时通知已注入
+
+
+async def test_aborted_background_notifies_parent(tmp_path):
+    """§6.4:父中止时后台子代理同样通知父上下文 —— 父模型需要知道子代理消失
+    的原因,否则只见 async_launched 后无声无息。两条路径:子代理自检父 abort
+    → failed;watcher cancel → cancelled(status 由竞态决定,通知必达)。
+    abort 先于 launch:_run_once 入口检查必中,确定性失败路径。"""
+    llm = RecordingLLM([lambda i: text_event("never")])
+    parent = _make_parent(llm, tmp_path)
+    parent.abort.set()
+    runner = _runner(parent, SubagentRequest(prompt="bg", run_in_background=True), tmp_path)
+    runner.launch()
+    task = next(iter(parent._subagent_tasks))
+    await _wait_task(task)  # 失败通知路径:run 正常终态,无异常
+    text = parent._notifications.get_nowait()
+    assert "<task-notification>" in text
+    assert "<status>failed</status>" in text or "<status>cancelled</status>" in text
+
+
+async def test_assembly_failure_notifies_parent(tmp_path):
+    """§6.4:装配失败(未知名 agent)后台场景同样注入 failed —— 否则父只见
+    async_launched,永远不知道子代理失败(任务异常被 _consume_exception 吞)。"""
+    from codesage.agents import AgentRegistry
+
+    llm = RecordingLLM([lambda i: text_event("never")])
+    parent = _make_parent(llm, tmp_path)
+    runner = SubagentRunner(
+        parent,
+        SubagentRequest(prompt="p", name="nope", run_in_background=True),
+        AgentRegistry(),  # builtin 三类型,无 "nope" → KeyError → ToolError
+        session_root=tmp_path / "subagents",
+    )
+    runner.launch()
+    with pytest.raises(ToolError):
+        await _wait_task(next(iter(parent._subagent_tasks)))  # 装配失败原样上抛(S2)
+    text = parent._notifications.get_nowait()  # 但父上下文已收到 failed 通知
+    assert "<status>failed</status>" in text

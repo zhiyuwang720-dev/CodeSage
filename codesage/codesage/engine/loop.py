@@ -235,6 +235,11 @@ class AgentLoop:
         #: loop 时注入 Queue 并注册进 Mailbox,每轮迭代前 drain 注入 Message 流。
         #: 父 loop 默认 None(父不接收队友消息)。
         self._inbox: asyncio.Queue[str] | None = None
+        #: 后台子代理完成通知(13 §6.4,CC task-notification 同款):runner
+        #: 终态 put,每轮迭代前 drain 以 user 角色自动注入父 Message 流 ——
+        #: 长时间自动化任务父模型无需用户转述即可感知后台结果。队列无界,
+        #: 跨 turn 积压(父 turn 结束后完成的子代理,下一轮输入时注入)。
+        self._notifications: asyncio.Queue[str] = asyncio.Queue()
         #: 任务列表归属(13 §11.1):默认本会话 id;子代理装配时覆盖为父的
         #: task_list_id —— 「teammate 共享同一列表」的继承机制。
         self.task_list_id: str = self.session.session_id if self.session is not None else ""
@@ -388,6 +393,23 @@ class AgentLoop:
                         yield team_msg
                         await self._persist(team_msg)
                         state.messages.append(team_msg)
+
+                # 13 §6.4:后台子代理完成通知 → user 角色自动注入(CC
+                # task-notification 同款,steer/_inbox 同构 drain)。非用户提
+                # 交:不过 UserPromptSubmit 钩子;XML 自描述,模型按标签语义
+                # 处理(读 session_path 转录取详情),不改 system prompt。
+                if self._notifications is not None:
+                    notif_msgs: list[str] = []
+                    while True:
+                        try:
+                            notif_msgs.append(self._notifications.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                    for text in notif_msgs:
+                        notif_msg = user_message(text)
+                        yield notif_msg
+                        await self._persist(notif_msg)
+                        state.messages.append(notif_msg)
 
                 # LLM call (checkpoint 1: abort before and after)
                 try:
