@@ -263,3 +263,93 @@ def test_graceful_shutdown_exits_via_event_loop():
         assert exc.value.code == 130
     finally:
         repl._shutdown_started = False  # reset the module guard for other tests
+
+
+# ---- 13 S2:REPL 空闲自动继续(后台通知到达自动消费)----
+
+
+class RecordingLLM(MockLLM):
+    """记录每次请求的 messages 列表(自动轮注入断言用)。"""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.requests = []
+
+    def stream(self, request, model="main"):
+        self.requests.append(request.messages)
+        return super().stream(request, model)
+
+
+def test_auto_continue_ready_conditions(monkeypatch):
+    """触发条件:唤醒信号 set + 无按键 + 未达 MAX_AUTO_CONTINUE → 自动继续;
+    任一不满足 → False(输入优先,达限即停)。"""
+    import codesage.cli.repl as repl
+
+    class FakeLoop:
+        _notifications_event = asyncio.Event()
+
+    loop = FakeLoop()
+    monkeypatch.setattr(repl, "_stdin_pending", lambda: False)
+    assert repl._auto_continue_ready(loop, 0) is False  # 信号未置位
+    loop._notifications_event.set()
+    assert repl._auto_continue_ready(loop, 0) is True
+    assert repl._auto_continue_ready(loop, repl.MAX_AUTO_CONTINUE) is False  # 达连续上限
+    monkeypatch.setattr(repl, "_stdin_pending", lambda: True)
+    assert repl._auto_continue_ready(loop, 0) is False  # 用户按键优先
+
+
+def test_stdin_pending_posix(monkeypatch):
+    """POSIX 分支:select 报告 stdin 可读 → True,否则 False —— 非阻塞,
+    绝不调用阻塞的 _read_line。"""
+    import sys
+
+    import codesage.cli.repl as repl
+
+    monkeypatch.setattr(repl.sys, "platform", "linux")
+    # _stdin_pending 函数体内 import select → 补丁打在真实 select 模块上
+    monkeypatch.setattr("select.select", lambda *a: ([sys.stdin], [], []))
+    assert repl._stdin_pending() is True
+    monkeypatch.setattr("select.select", lambda *a: ([], [], []))
+    assert repl._stdin_pending() is False
+
+
+def test_read_line_posix_skips_prompt_when_drawn(monkeypatch):
+    """空闲等待已画过提示符(prompt_drawn)→ POSIX 分支不再画,避免双提示符。"""
+    import codesage.cli.repl as repl
+
+    monkeypatch.setattr(repl.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "hi")
+    assert repl._read_line({"prompt_drawn": True}) == "hi"
+    assert calls == [""]  # 已画 → 空 prompt
+    assert repl._read_line({"prompt_drawn": False}) == "hi"
+    assert calls[1] != ""  # 未画 → 正常 prompt
+
+
+async def test_auto_continue_turn_injects_notification_with_history(tmp_path, monkeypatch):
+    """自动继续轮:run(None) 消费后台通知进模型请求;loop.history 刷新为会话
+    历史 —— 模型不只见通知 XML(fresh REPL 构造快照为 [] 的实证)。"""
+    from codesage.cli.repl import _auto_continue_turn
+
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [StreamEvent(type="text_delta", text="ok"), StreamEvent(type="done")]],
+        monkeypatch=monkeypatch,
+    )
+    await run_single_turn(loop, "prior question", render=False)  # 会话留下历史
+    assert loop.history == []  # 构造快照:历史不会自己长出来
+    expected = loop.session.load()
+    loop.client = RecordingLLM(
+        [lambda i: [StreamEvent(type="text_delta", text="auto"), StreamEvent(type="done")]]
+    )
+    loop._notifications.put_nowait(
+        "<task-notification>\n<status>completed</status>\n<summary>bg done</summary>\n"
+        "</task-notification>"
+    )
+    loop._notifications_event.set()
+    await _auto_continue_turn(loop, {"show_thinking": False, "transcript": False}, None)
+    assert loop.history == expected  # 刷新为会话线性历史(--continue 同语义)
+    assert loop.last_stop_reason == "completed"
+    texts = [m.content for m in loop.client.requests[0] if isinstance(m.content, str)]
+    assert any("prior question" in t for t in texts)  # 历史在模型请求里
+    assert any("bg done" in t for t in texts)  # 通知经 drain 注入也在请求里
