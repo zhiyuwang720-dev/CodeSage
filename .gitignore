@@ -33,3 +33,7 @@ Kode-CLI/
 # local runtime state
 .codesage/
 codesage/sessions/
+
+# vendored third-party tools (本地内建集成用,不随仓库上传)
+codebase-memory-mcp/
+ponytail/
