@@ -1,6 +1,6 @@
 # 阶段 13:子代理(subagents)(理解文档)
 
-> 权威设计:`docs/specs/13-subagents.md`(实现时逐字执行)。本文是设计摘要 + 决策记录 + 实现期关键裁决(S1-S7 全部交付,S8 收尾,1122 测试全绿,2026-08-15)。
+> 权威设计:`docs/specs/13-subagents.md`(实现时逐字执行)。本文是设计摘要 + 决策记录 + 实现期关键裁决(S1-S7 全部交付,S8 收尾,S9 REPL 空闲自动继续,1136 测试全绿,2026-08-17)。
 
 ## 设计摘要
 
@@ -35,7 +35,7 @@
 6. **S7 L2:is_safe_segment 终检** — slug 清洗逻辑有 bug 时静默穿越 .claude/worktrees/ → worktree_path 逐段终检,非法即拒绝。
 7. **S7 L1:取消路径孤儿 worktree** — CancelledError 时 result=None 无回填渠道 → 保留场景记入父会话操作日志(step_failed + worktree 路径),不留无声孤儿。
 8. **S7 工具参数 > 定义** — effectiveIsolation = req.isolation or definition.isolation;与 cwd 参数互斥(重定向语义重叠,双指歧义 → 明确 ToolError)。
-9. **S8+ 后台结果自动注入父上下文(§6.4)** — 用户裁定「长时间自动化任务必然需要自动注入」,按 CC 方式落地:`_notifications` 队列 + 迭代前 drain(user 角色,steer/_inbox 同构),消息 = `<task-notification>` XML(agent_id/status/summary 200/result 全量/session_path);发出点 = `_notify_done` 三通道之一(仅后台)。与 CC 差异:CC 经 REPL 命令队列(priority later)空闲自动消费 → 模型自动继续;CodeSage 注入时机 = 下一次迭代(同 turn 后续轮次或下一用户输入),REPL 空闲自动继续属后续增强面。
+9. **S8+ 后台结果自动注入父上下文(§6.4)** — 用户裁定「长时间自动化任务必然需要自动注入」,按 CC 方式落地:`_notifications` 队列 + 迭代前 drain(user 角色,steer/_inbox 同构),消息 = `<task-notification>` XML(agent_id/status/summary 200/result 全量/session_path);发出点 = `_notify_done` 三通道之一(仅后台)。与 CC 差异:CC 经 REPL 命令队列(priority later)空闲自动消费 → 模型自动继续。CodeSage 注入时机双轨(已落地,S9):下一次迭代(同 turn 后续轮次或下一用户输入)+ REPL 空闲自动继续 —— 引擎 `_notifications_event` 唤醒信号 + `run(None)` 空输入启动(全空防御 no_input);REPL 50ms 轮询 kbhit/select 非阻塞查 stdin(检测到按键才调阻塞读行,无僵尸线程)↔ 信号 set → 自动轮,MAX_AUTO_CONTINUE=5 上限,输入优先不饿死用户;自动轮前 `loop.history = session.load()` 刷新(构造快照实证=[]),模型带前序对话继续,顺带修复 REPL 同进程跨轮失忆(12 §4.3「REPL 零改动」的快照语义对自动轮失效,REPL 层刷新,引擎零改动)。
 
 ## 红线固化
 
@@ -57,3 +57,4 @@
 - **S6**:任务扩展(owner 自动归属/claim busy/unassign/共享列表/锁回收)—— 全绿;S6 后 1101 passed
 - **S7**:worktree 隔离(21 测试:slug/创建/清理/保留/非 git/互斥/定义级/后台组合/取消清理/status 失败保留/git 缺失/content 携带路径)—— 全绿;最终 **1122 passed, 9 skipped**(2026-08-15)
 - **S8**:本文档 + 主规格修订 + todo 勾选 + 合并 master
+- **S9(§6.4 完整兑现)**:REPL 空闲自动继续 —— 引擎 `_notifications_event` + `run(None)`(S1)+ REPL 空闲自动消费(S2),1132 → **1136 passed, 9 skipped**(2026-08-17);2026-08-17 合并 master

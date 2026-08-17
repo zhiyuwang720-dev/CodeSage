@@ -240,6 +240,9 @@ class AgentLoop:
         #: 长时间自动化任务父模型无需用户转述即可感知后台结果。队列无界,
         #: 跨 turn 积压(父 turn 结束后完成的子代理,下一轮输入时注入)。
         self._notifications: asyncio.Queue[str] = asyncio.Queue()
+        #: 后台通知到达唤醒信号(13 S1):runner put 成功后 set,REPL 空闲时
+        #: 据此自动继续(S2 消费);drain 后队列空则 clear(保活语义见 drain 块)。
+        self._notifications_event: asyncio.Event = asyncio.Event()
         #: 任务列表归属(13 §11.1):默认本会话 id;子代理装配时覆盖为父的
         #: task_list_id —— 「teammate 共享同一列表」的继承机制。
         self.task_list_id: str = self.session.session_id if self.session is not None else ""
@@ -277,8 +280,14 @@ class AgentLoop:
 
     # ---- public entry ----
 
-    async def run(self, user_input: str | list[ContentBlock]) -> AsyncIterator[SessionMessage]:
-        """Run the loop from a user input; yields the conversation messages."""
+    async def run(
+        self, user_input: str | list[ContentBlock] | None = None
+    ) -> AsyncIterator[SessionMessage]:
+        """Run the loop from a user input; yields the conversation messages.
+
+        user_input=None 为自动继续轮(13 S1):无用户输入,仅消费异步到达的
+        通知/队友消息等 —— REPL 空闲自动继续的引擎入口(S2 调用)。
+        """
         # per-run state: a reused loop instance must start fresh (P3-8);
         # recovery_attempts/last_cache_read/stop_feedback_count live in RunState,
         # _active_messages stays an instance projection (repl statusbar reads it)
@@ -288,20 +297,35 @@ class AgentLoop:
         if not self._session_started:
             self._session_started = True
             await self._dispatch_session_start()
-        # UserPromptSubmit 钩子(§6.2):首条输入,user_message() 之前;exit 2 →
-        # 阻止提交(输入擦除),钩子 stderr 作为终结消息
-        user_input, blocked = await self._dispatch_user_prompt(user_input)
-        if blocked is not None:
-            yield await self._stop("hook_blocked", blocked, meta=True)
+        # 13 S1:自动继续轮(None)的防御 —— 无历史且三个注入源(steer/_inbox/
+        # _notifications)全空时没有可注入内容,优雅结束,绝不让空消息进
+        # _ask_model 打空 LLM 请求。S2 REPL 只在通知非空时调 run(None),
+        # 此分支兜底编程误用。
+        if user_input is None and (
+            not self.history
+            and (self.steer_queue is None or self.steer_queue.empty())
+            and (self._inbox is None or self._inbox.empty())
+            and self._notifications.empty()
+        ):
+            yield await self._stop("no_input", "Stopped: no input to continue.", meta=True)
             return
-        first = user_message(user_input)
-        yield first
-        await self._persist(first)
+        if user_input is not None:
+            # UserPromptSubmit 钩子(§6.2):首条输入,user_message() 之前;exit 2 →
+            # 阻止提交(输入擦除),钩子 stderr 作为终结消息
+            user_input, blocked = await self._dispatch_user_prompt(user_input)
+            if blocked is not None:
+                yield await self._stop("hook_blocked", blocked, meta=True)
+                return
+            first = user_message(user_input)
+            yield first
+            await self._persist(first)
 
         # resumed turns start from the prior history; the session file keeps
         # growing so --continue chains naturally across runs
-        state = RunState(messages=[*self.history, first])
-        self._mark_transition(state, "user_input")  # §5.3:run() 入口接收本轮输入
+        state = RunState(messages=[*self.history])
+        if user_input is not None:
+            state.messages.append(first)
+            self._mark_transition(state, "user_input")  # §5.3:run() 入口接收本轮输入
         try:
             while True:
                 # CLI status bar's ctx meter reads this (compaction visibly
@@ -410,6 +434,13 @@ class AgentLoop:
                         yield notif_msg
                         await self._persist(notif_msg)
                         state.messages.append(notif_msg)
+                    # 保活(13 S1):for 循环体有 yield —— 生成器暂停期间 runner
+                    # 可能又 put 新通知并 set event,不能无条件 clear。队列非空
+                    # (drain 间隙新到达)则保持 set,不丢信号;空则清(不再误唤醒)。
+                    if self._notifications.empty():
+                        self._notifications_event.clear()
+                    else:
+                        self._notifications_event.set()
 
                 # LLM call (checkpoint 1: abort before and after)
                 try:

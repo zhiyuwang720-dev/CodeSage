@@ -2593,3 +2593,29 @@ async def test_s3_build_loop_meta_first_line_and_model_change(tmp_path, monkeypa
     assert lines4[-1]["type"] == "model_change"
     assert lines4[-1]["from"] == "sonnet"
     assert lines4[-1]["to"] == "main"
+
+
+# ---- 13 S1:空输入启动(run(None) 自动继续轮)----
+
+
+async def test_run_none_empty_stops_gracefully():
+    """run(None) 且无可注入内容(无历史/steer/inbox/通知全空)→ 优雅结束:
+    yield 一条 meta 消息,不调 LLM —— 兜底编程误用(S2 REPL 只在通知非空时调)。"""
+    llm = FakeLLM([lambda i: text_event("never")])
+    loop = _loop(llm)
+    msgs = [m async for m in loop.run()]
+    assert len(msgs) == 1
+    assert msgs[0].is_meta and "no input" in str(msgs[0].content)
+    assert loop.last_stop_reason == "no_input"
+    assert llm.calls == 0  # 绝不打空 LLM 请求
+
+
+async def test_run_none_with_history_runs_normally():
+    """run(None) 有历史 → 正常进入循环(自动继续轮,历史即上下文),消息流
+    无 user 首条,模型直接基于历史应答。"""
+    llm = FakeLLM([lambda i: text_event("ok")])
+    loop = _loop(llm, history=[user_message("prior")])
+    msgs = [m async for m in loop.run()]
+    assert any(m.role == "assistant" and "ok" in str(m.content) for m in msgs)
+    assert not any(m.role == "user" for m in msgs)
+    assert "prior" in request_text(llm.last_messages)

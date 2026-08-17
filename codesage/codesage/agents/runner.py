@@ -441,6 +441,9 @@ class SubagentRunner:
                 + f"\n<session_path>{self._session_path or ''}</session_path>\n"
                 f"</task-notification>"
             )
+            # 13 S1:通知到达唤醒信号 —— REPL 空闲时父 loop 据此自动继续。
+            # 在 try 内:put 抛异常时按现状仅日志,不 set(无信号不误唤醒)。
+            self.parent._notifications_event.set()
         except Exception:  # noqa: BLE001 - fail-open,§2.5 通知同款语义
             logger.exception("parent notification injection failed (fail-open)")
         await self.parent._notify(  # 阶段 09 §2.5:通知 UI 消费路径

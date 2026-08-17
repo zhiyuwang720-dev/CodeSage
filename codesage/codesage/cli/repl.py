@@ -22,10 +22,14 @@ from .commands import COMMANDS, SlashCommand, find_command
 from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 from .statusbar import StatusBar
 
+#: 13 S2:连续自动继续轮上限 —— 防后台通知刷屏把 REPL 拖进无限续跑;达限
+#: 回等待用户输入,用户下一次输入后计数复位。
+MAX_AUTO_CONTINUE = 5
+
 
 async def run_single_turn(
     loop: AgentLoop,
-    user_input: str,
+    user_input: str | None,
     *,
     show_thinking: bool = False,
     transcript: bool = False,  # Ctrl+O expanded mode
@@ -34,6 +38,9 @@ async def run_single_turn(
     on_after_render: "Callable[[], None] | None" = None,  # status-bar redraw hook
 ) -> RunSummary:
     """One user input, rendered (also used by acceptance tests).
+
+    user_input=None 为 13 S2 自动继续轮:无用户输入,引擎只消费后台通知等
+    异步注入内容(run(None) 语义,REPL 空闲自动继续调用)。
 
     Returns a RunSummary: is_error mirrors the old bool (exit code 1),
     budget_exceeded/max_turns_exceeded flag the engine's structured stop
@@ -145,12 +152,37 @@ async def repl_loop(
         bar.redraw()
 
     try:
+        # 13 S2:连续自动继续轮计数(用户输入后复位)。
+        auto_continues = 0
         while True:
+            # 13 S2 空闲等待:提示符先画,再轮询「唤醒信号 vs 按键」,谁先到
+            # 谁驱动 —— 后台通知到达且 REPL 空闲 → 自动 run(None) 继续;用户
+            # 按键 → 调阻塞的 _read_line 读输入。只在 _stdin_pending() 检测
+            # 到输入后才调 _read_line(否决的 asyncio.wait 超时取消读线程
+            # 方案会留僵尸线程并发抢 stdin,见 handoff team-plan.md)。
+            if not state.get("prompt_drawn"):
+                print(_prompt_text(state), end="", flush=True)
+                state["prompt_drawn"] = True
+            while not _stdin_pending():
+                if not _auto_continue_ready(loop, auto_continues):
+                    await asyncio.sleep(0.05)
+                    continue
+                auto_continues += 1
+                await _auto_continue_turn(
+                    loop, state, bar,
+                    on_after_render=_bar_redraw if bar.enabled else None,
+                )
+                # 自动轮输出把提示行滚走了:回到输入行,下一轮重画提示符
+                state["prompt_drawn"] = False
+                bar.move_to_input()
             try:
                 line = await asyncio.to_thread(_read_line, state)
             except (EOFError, KeyboardInterrupt):
                 print("\nbye")
                 return
+            finally:
+                state["prompt_drawn"] = False  # 输入已被消费,下一轮重画提示符
+            auto_continues = 0  # 用户有输入 → 连续自动轮计数复位
             if line is None:
                 continue  # a hotkey was handled (e.g. Ctrl+O toggled transcript)
             line = line.strip()
@@ -280,6 +312,56 @@ def _drain_steer_queue(loop: AgentLoop) -> str | None:
         return None
 
 
+# ---- 13 S2:REPL 空闲自动继续(后台通知到达自动消费)----
+
+
+def _stdin_pending() -> bool:
+    """非阻塞检查 stdin 是否有按键(自动继续前哨):Windows 用 msvcrt.kbhit,
+    POSIX 用 select。绝不调用阻塞的 _read_line —— 读线程一阻塞,后台通知
+    到达也只能等用户下一次输入(否决的取消读线程方案见 repl_loop 注释)。"""
+    if sys.platform == "win32":
+        import msvcrt
+
+        return msvcrt.kbhit()
+    import select
+
+    return bool(select.select([sys.stdin], [], [], 0)[0])
+
+
+def _auto_continue_ready(loop: AgentLoop, auto_continues: int) -> bool:
+    """13 S2:空闲自动继续触发条件 —— 唤醒信号已置位、未达连续自动轮上限,
+    且用户没有按键(有输入立即让位,输入优先)。"""
+    return (
+        loop._notifications_event.is_set()
+        and auto_continues < MAX_AUTO_CONTINUE
+        and not _stdin_pending()
+    )
+
+
+async def _auto_continue_turn(
+    loop: AgentLoop,
+    state: dict,
+    bar: StatusBar | None,
+    *,
+    on_after_render: "Callable[[], None] | None" = None,
+) -> None:
+    """13 S2:一轮自动继续 —— run(None) 消费后台通知,模型无需用户转述即可
+    感知后台结果。自动轮上下文:loop.history 是构造快照(fresh REPL 为 []),
+    模型只看到通知 XML —— 刷新为会话线性历史(--continue 同语义;刷新一次后
+    后续用户轮也带历史,顺带修复 REPL 跨轮失忆)。"""
+    loop.abort.clear()
+    if bar is not None:
+        bar.print_below(_c("[后台任务完成,自动继续…]", GREY))
+    if loop.session is not None:
+        loop.history = loop.session.load()
+    await run_single_turn(
+        loop, None,
+        show_thinking=state["show_thinking"],
+        transcript=state["transcript"],
+        on_after_render=on_after_render,
+    )
+
+
 def _match_commands(text: str) -> list[SlashCommand]:
     """Slash-command candidates for *text* (prefix match on name + aliases).
 
@@ -366,7 +448,8 @@ def _read_line(state: dict) -> str | None:
     plain input() (no completion — use /expand instead).
     """
     if sys.platform != "win32":
-        line = input(_prompt_text(state))
+        # 13 S2:空闲等待已画过提示符(prompt_drawn)则不再画,避免双提示符
+        line = input("" if state.get("prompt_drawn") else _prompt_text(state))
         bar = state.get("sb")
         if bar is not None and bar.enabled:
             bar.after_submit()  # erase the echoed input, re-enter the scroll region
@@ -374,7 +457,8 @@ def _read_line(state: dict) -> str | None:
     import msvcrt
 
     prompt = _prompt_text(state)
-    print(prompt, end="", flush=True)
+    if not state.get("prompt_drawn"):  # 13 S2:空闲等待已画过则不再画
+        print(prompt, end="", flush=True)
     buf: list[str] = []
     candidates: list[SlashCommand] = []
     sel = 0

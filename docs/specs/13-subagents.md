@@ -294,7 +294,9 @@ get_mailbox() -> Mailbox        # 进程内单例
 - **发出点**:runner `_notify_done` 三通道之一(Mailbox 广播 + `_notify` UI + 父上下文注入),仅后台;前台结果经 tool_result 回收不注入
 - **取消路径**:父 abort 时同样注入(status=cancelled/failed 由竞态决定:watcher cancel → cancelled;子代理自检 `parent.abort` → failed)—— 父模型需要知道子代理为何消失
 - **跨 turn 积压**:父 turn 结束后完成的子代理,通知积压队列,下一轮输入时注入(队列无界,进程单例生命周期)
-- **对齐 CC 差异**:CC 经 REPL 命令队列(priority 'later',用户输入不饿死)空闲自动消费 → 模型自动继续;CodeSage REPL 单 turn 结构下,注入时机 = 下一次迭代(同 turn 后续轮次或下一用户输入),自动化长任务下父 run 需保持迭代或等待通知唤醒(后续增强面)
+- **对齐 CC 差异(已落地,实现期裁决 S8+/S9)**:CC 经 REPL 命令队列(priority 'later',用户输入不饿死)空闲自动消费 → 模型自动继续。CodeSage 单 turn 结构下注入时机双轨:
+  - **下一次迭代**(同 turn 后续轮次或下一用户输入)—— 引擎既有 drain 路径
+  - **REPL 空闲自动继续**(用户裁定「长时间自动化任务必然需要自动注入」的完整兑现)—— 引擎加 `_notifications_event` 唤醒信号 + `run(None)` 空输入启动(跳过 UserPromptSubmit/first 注入,全空防御 no_input 优雅结束);REPL 每轮 turn 后进入空闲等待:50ms 轮询 `_stdin_pending()`(win32 kbhit / POSIX select 非阻塞,检测到按键才调阻塞读行,绝无僵尸线程)↔ 通知信号 set → 自动 `run(None)` 轮,`MAX_AUTO_CONTINUE=5` 连续上限,达限剩余通知留队列由下一用户轮 drain 消费(输入优先,不饿死用户);自动轮前 `loop.history = session.load()` 刷新构造快照,模型带前序对话继续(顺带修复 REPL 同进程跨轮失忆)
 
 ## 7. 权限(只收窄,审计不变)
 
