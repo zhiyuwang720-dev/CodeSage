@@ -357,3 +357,84 @@ async def test_assembly_failure_notifies_parent(tmp_path):
         await _wait_task(next(iter(parent._subagent_tasks)))  # 装配失败原样上抛(S2)
     text = parent._notifications.get_nowait()  # 但父上下文已收到 failed 通知
     assert "<status>failed</status>" in text
+
+
+# ---- 13 S1:唤醒信号 + 空输入启动(REPL 空闲自动继续的引擎入口)----
+
+
+def _notif_xml(summary):
+    return (f"<task-notification>\n<status>completed</status>\n<summary>{summary}</summary>\n"
+            "</task-notification>")
+
+
+async def test_background_done_sets_wake_event(tmp_path):
+    """后台完成 → _notifications_event 被 set(§6.4 put 成功后),REPL 空闲
+    据此自动继续(S2 消费)。"""
+    llm = RecordingLLM([lambda i: text_event("child done")])
+    parent = _make_parent(llm, tmp_path)
+    assert not parent._notifications_event.is_set()
+    runner = _runner(parent, SubagentRequest(prompt="bg", run_in_background=True), tmp_path)
+    runner.launch()
+    await _wait_task(next(iter(parent._subagent_tasks)))
+    assert parent._notifications_event.is_set()
+    assert not parent._notifications.empty()
+
+
+async def test_drain_clears_wake_event(tmp_path):
+    """drain 消费后队列空 → event clear(不残留误唤醒)。"""
+    llm = RecordingLLM([lambda i: text_event("turn")])
+    parent = _make_parent(llm, tmp_path)
+    parent._notifications.put_nowait(_notif_xml("bg done"))
+    parent._notifications_event.set()
+    async for _m in parent.run("go"):
+        pass
+    assert parent._notifications.empty()
+    assert not parent._notifications_event.is_set()
+
+
+async def test_drain_keeps_event_on_mid_drain_arrival(tmp_path):
+    """保活:drain 的 yield 暂停期间新通知到达 → event 保持 set(无条件 clear
+    会丢信号)。父 turn 完成后通知留队列 —— 正是 S2 调 run(None) 的场景。"""
+    llm = RecordingLLM([lambda i: text_event("answer")])
+    parent = _make_parent(llm, tmp_path)
+    parent._notifications.put_nowait(_notif_xml("A"))
+    parent._notifications_event.set()
+    gen = parent.run("go")
+    await gen.__anext__()  # 首条 user 消息
+    m = await gen.__anext__()  # drain 中 yield 通知 A(生成器暂停于此)
+    assert "<task-notification>" in _text_content(m.content)
+    # 暂停期间(runner 在父 turn 间隙完成)新通知到达
+    parent._notifications.put_nowait(_notif_xml("B"))
+    parent._notifications_event.set()
+    m2 = await gen.__anext__()  # 推进:drain 收尾 + 保活,回到主循环
+    assert m2.role == "assistant"
+    # 队列非空(通知 B 未消费)→ 保活后 event 必须仍 set
+    assert parent._notifications_event.is_set()
+    assert not parent._notifications.empty()
+    # 父 turn 就此完成(无工具调用);B 留队列、信号保持 —— S2 据此 run(None)
+    rest = [x async for x in gen]
+    assert rest == []
+    assert parent._notifications_event.is_set()
+    # 自动继续轮消费 B,终态队列空 + event clear
+    drained = [x async for x in parent.run()]
+    assert any("B" in _text_content(x.content) for x in drained)
+    assert parent._notifications.empty()
+    assert not parent._notifications_event.is_set()
+
+
+async def test_run_none_injects_pending_notification(tmp_path):
+    """run(None) 自动继续轮:预置通知正常注入(模型请求可见),消息流无首条
+    空 user 消息。"""
+    llm = RecordingLLM([lambda i: text_event("auto answer")])
+    parent = _make_parent(llm, tmp_path)
+    parent._notifications.put_nowait(_notif_xml("bg done"))
+    parent._notifications_event.set()
+    yielded = []
+    async for msg in parent.run():
+        yielded.append(msg)
+    # 首条注入消息即通知(user 角色),不是空输入消息
+    assert yielded[0].role == "user"
+    assert "<task-notification>" in _text_content(yielded[0].content)
+    # 模型请求里能看到通知
+    texts = [_text_content(m.content) for m in llm.requests[0]]
+    assert any("bg done" in t for t in texts)
