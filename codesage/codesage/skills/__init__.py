@@ -11,7 +11,9 @@
 
 from .bundled import bundled_skills, register_bundled_skill
 from .loader import load_dir
+from .prompt import get_prompt_for_command, substitute_arguments, substitute_env_vars
 from .registry import SkillRegistry
+from .shell import SkillPromptError, execute_shell_blocks
 from .types import (
     FRONTMATTER_KEYS,
     SAFE_SKILL_PROPERTIES,
@@ -23,9 +25,14 @@ __all__ = [
     "FRONTMATTER_KEYS",
     "SAFE_SKILL_PROPERTIES",
     "SkillDefinition",
+    "SkillPromptError",
     "SkillRegistry",
     "bundled_skills",
+    "execute_shell_blocks",
+    "get_prompt_for_command",
     "load_dir",
     "register_bundled_skill",
     "skill_has_only_safe_properties",
+    "substitute_arguments",
+    "substitute_env_vars",
 ]
