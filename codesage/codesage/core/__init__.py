@@ -2,8 +2,18 @@
 
 Session storage migrated to the core/session package (phase 12); the export
 surface is unchanged — all existing imports keep working.
+
+Shared markdown frontmatter parsing (phase 14 S1) lives in core/frontmatter:
+extracted from agents/loader.py so both agents (13) and skills (14) reuse it.
 """
 
+from .frontmatter import (
+    parse_flow_list,
+    parse_flow_map,
+    parse_frontmatter,
+    parse_scalar,
+    parse_value,
+)
 from .messages import SessionMessage, assistant_message, user_message
 from .normalize import NO_CONTENT_MESSAGE, normalize_for_api
 from .session import (
@@ -55,6 +65,11 @@ __all__ = [
     "linear_messages",
     "list_sessions",
     "numbered_entries",
+    "parse_flow_list",
+    "parse_flow_map",
+    "parse_frontmatter",
+    "parse_scalar",
+    "parse_value",
     "restore_session",
     "make_bookmark_entry",
     "make_branch_summary_entry",

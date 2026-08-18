@@ -1,10 +1,10 @@
-"""Agent definition loading (phase 13 S1): minimal frontmatter parser,
-per-directory loading with mtime-keyed caching.
+"""Agent definition loading (phase 13 S1): per-directory loading with
+mtime-keyed caching.
 
-Minimal YAML subset on purpose (zero dependencies, spec §3.2): scalars,
-flow lists (comma or space separated), one-level maps. Unknown keys are
-ignored; malformed files or files without a name are silently skipped (CC
-parity, spec §3.3).
+Frontmatter parsing lives in the shared ``core/frontmatter.py`` (extracted
+in phase 14 S1 — both agents and skills reuse it, spec 14 §4.1). Unknown
+keys are ignored; malformed files or files without a name are silently
+skipped (CC parity, spec §3.3).
 """
 
 from __future__ import annotations
@@ -15,123 +15,13 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from ..core.frontmatter import parse_frontmatter
 from .types import AgentDefinition
 
 #: frontmatter keys parsed as flow lists (comma/space separated, brackets ok).
 _LIST_FIELDS = frozenset({"tools", "disallowed_tools"})
 #: frontmatter keys parsed as maps (flow ``{...}`` or indented one-level).
 _MAP_FIELDS = frozenset({"hooks"})
-
-
-def _parse_scalar(raw: str) -> Any:
-    raw = raw.strip()
-    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
-        return raw[1:-1]
-    low = raw.lower()
-    # YAML 1.1 boolean spellings (js-yaml default schema — CC parity):
-    # yes/no/on/off must not survive as strings (bool("no") is True).
-    if low in ("true", "yes", "on"):
-        return True
-    if low in ("false", "no", "off"):
-        return False
-    if low in ("null", "~"):
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return raw
-
-
-def _parse_flow_list(raw: str) -> list[str]:
-    raw = raw.strip()
-    if raw.startswith("[") and raw.endswith("]"):
-        raw = raw[1:-1]
-    return [p.strip("'\"") for p in raw.replace(",", " ").split() if p]
-
-
-def _parse_flow_map(raw: str) -> dict[str, Any]:
-    raw = raw.strip()
-    if raw.startswith("{") and raw.endswith("}"):
-        raw = raw[1:-1]
-    result: dict[str, Any] = {}
-    for part in raw.split(","):
-        k, _, v = part.partition(":")
-        k = k.strip()
-        if k:
-            result[k] = _parse_scalar(v)
-    return result
-
-
-def _parse_value(raw: str, key: str) -> Any:
-    if key in _LIST_FIELDS:
-        return _parse_flow_list(raw)
-    if key in _MAP_FIELDS and raw.startswith("{"):
-        return _parse_flow_map(raw)
-    return _parse_scalar(raw)
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, Any], int] | None:
-    """Parse a ``---``-fenced frontmatter block.
-
-    Returns (parsed, index of the line after the closing fence), or None
-    when no fence pair is present — an unterminated opening fence counts as
-    malformed (gray-matter/CC treat it as no frontmatter → no agent, spec
-    §3.3). Single pass: the body always starts after the closing fence, so
-    ``---`` inside the body stays body text.
-    """
-    lines = text.splitlines()
-    # BOM: Windows editors commonly emit it; str.strip() keeps ﻿ (Cf).
-    if not lines or lines[0].lstrip("﻿").strip() != "---":
-        return None
-    end: int | None = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return None
-    result: dict[str, Any] = {}
-    i = 1
-    while i < end:
-        line = lines[i]
-        if not line.strip() or line.lstrip().startswith("#"):
-            i += 1
-            continue
-        key, sep, rest = line.partition(":")
-        key = key.strip()
-        if not sep or not key:
-            i += 1
-            continue
-        rest = rest.strip()
-        if rest or key not in _MAP_FIELDS:
-            result[key] = _parse_value(rest, key) if rest else None
-            i += 1
-            continue
-        # One-level map (e.g. hooks): indented ``subkey: value`` lines.
-        sub: dict[str, Any] = {}
-        j = i + 1
-        while j < end:
-            subline = lines[j]
-            if subline[:1] in (" ", "\t"):
-                j += 1
-                if not subline.strip() or subline.lstrip().startswith("#"):
-                    continue  # blank/comment lines inside the map are skipped
-                sk, ssep, sv = subline.strip().partition(":")
-                if ssep and sk:
-                    sub[sk] = _parse_scalar(sv)
-                continue
-            if not subline.strip():
-                # blank line: belongs to the map when the next line is indented
-                nxt = j + 1
-                while nxt < end and not lines[nxt].strip():
-                    nxt += 1
-                if nxt < end and lines[nxt][:1] in (" ", "\t"):
-                    j += 1
-                    continue
-            break
-        result[key] = sub
-        i = j
-    return result, end + 1
 
 
 def _digest(path: Path) -> str:
@@ -199,7 +89,7 @@ def _scan_cached(
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        parsed = _parse_frontmatter(text)
+        parsed = parse_frontmatter(text, list_fields=_LIST_FIELDS, map_fields=_MAP_FIELDS)
         if parsed is None:
             continue
         fm, body_start = parsed
