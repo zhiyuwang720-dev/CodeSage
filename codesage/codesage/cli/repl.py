@@ -18,9 +18,15 @@ from pathlib import Path
 from ..engine import AgentLoop, RunSummary
 from ..engine.session import _summarize_run
 from ..engine.tokens import estimate_context_tokens
+from ..skills.prompt import get_prompt_for_command  # 阶段 14 §6.1:斜杠技能兜底
 from .commands import COMMANDS, SlashCommand, find_command
 from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 from .statusbar import StatusBar
+
+try:  # 类型标注用(SkillRegistry 仅兜底路径使用,懒解析避免装配环)
+    from ..skills import SkillRegistry
+except ImportError:  # pragma: no cover — 技能包恒存在,防御性兜底
+    SkillRegistry = None  # type: ignore[misc,assignment]
 
 #: 13 S2:连续自动继续轮上限 —— 防后台通知刷屏把 REPL 拖进无限续跑;达限
 #: 回等待用户输入,用户下一次输入后计数复位。
@@ -112,11 +118,17 @@ async def repl_loop(
     *,
     cwd: Path,
     show_thinking: bool = False,
+    skills: "SkillRegistry | None" = None,  # 阶段 14 §6.1:斜杠技能兜底注册表(None = 禁用)
 ) -> None:
     _install_signal_handlers(loop)
     # /show-thinking toggles the flag; /mode writes loop.mode via "loop";
     # transcript toggles Ctrl+O expanded rendering for subsequent messages.
     state = {"show_thinking": show_thinking, "loop": loop, "transcript": False}
+    if skills is None:
+        # 未显式传入(如装配层挂到 loop 上的注册表) → 回退读取
+        skills = getattr(loop, "_skills", None)
+    state["skills"] = skills  # 14 §6.1:技能兜底查找(内置命令优先)
+    state["_bar_redraw"] = None  # 技能 inline 调用时经此重画状态栏(见 _invoke_skill)
     # steer queue is the single source of truth for mid-run inputs (PI-06):
     # the capture thread appends to captured_lines (GIL-atomic); the main
     # thread transfers them into the queue before/after each turn, and the
@@ -150,6 +162,8 @@ async def repl_loop(
         # expansion), not live model activity — no engine event feeds that
         bar.thinking_on = state["show_thinking"]
         bar.redraw()
+
+    state["_bar_redraw"] = _bar_redraw if bar.enabled else None
 
     try:
         # 13 S2:连续自动继续轮计数(用户输入后复位)。
@@ -547,17 +561,64 @@ def _read_line(state: dict) -> str | None:
 
 async def _handle_slash_command(loop: AgentLoop, line: str, state: dict) -> bool:
     """Handle one slash command via the CC-09 registry; *state* carries REPL
-    flags ({"show_thinking", "loop"}). True = exit the REPL."""
+    flags ({"show_thinking", "loop"}). True = exit the REPL.
+
+    阶段 14 §6.1:find_command 未命中 → 技能兜底查找 —— 内置命令恒优先
+    (CC builtInCommandNames 同款),技能 aliases 同样参与;技能不可用户调用
+    报错;fork 技能走 §8 隔离子代理;inline 技能解析提示词作为下一轮
+    user 消息复用 run_single_turn 既有路径。
+    """
     parts = line.strip().split(maxsplit=1)
     cmd = find_command(parts[0])
     if cmd is None:
-        print(f"unknown command: {parts[0]} (try /help)")
-        return False
+        return await _invoke_skill_fallback(loop, parts, state)
     args = parts[1].split() if len(parts) > 1 else []
     result = cmd.handler(args, state)
     if inspect.isawaitable(result):  # async handlers (e.g. /compact) awaited here
         result = await result
     return result
+
+
+async def _invoke_skill_fallback(loop: AgentLoop, parts: list[str], state: dict) -> bool:
+    """斜杠命令未命中时尝试技能兜底(14 §6.1);仍未命中 → 打印 unknown。"""
+    skills = state.get("skills")
+    if skills is None:
+        print(f"unknown command: {parts[0]} (try /help)")
+        return False
+    try:
+        skill = skills.get(parts[0].lstrip("/"))  # 技能名 + aliases 参与兜底
+    except KeyError:
+        print(f"unknown command: {parts[0]} (try /help)")
+        return False
+    if not skill.user_invocable:
+        print(f"skill {skill.name!r} cannot be invoked by the user")
+        return False
+    args_text = parts[1] if len(parts) > 1 else ""
+    if skill.context == "fork":
+        # §8 fork 执行:隔离子代理,结果直接回显(14 S6 落地)
+        from ..skills.fork import execute_forked_skill  # 阶段 14 S6
+
+        result = await execute_forked_skill(skill, args_text, loop=loop, registry=skills)
+        text = result.content if isinstance(result.content, str) else str(result.content)
+        print(text)
+        return False
+    # inline:解析提示词作为下一轮 user 消息,复用 run_single_turn 既有路径
+    prompt = await get_prompt_for_command(
+        skill,
+        args_text,
+        session_id=loop.session.session_id if loop.session else "",
+        cwd=loop.cwd,
+        loop=loop,
+    )
+    loop.grant_skill_tools(skill.allowed_tools)  # §7.1:技能授权,会话内累积
+    await run_single_turn(
+        loop,
+        prompt,
+        show_thinking=state["show_thinking"],
+        transcript=state["transcript"],
+        on_after_render=state.get("_bar_redraw"),
+    )
+    return False
 
 
 def _prompt_mark() -> str:

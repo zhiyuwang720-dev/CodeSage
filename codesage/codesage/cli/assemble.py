@@ -17,7 +17,9 @@ from ..engine import AgentLoop, AgentLoopConfig, CompactionConfig, build_context
 from ..hooks import HookJsonlSink, load_hook_manager
 from ..permissions import JsonlAuditSink, PermissionEngine
 from ..permissions.store import load_permission_rules
+from ..skills import SkillRegistry
 from ..tools import ToolRegistry, get_builtin_tools
+from ..tools.builtin.skill import SkillTool
 from .base_prompt import get_base_prompt
 
 
@@ -47,6 +49,14 @@ def build_loop(
     audit = JsonlAuditSink(paths.config_dir() / "audit.jsonl")
     permissions = PermissionEngine(audit_sink=audit)
     registry = ToolRegistry(get_builtin_tools())
+    # 阶段 14:技能系统装配 —— SkillRegistry(用户 + 项目 + 内置)与 SkillTool
+    # 一并注入;技能列表作为 ContextBundle 的 availableSkills 段(08 预留扩展位,
+    # §9.1,归 fixed 类恒保留);loop 挂 _skills 供 repl 斜杠兜底读取
+    skill_registry = SkillRegistry.from_default_paths(cwd)
+    registry.register(SkillTool(skill_registry))
+    bundle = build_context_bundle(cwd)
+    if listing := skill_registry.listing_text(cwd=cwd):
+        bundle.sections.append(("availableSkills", listing))
     # 阶段 09:事件钩子 —— 快照语义(§3.2:此处解析一次,会话中 settings.json 修改
     # 不生效);hooks.jsonl = 执行流审计(§8.1);http_hook_urls 为 settings 顶层
     # 白名单字段(extra=allow,缺省 None = 全禁,§4.9)
@@ -83,14 +93,14 @@ def build_loop(
         if current not in (None, model):
             session.append_model_change(to=model, from_=current)
 
-    return AgentLoop(
+    loop = AgentLoop(
         AgentLoopConfig(
             client=client,
             tools=registry,
             permissions=permissions,
             request_permission=request_permission,
             system_prompt=system_prompt if system_prompt is not None else get_base_prompt(str(cwd)),
-            context_bundle=build_context_bundle(cwd),  # memoize: once per session (S4)
+            context_bundle=bundle,  # memoize: once per session (S4);含 availableSkills 段(14 §9.1)
             compaction=CompactionConfig(),  # PI-05 auto-compact (S6)
             model=model,
             max_turns=max_turns,
@@ -103,6 +113,9 @@ def build_loop(
         ),
         mode=mode,  # 会话级运行时切换(/mode 命令写实例,不进 config)
     )
+    # 阶段 14 §6.1:装配层挂技能注册表(repl 斜杠兜底读取;与 SkillTool 共用)
+    loop._skills = skill_registry
+    return loop
 
 
 def _new_session_id() -> str:
