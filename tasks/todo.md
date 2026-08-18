@@ -45,9 +45,9 @@
 - [x] **13 subagents 子代理** ✅ 2026-08-15(`feat/13-subagents`)
   - 验收:agent 定义(frontmatter + 优先级合并 + 内建三类型 general-purpose/Explore/Plan);Agent 工具(前台嵌套 + 后台 + forkContext + worktree 隔离);SendMessage 队友通信;禁递归工具
   - 验证:嵌套调用单测(结果回收/fork 三件套/递归拒绝/前后台/失败传播/权限矩阵/worktree 隔离);**1122 passed, 9 skipped**
-- [ ] **14 skills 技能系统** (`feat/14-skills`)
-  - 验收:skill 发现/加载/契约;allowed_tools;斜杠命令机制
-  - 验证:技能加载与权限联动单测
+- [x] **14 skills 技能系统** ✅ 2026-08-18(`feat/14-skills`)
+  - 验收:skill 定义(frontmatter 白名单 + 项目>用户>内置合并 + 内置层机制);加载(目录扫描 + realpath 去重 + lru 缓存 + 内容懒执行);提示词管道(参数/环境变量/内联 shell 替换);双路径调用(斜杠命令兜底 + SkillTool 自动触发);allowed_tools 权限联动(只豁免默认 ask,deny/写保护/plan 在前);技能列表注入(system-reminder 段);压缩后技能恢复
+  - 验证:技能加载与权限联动单测 + 替换矩阵 + 双路径调用单测 + 压缩恢复端到端;**1240 passed, 9 skipped**(阶段 14 交付基线)
 - [ ] **15 mcp MCP 客户端** (`feat/15-mcp`)
   - 验收:stdio/HTTP 传输;mcp__ 命名 + needsPermissions 强制;resources;OAuth PKCE
   - 验证:mock server 单测
