@@ -53,10 +53,12 @@ SUBAGENT_DISALLOWED_TOOL_NAMES: frozenset[str] = frozenset({"Agent"})
 #: 后台子代理白名单(L3,spec §4):能干活(read/search/bash/edit/write/task 协作),
 #: 排除需交互弹窗的元工具;权限仍走 min 收窄 + 审计,ask→deny 无 UI 阻塞。
 #: SendMessage 为队友协作工具,与 Task×4 同族(§6.3,CC IN_PROCESS_TEAMMATE_
-#: ALLOWED_TOOLS 实测 = Task×4 + SendMessage)。
+#: ALLOWED_TOOLS 实测 = Task×4 + SendMessage)。Skill(14 §11.2):CC L3 实测含
+#: Skill —— 后台子代理可调用技能执行专门工作流;Skill 非元工具(§8 递归边界),
+#: 不进 SUBAGENT_DISALLOWED_TOOL_NAMES。
 ASYNC_AGENT_ALLOWED_TOOLS: frozenset[str] = frozenset(
     {"Read", "Grep", "Glob", "LS", "Bash", "Edit", "Write",
-     "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage"}
+     "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage", "Skill"}
 )
 
 #: forkContext(§5.2):历史截断上限 —— 只继承最近 60 条消息,防父历史过长
@@ -193,6 +195,7 @@ class SubagentRequest:
     cwd: Path | None = None  # 默认父 cwd;与 isolation 互斥(S7)
     isolation: Literal["worktree"] | None = None  # S7
     address_name: str | None = None  # SendMessage 寻址名(S5)
+    allowed_tools: frozenset[str] | None = None  # 14 §8:技能 fork 初始授权(授权而非收窄)
 
 
 class SubagentRunner:
@@ -248,9 +251,21 @@ class SubagentRunner:
         parent, req = self.parent, self.req
         definition = self._resolve_definition()
         agent_id = self._agent_id
-        tools = ToolRegistry(
-            assemble_subagent_tools(parent.tools.all(), definition, req.run_in_background)
-        )
+        pool = assemble_subagent_tools(parent.tools.all(), definition, req.run_in_background)
+        # 14 §11.1:子代理 Skill 可见性收窄 —— 定义声明 skills 时,SkillTool 换为
+        # registry.subset(definition.skills);未声明 → 继承父 SkillTool(CC L3
+        # 默认放行 Skill)。
+        skills_note = ""
+        if definition is not None and definition.skills and parent.tools.get("Skill") is not None:
+            from ..skills import SkillRegistry  # 函数级 import:破装配环
+
+            parent_skill_tool = parent.tools.get("Skill")
+            subset_registry = parent_skill_tool._registry.subset(definition.skills)
+            pool = [t if t.name != "Skill" else parent_skill_tool.__class__(subset_registry) for t in pool]
+            skills_note = "\n\n可用技能(仅以下列表,按名调用 Skill 工具):" + "\n".join(
+                f"- {s.name}: {s.description}" for s in subset_registry.all()
+            )
+        tools = ToolRegistry(pool)
         max_turns = req.max_turns or (definition.max_turns if definition else None) or 50
         model = req.model or (definition.model if definition else None) or parent.model
         cwd = (req.cwd or parent.cwd).resolve()
@@ -272,6 +287,7 @@ class SubagentRunner:
         system = build_subagent_system_prompt(
             parent.system_prompt, req.name or agent_id, body, parent.task_list_id, cwd
         )
+        system += skills_note  # 14 §11.1:收窄后的技能静态列表随系统提示列出
         # 注:Agent 工具输入暂不读 permission_mode 参数(§8 参数链只参数化 model/
         # max_turns),request 级仅编程入口可达;当前实际生效面 = 定义级声明。
         declared = req.permission_mode or (definition.permission_mode if definition else None)
@@ -306,6 +322,10 @@ class SubagentRunner:
         # agent_name 仍按 spec 显示 "forkContext",此处只管 owner 身份)。
         loop.task_list_id = parent.task_list_id
         loop._agent_name = req.name or agent_id
+        # 14 §8:技能 fork 初始授权 —— allowed_tools 作为子代理 loop 的
+        # 初始 skill 授权(§7.1 同语义:只豁免默认 ask,授权而非收窄)。
+        if req.allowed_tools:
+            loop.grant_skill_tools(req.allowed_tools)
         # 13 §11.2(单例 last-writer-wins):子代理 loop 构造时若覆盖了父对
         # 存储单例 on_change 的接线(子代理必然后构造),恢复父的 —— 否则
         # 父会话自己的 Task* 事件将以子代理的 session_id 派发。

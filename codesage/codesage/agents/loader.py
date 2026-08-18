@@ -19,7 +19,7 @@ from ..core.frontmatter import parse_frontmatter
 from .types import AgentDefinition
 
 #: frontmatter keys parsed as flow lists (comma/space separated, brackets ok).
-_LIST_FIELDS = frozenset({"tools", "disallowed_tools"})
+_LIST_FIELDS = frozenset({"tools", "disallowed_tools", "skills"})
 #: frontmatter keys parsed as maps (flow ``{...}`` or indented one-level).
 _MAP_FIELDS = frozenset({"hooks"})
 
@@ -58,6 +58,8 @@ def build_definition(
         # format cannot express "no tools at all" — acceptable for now
         tools=frozenset(fm["tools"]) if fm.get("tools") else None,
         disallowed_tools=frozenset(fm.get("disallowed_tools") or ()),
+        # 14 §11.1:skills 字段解析(子代理 Skill 可见性收窄名单)
+        skills=frozenset(fm.get("skills") or ()),
         model=model,
         max_turns=max_turns,
         permission_mode=fm.get("permission_mode"),

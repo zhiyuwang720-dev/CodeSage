@@ -130,6 +130,27 @@ async def test_slash_alias_hit(monkeypatch):
     assert captured["prompt"] == "Hello world"
 
 
+async def test_slash_fork_skill_goes_to_fork(monkeypatch):
+    """fork 技能 → execute_forked_skill(§8),不走 run_single_turn。"""
+    from codesage.skills import fork as fork_mod
+
+    captured = {}
+
+    async def fake_execute(skill, args, *, loop, registry):
+        captured["skill"] = skill.name
+        captured["args"] = args
+        return SimpleNamespace(content="fork result", is_error=False, metadata={})
+
+    monkeypatch.setattr(fork_mod, "execute_forked_skill", fake_execute)
+    reg = SkillRegistry(builtin=[_skill("f", context="fork", agent="general-purpose")])
+    loop = _FakeLoop()
+    captured_run = _capture_run(monkeypatch)
+    result = await _handle_slash_command(loop, "/f hello", _state(reg, loop))
+    assert result is False
+    assert captured == {"skill": "f", "args": "hello"}
+    assert captured_run["prompt"] is None  # fork 不经 run_single_turn
+
+
 # ---- 装配层:SkillTool + availableSkills 段注入(§9.1)----
 
 def test_assemble_wires_skills(monkeypatch, tmp_path):

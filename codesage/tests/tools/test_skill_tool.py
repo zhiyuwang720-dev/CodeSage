@@ -21,8 +21,10 @@ class FakeLLM:
     def __init__(self, script):
         self.script = script
         self.calls = 0
+        self.last_messages = None
 
     def stream(self, request, model="main"):
+        self.last_messages = request.messages
         return self._gen()
 
     async def _gen(self):
@@ -161,3 +163,63 @@ async def test_engine_no_grant_without_metadata():
     loop = _loop(llm, [tool])
     [m async for m in loop.run("hi")]
     assert loop._skill_allowed_tools == set()  # 空授权集不产生 grant
+
+
+# ---- fork 技能(§8,复用 SubagentRunner)----
+
+def _fork_skill() -> SkillDefinition:
+    return SkillDefinition(
+        name="forky", description="d", body="work on $ARGUMENTS",
+        context="fork", agent="general-purpose", allowed_tools=frozenset({"Read"}),
+    )
+
+
+async def test_fork_skill_end_to_end(tmp_path, monkeypatch):
+    """fork 技能 → SubagentRunner 隔离子代理执行 → 结果回收为 tool_result。"""
+    from codesage.agents import SubagentRunner as _OrigRunner
+
+    def patched_runner(parent, req, registry):
+        return _OrigRunner(parent, req, registry, session_root=tmp_path / "subagents")
+
+    monkeypatch.setattr("codesage.agents.SubagentRunner", patched_runner)
+
+    tool = SkillTool(SkillRegistry(builtin=[_fork_skill()]))
+    llm = FakeLLM([
+        lambda i: tool_use_event("Skill", "t1", json.dumps({"skill": "forky", "args": "x"})),
+        lambda i: text_event("subagent answer"),  # 子代理的模型回答
+        lambda i: text_event("parent final"),
+    ])
+    async def _approve(*a, **k):
+        return True
+
+    loop = _loop(llm, [tool], request_permission=_approve)
+    collected = [m async for m in loop.run("hi")]
+    assert llm.calls == 3  # 父 turn1 + 子 turn1 + 父 turn2
+    assert loop.last_stop_reason == "completed"
+    # 子代理结果以 tool_result 形态回流入父对话(工具边界隔离)
+    assert "subagent answer" in str(llm.last_messages)
+
+
+async def test_bundled_simplify_fork_end_to_end(tmp_path, monkeypatch):
+    """演示内置技能 simplify(context=fork)端到端:bundled 层 + fork 双验证。"""
+    from codesage.agents import SubagentRunner as _OrigRunner
+    from codesage.skills import bundled_skills
+
+    def patched_runner(parent, req, registry):
+        return _OrigRunner(parent, req, registry, session_root=tmp_path / "subagents")
+
+    monkeypatch.setattr("codesage.agents.SubagentRunner", patched_runner)
+
+    tool = SkillTool(SkillRegistry(builtin=bundled_skills()))
+    llm = FakeLLM([
+        lambda i: tool_use_event("Skill", "t1", json.dumps({"skill": "simplify", "args": "x = 1"})),
+        lambda i: text_event("simplified"),
+        lambda i: text_event("parent final"),
+    ])
+    async def _approve(*a, **k):
+        return True
+
+    loop = _loop(llm, [tool], request_permission=_approve)
+    [m async for m in loop.run("hi")]
+    assert llm.calls == 3
+    assert "simplified" in str(llm.last_messages)

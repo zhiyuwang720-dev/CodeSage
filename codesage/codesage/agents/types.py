@@ -24,6 +24,7 @@ class AgentDefinition:
     body: str  # text after the frontmatter fence = subagent system prompt
     tools: frozenset[str] | None = None  # None = full parent pool; else whitelist
     disallowed_tools: frozenset[str] = frozenset()
+    skills: frozenset[str] = frozenset()  # 14 §11.1:子代理 Skill 可见性收窄名单(未声明 = 继承父)
     model: str | None = None  # 'inherit', pointer, or literal; None ≡ 'inherit'
     max_turns: int | None = 50  # None = inherit parent value
     permission_mode: str | None = None  # None = inherit parent mode

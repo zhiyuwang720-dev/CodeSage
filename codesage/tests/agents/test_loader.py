@@ -227,6 +227,16 @@ def test_numeric_name_skipped(tmp_path):
     assert load_dir(tmp_path) == {}
 
 
+def test_skills_field_parsed(tmp_path):
+    """14 §11.1:skills 字段(子代理 Skill 可见性收窄名单)经 flow-list 解析。"""
+    _write_agent(tmp_path, "w.md", "name: w\ndescription: d\nskills: [review, simplify]\n")
+    assert load_dir(tmp_path)["w"].skills == frozenset({"review", "simplify"})
+    _write_agent(tmp_path, "w2.md", "name: w2\ndescription: d\nskills: review simplify\n")
+    assert load_dir(tmp_path)["w2"].skills == frozenset({"review", "simplify"})
+    _write_agent(tmp_path, "w3.md", "name: w3\ndescription: d\n")  # 缺省空集
+    assert load_dir(tmp_path)["w3"].skills == frozenset()
+
+
 def test_from_default_paths_falls_back_to_cwd(tmp_path, monkeypatch):
     """No git root → project agents load from cwd (config/agents_md.py precedent)."""
     agent_dir = tmp_path / ".codesage" / "agents"

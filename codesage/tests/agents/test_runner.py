@@ -10,6 +10,7 @@ import pytest
 
 from codesage.agents import (
     ASYNC_AGENT_ALLOWED_TOOLS,
+    SUBAGENT_DISALLOWED_TOOL_NAMES,
     AgentRegistry,
     SubagentRequest,
     SubagentRunner,
@@ -625,3 +626,95 @@ async def test_task_create_auto_owner_shared_list_e2e(tmp_path, monkeypatch):
     # 子代理经同一 task_list_id 注入读到该任务(共享列表 + 自动 owner 双证)
     assert seen == [("parent-1", "#1 [pending] Sub task (owner=general-purpose)")]
     assert parent.last_stop_reason == "completed"
+
+
+# ---- 14 §11.1/§11.2:子代理 Skill 收窄 + ASYNC 白名单 + 初始授权 ----
+
+
+def _skill_registry_with_bundled() -> "SkillRegistry":
+    from codesage.skills import SkillDefinition, SkillRegistry
+
+    return SkillRegistry(builtin=[
+        SkillDefinition(name="review", description="审查", body="r $ARGUMENTS"),
+        SkillDefinition(name="other", description="其他", body="o $ARGUMENTS"),
+        SkillDefinition(name="simplify", description="内建", body="s $ARGUMENTS", source="builtin"),
+    ])
+
+
+def _make_skill_parent(llm, tmp_path, skill_registry) -> AgentLoop:
+    from codesage.tools.builtin.skill import SkillTool
+
+    session = Session("parent-sk", tmp_path / "sessions")
+    return AgentLoop(
+        AgentLoopConfig(
+            client=llm,
+            tools=ToolRegistry([SkillTool(skill_registry), EchoTool()]),
+            permissions=PermissionEngine(),
+            system_prompt="parent system",
+            cwd=tmp_path,
+            session=session,
+            max_turns=10,
+        )
+    )
+
+
+def _write_agent_dir(tmp_path, name, skills):
+    agents = tmp_path / "agents"
+    agents.mkdir(exist_ok=True)
+    fm = f"name: {name}\ndescription: d\nbody: b\n" + (f"skills: {skills}\n" if skills else "")
+    (agents / f"{name}.md").write_text(f"---\n{fm}---\n", encoding="utf-8")
+    return agents
+
+
+def test_async_allowed_tools_contains_skill():
+    """14 §11.2:CC L3 对齐 —— 后台子代理白名单含 Skill;Skill 非元工具不进禁递归集。"""
+    assert "Skill" in ASYNC_AGENT_ALLOWED_TOOLS
+    assert "Skill" not in SUBAGENT_DISALLOWED_TOOL_NAMES
+
+
+def test_subagent_skill_narrowing(tmp_path):
+    """定义声明 skills → 子代理 SkillTool 换为 registry.subset(bundled 恒保留)。"""
+    from codesage.agents import AgentRegistry
+
+    reg = _skill_registry_with_bundled()
+    llm = FakeLLM([])
+    parent = _make_skill_parent(llm, tmp_path, reg)
+    agents = _write_agent_dir(tmp_path, "worker", "[review]")
+    agent_registry = AgentRegistry(project_dir=agents)
+    runner = SubagentRunner(parent, SubagentRequest(prompt="p", name="worker"), agent_registry)
+    child = runner._assemble()
+    skill_tool = child.tools.get("Skill")
+    assert skill_tool is not None
+    assert skill_tool._registry.names() == ["review", "simplify"]  # subset + bundled
+
+
+def test_subagent_skill_undeclared_inherits_parent(tmp_path):
+    """定义未声明 skills → 继承父 SkillTool(CC L3 默认放行 Skill)。"""
+    from codesage.agents import AgentRegistry
+
+    reg = _skill_registry_with_bundled()
+    llm = FakeLLM([])
+    parent = _make_skill_parent(llm, tmp_path, reg)
+    agents = _write_agent_dir(tmp_path, "plain", None)
+    agent_registry = AgentRegistry(project_dir=agents)
+    runner = SubagentRunner(parent, SubagentRequest(prompt="p", name="plain"), agent_registry)
+    child = runner._assemble()
+    assert child.tools.get("Skill")._registry is reg  # 同一注册表对象
+
+
+def test_subagent_allowed_tools_initial_grant(tmp_path):
+    """14 §8:req.allowed_tools → 子代理 loop 初始技能授权(授权而非收窄)。"""
+    from codesage.agents import AgentRegistry
+
+    reg = _skill_registry_with_bundled()
+    llm = FakeLLM([])
+    parent = _make_skill_parent(llm, tmp_path, reg)
+    agents = _write_agent_dir(tmp_path, "worker", None)
+    agent_registry = AgentRegistry(project_dir=agents)
+    req = SubagentRequest(prompt="p", name="worker", allowed_tools=frozenset({"Read", "Grep"}))
+    runner = SubagentRunner(parent, req, agent_registry)
+    child = runner._assemble()
+    assert child._skill_allowed_tools == {"Read", "Grep"}
+    # 缺省 None → 零变化
+    runner2 = SubagentRunner(parent, SubagentRequest(prompt="p", name="worker"), agent_registry)
+    assert runner2._assemble()._skill_allowed_tools == set()

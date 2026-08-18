@@ -10,6 +10,7 @@
 """
 
 from .bundled import bundled_skills, register_bundled_skill
+from .fork import execute_forked_skill
 from .loader import load_dir
 from .prompt import get_prompt_for_command, substitute_arguments, substitute_env_vars
 from .registry import SkillRegistry
@@ -28,6 +29,7 @@ __all__ = [
     "SkillPromptError",
     "SkillRegistry",
     "bundled_skills",
+    "execute_forked_skill",
     "execute_shell_blocks",
     "get_prompt_for_command",
     "load_dir",
