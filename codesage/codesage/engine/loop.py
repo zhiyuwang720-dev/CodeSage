@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -224,6 +224,10 @@ class AgentLoop:
         #: Permission denials collected during the last run() (投影;submit/
         #: run_single_turn 读取 —— CC submitMessage 的 permission_denials)
         self.last_permission_denials: list[str] = []
+        #: 技能授权(阶段 14 §7.1):会话内累积(CC alwaysAllowRules 同款);
+        #: 经 grant_skill_tools 写入,permission_check 以 frozenset 传入引擎
+        #: 第 8.5 步 —— 只豁免「无规则无地板时的默认 ask」。
+        self._skill_allowed_tools: set[str] = set()
         self.abort = asyncio.Event()
         #: One ToolUseContext per loop: carries read-freshness state and the
         #: abort channel across tool calls (phase 03 read-first guard).
@@ -555,6 +559,13 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(state, tool_uses)
+                # 阶段 14 §6.3(3):工具结果回收处 —— SkillTool 路径的授权落点,
+                # 读结果 metadata 的 skill_allowed_tools 并累积到会话授权集
+                for item in scheduled:
+                    if item.result is not None:
+                        granted = item.result.metadata.get("skill_allowed_tools")
+                        if granted:
+                            self.grant_skill_tools(granted)
                 # one tool_result user message per tool, in tool_use order
                 # (normalize_for_api merges adjacent user messages — wire behavior unchanged)
                 for item in scheduled:
@@ -919,6 +930,15 @@ class AgentLoop:
         )
         return await queue.run()
 
+    def grant_skill_tools(self, names: Iterable[str]) -> None:
+        """技能授权(阶段 14 §7.1):会话内累积(CC alwaysAllowRules 同款)。
+
+        只把「无规则无地板时的默认 ask」升级为 allow;授权在会话内持续,
+        用户可经 /mode 或重启会话撤销(R11 成文)。SkillTool 路径经工具结果
+        metadata 落点调用;斜杠路径直接调用;fork 子代理由 13 runner 初始授权。
+        """
+        self._skill_allowed_tools.update(names)
+
     def _record_tool_start(self, item: ScheduledTool) -> None:
         """12 §7.1 操作日志埋点:工具真实执行前(权限闸通过后)追加 operation
         entry —— 权限拒绝/未知工具/输入非法路径不记;无 session(单测)跳过;
@@ -965,6 +985,8 @@ class AgentLoop:
             cwd=self.cwd,
             permissions=load_permission_rules(self.settings) if self.settings is not None else None,
             session_permissions=self.session_permissions,
+            # 阶段 14 §7.1:技能授权以 frozenset 传入引擎第 8.5 步(只豁免默认 ask)
+            skill_allowed_tools=frozenset(self._skill_allowed_tools),
         )
         if decision.allowed:
             return None

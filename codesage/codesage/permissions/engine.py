@@ -59,6 +59,7 @@ class PermissionEngine:
         cwd: Path | None = None,
         session_permissions: dict[str, Any] | None = None,
         working_dirs: list[Path] | None = None,
+        skill_allowed_tools: frozenset[str] | None = None,  # 阶段 14 §7.1:技能授权(可选,默认 None = 决策链零变化)
     ) -> PermissionDecision:
         mode_enum = normalize_mode(mode)
         tool_input = tool_input or {}
@@ -153,6 +154,16 @@ class PermissionEngine:
             )
         if mode_enum == PermissionMode.YOLO:
             return self._decide(True, "allow", "yolo", "auto-allowed by yolo mode", tool_name, tool_input, mode_enum)
+
+        # 8.5 技能授权(阶段 14 §7.1):最弱授权 —— 只豁免「无规则无地板时的
+        # 默认 ask」。走到此处说明 deny/ask 规则、写保护、工作目录、敏感路径、
+        # 显式批准、plan 模式、yolo 都已在前返回(授权不绕过任何硬地板);
+        # Bash 的 REQUIRES_EXPLICIT_APPROVAL 在第 8 步已 ask,授权不豁免。
+        if skill_allowed_tools and tool_name in skill_allowed_tools:
+            return self._decide(
+                True, "allow", "skill-allowed-tools",
+                "granted by skill allowed-tools", tool_name, tool_input, mode_enum,
+            )
 
         # 9. 默认:ask(未知工具绝不默认放行)
         return self._decide(False, "ask", "default", f"no rule for {tool_name}", tool_name, tool_input, mode_enum)
