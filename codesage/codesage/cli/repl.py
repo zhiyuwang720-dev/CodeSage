@@ -19,6 +19,7 @@ from ..engine import AgentLoop, RunSummary
 from ..engine.session import _summarize_run
 from ..engine.tokens import estimate_context_tokens
 from ..skills.prompt import get_prompt_for_command  # 阶段 14 §6.1:斜杠技能兜底
+from ..skills.state import add_invoked_skill  # 14 §10.1:inline 执行前记录
 from .commands import COMMANDS, SlashCommand, find_command
 from .render import CYAN, GREY, YELLOW, _c, _glyph, render_message, render_streamed_text_delta
 from .statusbar import StatusBar
@@ -611,6 +612,8 @@ async def _invoke_skill_fallback(loop: AgentLoop, parts: list[str], state: dict)
         loop=loop,
     )
     loop.grant_skill_tools(skill.allowed_tools)  # §7.1:技能授权,会话内累积
+    # §10.1:斜杠 inline 执行前记录(压缩后恢复用;主会话 agent_id=None)
+    add_invoked_skill(skill.name, prompt, agent_id=getattr(loop, "_agent_name", None) or None)
     await run_single_turn(
         loop,
         prompt,

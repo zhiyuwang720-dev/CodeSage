@@ -115,6 +115,9 @@ class AgentLoopConfig:
     session_permissions: dict | None = None
     history: list["SessionMessage"] | None = None
     hooks: HookManager | None = None
+    #: 阶段 14 §10.2:压缩后技能恢复回调(默认 None = 零变化)。压缩完成处调用,
+    #: 返回的文本并入既有 _recovery_reminder 一次性注入(08/10 机制,零新通道)。
+    skill_restore: Callable[[], str | None] | None = None
 
     def __post_init__(self) -> None:
         max_turns = self.max_turns
@@ -181,6 +184,8 @@ class AgentLoop:
         self.session_permissions = config.session_permissions
         self.history = config.history or []
         self.hooks = config.hooks  # 阶段 09:事件钩子管理器(None = 钩子层零路径)
+        #: 阶段 14 §10.2:压缩后技能恢复回调(装配层接线;默认 None 零变化)
+        self.skill_restore = config.skill_restore
         # 运行时可变(会话级,不进 config)
         self.mode = mode
         self.on_stream = on_stream
@@ -712,6 +717,14 @@ class AgentLoop:
         ops: FileOps = FileOps.parse(prev_summary).merged_with(extract_file_ops(compressed))
         summary_msg = summary_message(ops.append_to(summary))
         self._recovery_reminder = recovery_reminder_text(ops, self.cwd)  # one-shot (next request)
+        # 阶段 14 §10.2:压缩后技能恢复 —— 并入既有一次性恢复 reminder(10 机制,
+        # 零新通道;回调缺省 None 时零变化)。
+        if self.skill_restore is not None and (restore_text := self.skill_restore()):
+            self._recovery_reminder = (
+                f"{self._recovery_reminder}\n\n{restore_text}"
+                if self._recovery_reminder
+                else restore_text
+            )
         await self._persist(summary_msg)  # append-only: compaction appends one summary
         # 12 §4.5:branch_summary 落盘快照(摘要文本 + leaf = 压缩切点后第一条
         # 消息 uuid,保留清单 #14「summary 挂 leafUuid」);不改消息链、不删被

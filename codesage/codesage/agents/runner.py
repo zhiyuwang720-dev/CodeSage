@@ -498,6 +498,11 @@ class SubagentRunner:
         finally:
             watcher.cancel()
             self._unregister_inbox()
+            # 14 §10.1(R10):fork 子代理完成清理 —— 子代理内技能记录不留存
+            # (压缩发生在父上下文;进程内存泄漏边界成文)。
+            from ..skills.state import clear_invoked_skills
+
+            clear_invoked_skills(agent_id=loop._agent_name)
         reason = loop.last_stop_reason or "completed"
         content = last_text or f"[子代理无文本输出:{reason}]"
         await self._emit_event("SubagentStop", loop, status="failed" if reason in (

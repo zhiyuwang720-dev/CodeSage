@@ -17,6 +17,7 @@ from typing import Any
 from ...base import Tool, ToolError, ToolResult, ToolUseContext
 from ....skills import SkillRegistry
 from ....skills.prompt import get_prompt_for_command
+from ....skills.state import add_invoked_skill  # 14 §10.1:inline 执行后记录
 
 #: 工具描述内嵌用法指引(§9.3):模型无需额外注册表,从 Available skills 段取。
 _SKILL_DESCRIPTION = (
@@ -92,6 +93,8 @@ class SkillTool(Tool):
             cwd=ctx.cwd,
             loop=ctx.parent_loop,
         )
+        # §10.1:inline 执行成功 → 记录(压缩后恢复用;fork 不记录)
+        add_invoked_skill(skill.name, prompt, agent_id=ctx.agent_name or None)
         return ToolResult(
             content=prompt,
             metadata={

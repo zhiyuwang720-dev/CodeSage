@@ -15,6 +15,16 @@ from .loader import load_dir
 from .prompt import get_prompt_for_command, substitute_arguments, substitute_env_vars
 from .registry import SkillRegistry
 from .shell import SkillPromptError, execute_shell_blocks
+from .state import (
+    POST_COMPACT_MAX_TOKENS_PER_SKILL,
+    POST_COMPACT_SKILLS_TOKEN_BUDGET,
+    InvokedSkill,
+    add_invoked_skill,
+    build_restore_text,
+    clear_invoked_skills,
+    get_invoked_skills,
+    reset_invoked_skills,
+)
 from .types import (
     FRONTMATTER_KEYS,
     SAFE_SKILL_PROPERTIES,
@@ -24,16 +34,24 @@ from .types import (
 
 __all__ = [
     "FRONTMATTER_KEYS",
+    "POST_COMPACT_MAX_TOKENS_PER_SKILL",
+    "POST_COMPACT_SKILLS_TOKEN_BUDGET",
     "SAFE_SKILL_PROPERTIES",
+    "InvokedSkill",
     "SkillDefinition",
     "SkillPromptError",
     "SkillRegistry",
+    "add_invoked_skill",
+    "build_restore_text",
     "bundled_skills",
+    "clear_invoked_skills",
     "execute_forked_skill",
     "execute_shell_blocks",
+    "get_invoked_skills",
     "get_prompt_for_command",
     "load_dir",
     "register_bundled_skill",
+    "reset_invoked_skills",
     "skill_has_only_safe_properties",
     "substitute_arguments",
     "substitute_env_vars",

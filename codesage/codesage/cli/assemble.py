@@ -14,10 +14,16 @@ from ..ai import LLMClient
 from ..config import GlobalConfig, load_settings, paths
 from ..core import Session
 from ..engine import AgentLoop, AgentLoopConfig, CompactionConfig, build_context_bundle
+from ..engine.tokens import estimate_tokens
 from ..hooks import HookJsonlSink, load_hook_manager
 from ..permissions import JsonlAuditSink, PermissionEngine
 from ..permissions.store import load_permission_rules
 from ..skills import SkillRegistry
+from ..skills.state import (
+    POST_COMPACT_MAX_TOKENS_PER_SKILL,
+    POST_COMPACT_SKILLS_TOKEN_BUDGET,
+    build_restore_text,
+)
 from ..tools import ToolRegistry, get_builtin_tools
 from ..tools.builtin.skill import SkillTool
 from .base_prompt import get_base_prompt
@@ -110,6 +116,7 @@ def build_loop(
             settings=settings,
             history=history,
             hooks=hooks,  # 阶段 09:事件钩子管理器(无配置事件走索引零路径,§4.10.1)
+            skill_restore=lambda: _skill_restore(loop),  # 14 §10.2:压缩后技能恢复(闭包晚绑定,压缩时才调用)
         ),
         mode=mode,  # 会话级运行时切换(/mode 命令写实例,不进 config)
     )
@@ -123,6 +130,15 @@ def _new_session_id() -> str:
 
     # microsecond precision: same-second sessions must not collide
     return datetime.now().strftime("session-%Y%m%d-%H%M%S-%f")
+
+
+def _skill_restore(loop: AgentLoop) -> str | None:
+    """阶段 14 §10.2:压缩后技能恢复段(按 loop._agent_name 隔离)。
+
+    回调在压缩完成处调用,文本并入既有一次性 _recovery_reminder(08/10 机制,
+    零新通道)。agent_id=None(主会话)→ 主会话技能记录;子代理 → 隔离键。
+    """
+    return build_restore_text(agent_id=getattr(loop, "_agent_name", None))
 
 
 def apply_tool_filter(loop: AgentLoop, allowed: str | None, disallowed: str | None) -> None:
