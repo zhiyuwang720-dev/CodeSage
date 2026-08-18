@@ -63,3 +63,29 @@ class SkillDefinition:
     aliases: tuple[str, ...] = ()
     source: str = "project"  # 'builtin' | 'user' | 'project'
     skill_dir: Path | None = None  # SKILL.md 所在目录(资源文件引用)
+
+
+#: SAFE 白名单(§7.3):仅这些字段存在即视为安全属性;其余字段须为空值豁免。
+#: 新增字段默认不在白名单 → 默认需确认(白名单前向兼容,§1.2 从严裁决)。
+SAFE_SKILL_PROPERTIES: frozenset[str] = frozenset({
+    "name", "description", "when_to_use", "argument_hint", "arguments",
+    "aliases", "user_invocable", "disable_model_invocation", "source", "body",
+})
+#: 全部可判定字段(白名单 + 空值豁免的并集,§7.3)
+_ALL_SKILL_FIELDS: frozenset[str] = frozenset(SkillDefinition.__dataclass_fields__)
+
+
+def skill_has_only_safe_properties(skill: SkillDefinition) -> bool:
+    """技能是否仅含安全属性(§7.3):白名单字段 + 空值豁免。
+
+    不安全字段(allowed_tools / context(fork) / model / effort / agent /
+    shell / paths / hooks / skill_dir)取默认空值时同样放行(CC 对
+    undefined/null/空数组/空对象 跳过同款)。
+    """
+    for field in _ALL_SKILL_FIELDS:
+        if field in SAFE_SKILL_PROPERTIES:
+            continue
+        if getattr(skill, field) in (None, (), frozenset(), False, "inline", ""):
+            continue
+        return False
+    return True
