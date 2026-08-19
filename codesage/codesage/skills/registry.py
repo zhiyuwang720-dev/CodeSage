@@ -31,26 +31,42 @@ _FIXED_CHARS_PER_SKILL = 25
 
 
 class SkillRegistry:
-    """分层技能查找:project > user > builtin(spec §4.2)。"""
+    """分层技能查找:**builtin > managed > user > project**(spec §4.2,CC
+    loadAllCommands 对齐)。高优先级层恒胜 —— 内置技能行为必须可预测,
+    不能被项目/用户配置意外替换;文件系统技能序 managed → user → project。"""
 
     def __init__(
         self,
         builtin: Iterable[SkillDefinition] = (),
+        managed_dir: Path | None = None,
         user_dir: Path | None = None,
         project_dir: Path | None = None,
         extra_dirs: Iterable[Path] = (),
     ) -> None:
+        # 优先级(CC CommandPriority 同款:高者恒胜):
+        #   builtin > managed(组织管理 > extra_dirs)> user > project
+        # 每层内部 Map 语义(同层同名后者胜);层间 setdefault —— 高优先级层
+        # 先注册,低优先级层后注册不得覆盖(setdefault 只补缺失,同名只留最高层)。
         defs: dict[str, SkillDefinition] = {}
-        for b in builtin:
-            defs[b.name] = b
-        if user_dir is not None:
-            defs.update(load_dir(user_dir, source="user"))
-        for extra in extra_dirs:
-            defs.update(load_dir(extra, source="user"))
-        if project_dir is not None:
-            defs.update(load_dir(project_dir, source="project"))
+        for tier in (
+            {b.name: b for b in builtin},  # builtin 最高,恒不可被覆盖
+            load_dir(managed_dir, source="managed") if managed_dir is not None else {},
+            self._merge_managed_tier(extra_dirs),
+            load_dir(user_dir, source="user") if user_dir is not None else {},
+            load_dir(project_dir, source="project") if project_dir is not None else {},
+        ):
+            for name, skill in tier.items():
+                defs.setdefault(name, skill)
         self._defs = defs
         self._rebuild_aliases()
+
+    @staticmethod
+    def _merge_managed_tier(extra_dirs: Iterable[Path]) -> dict[str, SkillDefinition]:
+        """extra_dirs 视为组织管理(managed)层:与 managed_dir 同级,低于内置。"""
+        merged: dict[str, SkillDefinition] = {}
+        for extra in extra_dirs:
+            merged.update(load_dir(extra, source="managed"))
+        return merged
 
     def _rebuild_aliases(self) -> None:
         """别名索引:alias → 规范技能名(构造/子集后重建)。"""
@@ -65,6 +81,8 @@ class SkillRegistry:
         目录随 CodeSage 数据根(默认 ~/.codesage,可 CODESAGE_CONFIG_DIR 覆盖)
         与项目级配置前例(.codesage/settings.json),镜像 13 agents 约定。无
         git root → 回退 cwd 作为项目根(config/agents_md.py 同前例)。
+        managed 层(组织管理)CodeSage 无默认路径,缺省 None;经 managed_dir
+        参数或 extra_dirs 注入(优先级:builtin > managed > user > project)。
         """
         start = (cwd or Path.cwd()).resolve()
         git_root = find_git_root(start)

@@ -61,7 +61,7 @@ class SkillDefinition:
     disable_model_invocation: bool = False  # True → 模型不可 SkillTool 触发
     hooks: dict | None = None  # 仅解析存储,执行体 19
     aliases: tuple[str, ...] = ()
-    source: str = "project"  # 'builtin' | 'user' | 'project'
+    source: str = "project"  # 'builtin' | 'managed' | 'user' | 'project'
     skill_dir: Path | None = None  # SKILL.md 所在目录(资源文件引用)
 
 

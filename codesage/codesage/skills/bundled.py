@@ -1,15 +1,12 @@
 """内建技能(阶段 14 §4.4):进程内单例 + register_bundled_skill 入口。
 
 内置层优先级最高(listing 永不截断),内容以 Python 字符串内嵌(CC
-SIMPLIFY_PROMPT 同款),无资源文件提取需求(spec 14 §1.2 裁剪表)。14 交付
-一个演示技能 ``simplify``(只读,context=fork),用于 bundled 层机制测试、
+SIMPLIFY_PROMPT 同款),无资源文件提取需求(spec 14 §1.2 裁剪表)。
+演示技能 ``simplify``(只读,context=fork),用于 bundled 层机制测试、
 「bundled 永不截断」断言与 fork 技能端到端。
 """
 
 from __future__ import annotations
-
-from typing import Iterable
-
 from .types import SkillDefinition
 
 #: 进程内 bundled 技能单例(闭包私有;重复同名注册覆盖前者由注册表 Map 语义兜底)

@@ -45,8 +45,12 @@ def test_get_unknown_lists_available():
     assert "foo" in str(e.value)
 
 
-def test_priority_merge_project_over_user_over_builtin(tmp_path):
-    """同名技能:项目 > 用户 > 内置;不同名全部可见。"""
+def test_priority_merge_builtin_over_user_over_project(tmp_path):
+    """同名技能:内置 > 用户 > 项目(CC loadAllCommands 对齐)——
+
+    内置(核心)技能行为必须可预测,不能被项目/用户配置意外替换;文件系统
+    序 managed → user → project,后者不覆盖前者。
+    """
     user = tmp_path / "user" / "skills"
     proj = tmp_path / "proj" / "skills"
     _write_skill(user, "foo", description="user foo")
@@ -58,10 +62,39 @@ def test_priority_merge_project_over_user_over_builtin(tmp_path):
         user_dir=user,
         project_dir=proj,
     )
-    assert reg.get("foo").description == "project foo"
+    assert reg.get("foo").description == "builtin foo"  # 内置最高,项目不可覆盖
     assert reg.get("bar").description == "user bar"
     assert reg.get("baz").description == "project baz"
     assert reg.names() == ["bar", "baz", "foo"]
+
+
+def test_priority_merge_user_over_project(tmp_path):
+    """无内置同名时:用户覆盖项目(文件系统 managed → user → project)。"""
+    user = tmp_path / "user" / "skills"
+    proj = tmp_path / "proj" / "skills"
+    _write_skill(user, "foo", description="user foo")
+    _write_skill(proj, "foo", description="project foo")
+    reg = SkillRegistry(user_dir=user, project_dir=proj)
+    assert reg.get("foo").description == "user foo"
+
+
+def test_priority_merge_managed_between_builtin_and_user(tmp_path):
+    """managed(组织管理)层:高于用户/项目,低于内置(CC managedCommandsDir)。"""
+    managed = tmp_path / "managed" / "skills"
+    user = tmp_path / "user" / "skills"
+    proj = tmp_path / "proj" / "skills"
+    _write_skill(managed, "foo", description="managed foo")
+    _write_skill(user, "foo", description="user foo")
+    _write_skill(proj, "foo", description="project foo")
+    reg = SkillRegistry(managed_dir=managed, user_dir=user, project_dir=proj)
+    assert reg.get("foo").description == "managed foo"  # managed > user/project
+    assert reg.get("foo").source == "managed"
+    # 内置同名 → 内置恒胜
+    reg2 = SkillRegistry(
+        builtin=[_skill("foo", description="builtin foo")],
+        managed_dir=managed, user_dir=user, project_dir=proj,
+    )
+    assert reg2.get("foo").description == "builtin foo"
 
 
 # ---- subset ----

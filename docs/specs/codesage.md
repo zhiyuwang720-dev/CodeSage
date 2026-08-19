@@ -152,7 +152,7 @@ V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,
 | 11 | `feat/11-tasks` | 任务系统 | Task CRUD、blocks/blockedBy 依赖环检测、todo | 任务 + 单测 |
 | 12 | `feat/12-session` | 会话生命周期 | fork/continue/resume、sidechain 日志、归档、会话选择器支持 | 会话 + 单测 |
 | 13 | `feat/13-subagents` | 子代理 | agent 定义(frontmatter 解析 + 优先级合并 + 内建三类型)、Agent 工具(前台嵌套/后台/forkContext/worktree 隔离)、SendMessage 队友通信、任务扩展(共享列表/owner 归属)、禁递归 | 子代理 + 单测 |
-| 14 | `feat/14-skills` | 技能系统 | 技能定义(SKILL.md frontmatter 白名单 + 项目>用户>内置合并 + 内置层机制)、加载(目录扫描/realpath 去重/lru 缓存)、提示词管道(参数/环境变量/内联 shell)、双路径调用(斜杠命令兜底 + SkillTool 自动触发)、allowed_tools 权限联动(只豁免默认 ask)、availableSkills 列表注入、压缩后技能恢复 | 技能 + 单测 |
+| 14 | `feat/14-skills` | 技能系统 | 技能定义(SKILL.md frontmatter 白名单 + 内置>管理>用户>项目优先级合并 + 内置层机制,内置恒不可被覆盖)、加载(目录扫描/realpath 去重/lru 缓存)、提示词管道(参数/环境变量/内联 shell)、双路径调用(斜杠命令兜底 + SkillTool 自动触发)、allowed_tools 权限联动(只豁免默认 ask)、availableSkills 列表注入、压缩后技能恢复 | 技能 + 单测 |
 | 15 | `feat/15-mcp` | MCP 客户端 | stdio/HTTP 传输、工具注册(mcp__ 命名 + needsPermissions 强制 #16)、resources、OAuth | MCP + 单测 |
 | 16 | `feat/16-bash-safety` | Bash 安全纵深 | 破坏性守卫、LLM 意图闸门(fail-closed #8)、沙箱计划(#9,Windows 降级为文档 + Linux 预留) | 安全 + 单测 |
 | 17 | `feat/17-memory` | 记忆系统 | JSONL 事件溯源、保守提取、本地词法检索、注入标注(#17) | 记忆 + 单测 |

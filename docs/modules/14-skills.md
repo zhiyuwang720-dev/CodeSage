@@ -7,7 +7,7 @@
 技能 = 将验证有效的 prompt 模板化的 Markdown 文件(SKILL.md:frontmatter + 正文提示词,「AI Shell 脚本」)。14 在 CodeSage 落地 CC 技能系统的完整语义:定义/加载/提示词管道/双路径调用/权限联动/列表注入/压缩恢复。
 
 - **技能定义(S1,§3)**:`SkillDefinition` 冻结数据类,16 个白名单字段(CC 生态键名:连字符键 `allowed-tools`/`argument-hint`/…,`when_to_use` 例外用下划线);frontmatter 解析器从 `agents/loader.py` **提取**为共享模块 `core/frontmatter.py`(13 §15「utils 共享」兑现,行为保持重构,13 loader 测试逐位绿 = 提取闸门)。
-- **发现与加载(S2,§4)**:目录形式 `{dir}/skills/{name}/SKILL.md`(散落单文件忽略);realpath 去重(同文件双入口只保留首次出现);lru 缓存(目录 + name/mtime/size/digest 快照,sha256 防同尺寸编辑);懒执行(注册表只暴露 frontmatter,body 调用时才用 = 发现与执行分离)。三层优先级 **项目 > 用户 > 内置**。
+- **发现与加载(S2,§4)**:目录形式 `{dir}/skills/{name}/SKILL.md`(散落单文件忽略);realpath 去重(同文件双入口只保留首次出现);lru 缓存(目录 + name/mtime/size/digest 快照,sha256 防同尺寸编辑);懒执行(注册表只暴露 frontmatter,body 调用时才用 = 发现与执行分离)。分层优先级 **内置 > 管理 > 用户 > 项目**(CC loadAllCommands 对齐:内置技能恒不可被项目/用户配置覆盖 —— 核心技能行为必须可预测;文件系统序 managed → user → project,高层不覆盖低层同名)。
 - **内建技能(S2,§4.4)**:`register_bundled_skill` 进程内单例 API,内容 Python 字符串内嵌(CC SIMPLIFY_PROMPT 同款);14 交付演示技能 `simplify`(只读,`context: fork`)—— 同时验证 bundled 层机制 + listing「bundled 永不截断」+ fork 端到端。
 - **提示词管道(S3,§5)**:四阶段流水线 —— 基础目录前缀 → 参数替换(`$ARGUMENTS`/`$file`/`$0..$n`/`$ARGUMENTS[n]`,无占位符自动追加)→ 环境变量替换(`${CODESAGE_SKILL_DIR}` 反斜杠转正斜杠/`${CODESAGE_SESSION_ID}`)→ 内联 Shell 执行(`` ```! `` 代码块 + `` !`cmd` `` 行内双模式,并行执行,逐条权限检查,deny → 整次失败,函数式替换防 `$&` 注入,输出超限落盘复用 03 阈值)。
 - **双路径调用(S5/S6,§6)**:用户路径 = REPL `/name args` → `find_command` 未命中 → 技能兜底(内置命令恒优先,aliases 参与)→ inline 解析提示词作为下一轮 user 消息复用 `run_single_turn`;模型路径 = SkillTool(`needs_permissions` 动态 SAFE 判定,不进 SYSTEM_TOOLS,`is_concurrency_safe=False`),inline 返回解析后提示词 + metadata 授权,引擎工具结果回收处 `grant_skill_tools` 累积。fork 技能(`context: fork`)经 `skills/fork.py` 复用 13 SubagentRunner 隔离子代理执行。
@@ -42,6 +42,7 @@
 12. **S6 子代理 Skill 收窄替换** — 定义声明 `skills` 时把子池 SkillTool 换成 `registry.subset(definition.skills)` 新实例;未声明继承父(SkillTool 契约同工具名)。
 13. **S7 skill_restore 并入 _recovery_reminder** — 压缩完成处 f-string 合并(非覆盖);回调缺省 None 零变化;恢复段按 `loop._agent_name` 隔离键。
 14. **行尾一致性(全部 S)**:repo 少数文件(loop.py/engine.py/repl.py/assemble.py 等)HEAD 为 CRLF 异常 blob,编辑工具写 LF 会造成暂存整文件翻转 —— 提交前核对 `git show HEAD --numstat` 断言只含真实内容变更(实测每次净插入与实现一致)。
+15. **优先级修正(builtin 恒不可覆盖,2026-08-19)**:原 spec §4.2「项目 > 用户 > 内置」(镜像 13 agents)与 CC `loadAllCommands` 实测相悖 —— 读 CC `src/commands.ts` `loadAllCommands()` 后修正为 **builtin > managed > user > project**(文件系统序 managed → user → project,高优先级层恒胜,setdefault 语义)。理由:技能正文直接注入模型系统提示词(可执行语义),核心技能行为必须可预测,不能被项目/用户配置意外替换 —— 与 CC「built-in 命令最高优先级」哲学同源。实现:registry 多层合并倒序(高→低)+ 新增 managed 层(`managed_dir` 参数 + `source="managed"`,extra_dirs 归入管理层);spec/modules/codesage.md 同步;新增优先级三测试(内置胜/用户胜项目/管理居中)。
 
 ## 红线固化
 
@@ -61,10 +62,11 @@
 ## 交付与验证
 
 - **S1**:frontmatter 提取(core/frontmatter.py)+ SkillDefinition + 白名单 —— 13 loader 逐位绿 + types 单测(41 测试)
-- **S2**:loader(目录发现/去重/lru/懒执行)+ registry(三层合并/subset/paths 过滤)+ listing 三阶段预算 + bundled/simplify —— 全绿(bundled 永不截断断言)
+- **S2**:loader(目录发现/去重/lru/懒执行)+ registry(builtin>managed>user>project 分层合并/subset/paths 过滤)+ listing 三阶段预算 + bundled/simplify —— 全绿(bundled 永不截断断言)
 - **S3**:prompt 管道(替换矩阵/env/base 前缀)+ shell(双模式/并行/权限/防注入/截断)—— 替换矩阵 + 权限矩阵单测绿
 - **S4**:引擎第 8.5 步 + loop grant 接线 —— 权限联动矩阵绿 + 13 权限矩阵回归绿
 - **S5**:SkillTool(inline + 授权落点)+ repl 斜杠兜底 + assemble 装配(availableSkills 段)—— test_skill_tool/test_slash 绿
 - **S6**:fork 技能(SubagentRunner 复用)+ agent skills 字段 + 子代理 Skill 收窄 + ASYNC 白名单补 Skill —— fork 端到端绿(含 simplify 演示)+ 13 全量回归绿
 - **S7**:state 注册表(隔离/排序/预算)+ skill_restore 接线 —— test_state 绿 + 压缩恢复端到端绿
 - **S8**:本文档 + 主规格同步(路线图 14 行修订 + `skills/` 注释「15 技能」→「14 技能」)+ todo 勾选 + 全量回归 **1240 passed, 9 skipped**(2026-08-18)+ 合并 master
+- **优先级修正**:registry 分层合并倒序 + managed 层,全量回归 **1242 passed, 9 skipped**(2026-08-19)
