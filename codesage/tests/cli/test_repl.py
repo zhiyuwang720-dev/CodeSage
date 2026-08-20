@@ -353,3 +353,28 @@ async def test_auto_continue_turn_injects_notification_with_history(tmp_path, mo
     texts = [m.content for m in loop.client.requests[0] if isinstance(m.content, str)]
     assert any("prior question" in t for t in texts)  # 历史在模型请求里
     assert any("bg done" in t for t in texts)  # 通知经 drain 注入也在请求里
+
+
+@pytest.mark.asyncio
+async def test_repl_cross_turn_memory_via_history_reload(tmp_path, monkeypatch):
+    """14 修复 REPL 跨轮失忆:用户轮之间重载 loop.history 后,第二轮请求包含
+    第一轮对话(此前 loop.history 是构造快照恒为空,第二轮失忆)。"""
+    loop = _mock_loop(
+        tmp_path,
+        [lambda i: [StreamEvent(type="text_delta", text="first"), StreamEvent(type="done")]],
+        monkeypatch=monkeypatch,
+    )
+    loop.client = RecordingLLM(loop.client.script)
+    await run_single_turn(loop, "第一次的问题:记住这个代号 ALPHA", render=False)
+    assert loop.history == []  # 构造快照:不重载则第二轮失忆(bug 实证)
+    # REPL 主循环每轮前重载会话线性历史(镜像 _auto_continue_turn 的刷新)
+    loop.history = loop.session.load()
+    loop.client.script = [
+        lambda i: [StreamEvent(type="text_delta", text="second"), StreamEvent(type="done")]
+    ]
+    await run_single_turn(loop, "我刚刚的问题是什么?", render=False)
+    texts = [
+        m.content for m in loop.client.requests[-1] if isinstance(m.content, str)
+    ]
+    assert any("ALPHA" in t for t in texts)  # 第二轮模型请求带着第一轮上下文
+    assert any("第一次的问题" in t for t in texts)

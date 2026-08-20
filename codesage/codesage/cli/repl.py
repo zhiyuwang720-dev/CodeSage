@@ -210,6 +210,12 @@ async def repl_loop(
             pending = line
             while pending:
                 loop.abort.clear()
+                # 14 修复 REPL 跨轮失忆:loop.history 是构造快照(引擎 run() 不
+                # 自己累加,test_repl.py:340 实证),每轮用户输入前从会话文件重载
+                # 线性历史 —— 模型看到完整前序对话(--continue 同语义,镜像 13
+                # S2 _auto_continue_turn 的刷新;技能 inline 斜杠兜底同样受益)。
+                if loop.session is not None:
+                    loop.history = loop.session.load()
                 capture_gate.set()  # capture keystrokes only while a turn runs
                 try:
                     summary = await run_single_turn(
@@ -362,8 +368,8 @@ async def _auto_continue_turn(
 ) -> None:
     """13 S2:一轮自动继续 —— run(None) 消费后台通知,模型无需用户转述即可
     感知后台结果。自动轮上下文:loop.history 是构造快照(fresh REPL 为 []),
-    模型只看到通知 XML —— 刷新为会话线性历史(--continue 同语义;刷新一次后
-    后续用户轮也带历史,顺带修复 REPL 跨轮失忆)。"""
+    模型只看到通知 XML —— 刷新为会话线性历史(--continue 同语义;REPL 用户
+    轮在 repl_loop 主循环每轮前也刷新,见 run_single_turn 调用处)。"""
     loop.abort.clear()
     if bar is not None:
         bar.print_below(_c("[后台任务完成,自动继续…]", GREY))
