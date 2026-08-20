@@ -25,6 +25,13 @@ from .types import (
     ConfigScope,
     ScopedMcpServerConfig,
 )
+from .client import McpManager
+from .tool import (
+    ListMcpResourcesTool,
+    McpTool,
+    ReadMcpResourceTool,
+    build_mcp_tools,
+)
 
 __all__ = [
     "MCP_METHODS",
@@ -33,10 +40,15 @@ __all__ = [
     "McpHttpServerConfig",
     "McpJsonConfig",
     "McpOAuthConfig",
+    "McpManager",
     "McpServerConfig",
     "McpStdioServerConfig",
     "ConfigScope",
     "ScopedMcpServerConfig",
+    "McpTool",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    "build_mcp_tools",
     "JsonRpcError",
     "JsonRpcNotification",
     "JsonRpcRequest",

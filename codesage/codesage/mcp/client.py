@@ -254,6 +254,19 @@ class McpManager:
 
     # ---- 调用 ----
 
+    async def read_resource(self, name: str, uri: str) -> dict:
+        """读取服务器资源(spec §10.1 ReadMcpResourceTool)。返回原始 result。"""
+        conn = self._connections.get(name)
+        if conn is None or conn.state != McpConnectionState.CONNECTED:
+            raise ConnectionError(f'MCP server "{name}" is not connected')
+        resp = await conn.transport.send(
+            JsonRpcRequest(id=next_id(), method=MCP_METHODS.RESOURCES_READ, params={"uri": uri})
+        )
+        if resp.error:
+            raise ConnectionError(f'MCP resource read error: {resp.error.message}')
+        return resp.result or {}
+
+
     async def call_tool(
         self,
         name: str,
