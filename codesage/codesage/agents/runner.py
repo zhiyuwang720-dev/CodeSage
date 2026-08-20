@@ -322,6 +322,12 @@ class SubagentRunner:
         # agent_name 仍按 spec 显示 "forkContext",此处只管 owner 身份)。
         loop.task_list_id = parent.task_list_id
         loop._agent_name = req.name or agent_id
+        # 14 §10.2:子代理 loop 补接 skill_restore —— 子代理内 inline 技能按
+        # 自己的 agent_id 记录,子代理自身压缩时也要能恢复(镜像 build_loop 对
+        # 主 loop 的接线);隔离键 = 子代理自己的 _agent_name,与主会话零串台。
+        from ..skills.state import build_restore_text  # 函数级 import:破装配环
+
+        loop.skill_restore = lambda: build_restore_text(agent_id=loop._agent_name)
         # 14 §8:技能 fork 初始授权 —— allowed_tools 作为子代理 loop 的
         # 初始 skill 授权(§7.1 同语义:只豁免默认 ask,授权而非收窄)。
         if req.allowed_tools:

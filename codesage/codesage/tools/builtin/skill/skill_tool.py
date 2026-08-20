@@ -81,6 +81,13 @@ class SkillTool(Tool):
         args = str(input.get("args") or "")
         if skill.context == "fork":
             # fork 技能:隔离子代理执行(§8)—— 14 S6 经 SubagentRunner 落地
+            # 守卫:fork 路径强依赖 parent_loop(loop.cwd/loop.session),缺省时
+            # 给明确错误而非 AttributeError(镜像 Agent 工具同款守卫)。
+            if ctx.parent_loop is None:
+                return ToolResult(
+                    "[Skill 工具 fork 路径仅在引擎注入 parent_loop 时可用]",
+                    is_error=True, metadata={"skill": skill.name, "skill_output": True},
+                )
             from ....skills.fork import execute_forked_skill  # 阶段 14 S6
 
             return await execute_forked_skill(
