@@ -273,6 +273,9 @@ def get_mcp_configs_by_scope(scope: ConfigScope) -> dict[str, ScopedMcpServerCon
         from ..config import global_config
 
         return _add_scope_to_servers(global_config.GlobalConfig.load().mcp_servers, scope)
+    if scope == ConfigScope.DYNAMIC:
+        # 会话级动态配置(CLI --mcp-config)本函数无持久化来源;由调用方注入 manager.configs 处理
+        return {}
     raise ValueError(f"unsupported scope for get: {scope}")
 
 def get_mcp_config_by_name(name: str) -> ScopedMcpServerConfig | None:
@@ -368,6 +371,9 @@ def add_mcp_config(name: str, config: dict[str, Any], scope: ConfigScope) -> Non
     if errors:
         raise ValueError(errors[0]["message"])
     cfg = validated.mcpServers[name] if validated else config
+    # 写入的配置 = 干净字段(去 name/scope/plugin_source),避免把元数据持久化进用户配置
+    cfg_dump = {k: v for k, v in cfg.model_dump(exclude_none=True).items()
+                if k not in ("name", "scope", "plugin_source")}
 
     if is_mcp_server_denied(name, cfg):
         raise PermissionError(f'Cannot add MCP server "{name}": blocked by policy')
@@ -377,14 +383,14 @@ def add_mcp_config(name: str, config: dict[str, Any], scope: ConfigScope) -> Non
         if name in existing:
             raise ValueError(f"MCP server {name} already exists in .mcp.json")
         payload = {k: v.model_dump(exclude_none=True) for k, v in existing.items() if k != name}
-        payload[name] = cfg.model_dump(exclude_none=True)
+        payload[name] = cfg_dump
         write_mcp_json(payload)
     elif scope == ConfigScope.USER:
         from ..config import global_config
 
         gc = global_config.GlobalConfig.load()
         servers = dict(gc.model_dump().get("mcpServers") or {})
-        servers[name] = cfg.model_dump(exclude_none=True)
+        servers[name] = cfg_dump
         gc.mcp_servers = servers
         gc.save()
     elif scope == ConfigScope.LOCAL:
@@ -392,7 +398,7 @@ def add_mcp_config(name: str, config: dict[str, Any], scope: ConfigScope) -> Non
 
         def _add(cur):
             servers = dict(cur.get("mcpServers") or {})
-            servers[name] = cfg.model_dump(exclude_none=True)
+            servers[name] = cfg_dump
             return {**cur, "mcpServers": servers}
 
         settings.save_settings(_add)

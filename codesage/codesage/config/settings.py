@@ -23,12 +23,13 @@ TIER_ORDER = ("user", "project", "local")
 class Settings(BaseModel):
     """Typed view of merged settings. Unknown keys are preserved (extra=allow)."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     # Reserved for later phases; declared now so consumers have stable names.
     permissions: dict[str, Any] = Field(default_factory=dict)  # phase 05
     hooks: dict[str, Any] = Field(default_factory=dict)  # phase 09
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)  # phase 15
+    # phase 15:MCP 服务器。JSON 键用驼峰 mcpServers(与 .mcp.json/CC 一致),属性名下划线。
+    mcp_servers: dict[str, Any] = Field(default_factory=dict, alias="mcpServers")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -123,5 +124,5 @@ def save_settings(mutator=None, project_dir: Path | None = None) -> None:
         merged = _deep_merge(merged, load_settings_file(f))
     if mutator:
         merged = mutator(merged)
-    atomic.atomic_write(paths.local_settings_path(project_dir), json.dumps(merged, indent=2) + "\n")
+    atomic_write(paths.local_settings_path(project_dir), json.dumps(merged, indent=2) + "\n")
     store.clear_cache()
