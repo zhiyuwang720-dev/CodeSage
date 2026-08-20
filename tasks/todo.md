@@ -48,9 +48,9 @@
 - [x] **14 skills 技能系统** ✅ 2026-08-18(`feat/14-skills`)
   - 验收:skill 定义(frontmatter 白名单 + 项目>用户>内置合并 + 内置层机制);加载(目录扫描 + realpath 去重 + lru 缓存 + 内容懒执行);提示词管道(参数/环境变量/内联 shell 替换);双路径调用(斜杠命令兜底 + SkillTool 自动触发);allowed_tools 权限联动(只豁免默认 ask,deny/写保护/plan 在前);技能列表注入(system-reminder 段);压缩后技能恢复
   - 验证:技能加载与权限联动单测 + 替换矩阵 + 双路径调用单测 + 压缩恢复端到端;**1240 passed, 9 skipped**(阶段 14 交付基线)
-- [ ] **15 mcp MCP 客户端** (`feat/15-mcp`)
-  - 验收:stdio/HTTP 传输;mcp__ 命名 + needsPermissions 强制;resources;OAuth PKCE
-  - 验证:mock server 单测
+- [x] **15 mcp MCP 客户端** ✅ 2026-08-20(`feat/15-mcp`)
+  - 验收:stdio/HTTP 传输;mcp__ 命名 + needsPermissions 强制;resources;OAuth PKCE;**内置托管服务器(codebase-memory-mcp 首例,按需安装)**
+  - 验证:mock server 单测(echo_server 端到端 + FakeTransport 连接/权限/结果矩阵)
 - [ ] **16 bash-safety Bash 安全纵深** (`feat/16-bash-safety`)
   - 验收:破坏性守卫;LLM 意图闸门(fail-closed);沙箱计划接口(Windows 文档化降级)
   - 验证:守卫规则单测;闸门 mock 查询单测

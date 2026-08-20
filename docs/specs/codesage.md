@@ -86,7 +86,7 @@ codesage/                      # 项目根(现有 backend/ 不并入)
     hooks/       # 09 钩子系统
     agents/      # 13 子代理(定义解析 + 多代理扩展;Task 工具本体已落 11 core/tasks/ + tools/builtin/interaction)
     skills/      # 14 技能系统(SKILL.md 定义 + 加载/注册表 + 提示词管道 + 双路径调用)
-    mcp/         # 16 MCP 客户端
+    mcp/         # 15 MCP 客户端
     safety/      # 17 Bash 安全纵深(LLM 闸门 + 沙箱计划)
   tests/                     # 镜像源码:每个模块一个子目录
     config/  ai/  tools/  ...
@@ -153,7 +153,7 @@ V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,
 | 12 | `feat/12-session` | 会话生命周期 | fork/continue/resume、sidechain 日志、归档、会话选择器支持 | 会话 + 单测 |
 | 13 | `feat/13-subagents` | 子代理 | agent 定义(frontmatter 解析 + 优先级合并 + 内建三类型)、Agent 工具(前台嵌套/后台/forkContext/worktree 隔离)、SendMessage 队友通信、任务扩展(共享列表/owner 归属)、禁递归 | 子代理 + 单测 |
 | 14 | `feat/14-skills` | 技能系统 | 技能定义(SKILL.md frontmatter 白名单 + 内置>管理>用户>项目优先级合并 + 内置层机制,内置恒不可被覆盖)、加载(目录扫描/realpath 去重/lru 缓存)、提示词管道(参数/环境变量/内联 shell)、双路径调用(斜杠命令兜底 + SkillTool 自动触发)、allowed_tools 权限联动(只豁免默认 ask)、availableSkills 列表注入、压缩后技能恢复 | 技能 + 单测 |
-| 15 | `feat/15-mcp` | MCP 客户端 | stdio/HTTP 传输、工具注册(mcp__ 命名 + needsPermissions 强制 #16)、resources、OAuth | MCP + 单测 |
+| 15 | `feat/15-mcp` | MCP 客户端 | stdio/HTTP 传输、工具注册(mcp__ 命名 + needsPermissions 强制 #16)、resources、OAuth PKCE、/mcp 命令、内置托管服务器(codebase-memory-mcp 首例,按需安装) | MCP + 单测 |
 | 16 | `feat/16-bash-safety` | Bash 安全纵深 | 破坏性守卫、LLM 意图闸门(fail-closed #8)、沙箱计划(#9,Windows 降级为文档 + Linux 预留) | 安全 + 单测 |
 | 17 | `feat/17-memory` | 记忆系统 | JSONL 事件溯源、保守提取、本地词法检索、注入标注(#17) | 记忆 + 单测 |
 | 18 | `feat/18-multimodel` | 多模型编排 | 专家模型、辅助回退增强、上下文感知切换 | 编排 + 单测 |
