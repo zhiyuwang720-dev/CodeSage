@@ -56,7 +56,7 @@ def mcp_result_to_content(result: dict[str, Any]) -> str:
         return result.get("error", "MCP tool returned an error") if isinstance(result.get("error"), str) else "MCP tool returned an error"
 
     content = result.get("content")
-    if isinstance(content, list) and content:
+    if isinstance(content, list):
         parts: list[str] = []
         for b in content:
             if not isinstance(b, dict):
@@ -94,6 +94,15 @@ def truncate_mcp_content(content: str) -> str:
 
 
 def process_mcp_result(result: dict[str, Any], tool_name: str, server_name: str) -> str:
-    """入口:归一化 + 25K 截断,返回模型可见的字符串内容(spec §8)。"""
+    """入口:归一化 + 25K 截断,返回模型可见的字符串内容(spec §8)。
+
+    超 100K 字符的超大文本由引擎的 tool_queue._spill_large_result 落盘(第二级),
+    本函数只做 25K token 截断(第一级)。
+    """
     content = mcp_result_to_content(result)
     return truncate_mcp_content(content)
+
+
+def empty_result_marker(tool_name: str) -> str:
+    """空结果标记(spec §8.4):防部分模型误触发 \n\nHuman: 终止序列提前收尾。"""
+    return f"({tool_name} completed with no output)"

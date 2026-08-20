@@ -53,12 +53,14 @@ class McpTool(Tool):
 async def process_mcp_result(result: dict, tool_name: str, server_name: str) -> ToolResult:
     """把 MCP 原始 result 归一化为 ToolResult(spec §8)。
 
-    第一级:25K token 截断(含图片压缩)在 result.py 完成;此处先做形状归一(文本/JSON/内容块),
-    超限落盘(100K 字符 spill)复用 tool_queue 既有机制由引擎处理。
+    第一级:25K token 截断在 result.py 完成;空结果注入标记(§8.4);
+    超大文本(>100K 字符)由引擎 tool_queue._spill_large_result 落盘(第二级,既有机制)。
     """
-    from .result import mcp_result_to_content
+    from .result import empty_result_marker, mcp_result_to_content
 
     content = mcp_result_to_content(result)
+    if not content.strip() or content == "(empty result)":
+        content = empty_result_marker(tool_name)
     return ToolResult(
         content=content,
         is_error=bool(result.get("isError")),
