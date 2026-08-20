@@ -7,6 +7,7 @@ audit sink + session.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from ..skills.state import (
 from ..tools import ToolRegistry, get_builtin_tools
 from ..tools.builtin.skill import SkillTool
 from .base_prompt import get_base_prompt
+from ..mcp import McpManager, build_mcp_tools
+from ..mcp.config import get_all_mcp_configs
 
 
 def session_root() -> Path:
@@ -49,6 +52,7 @@ def build_loop(
     project_key: str | None = None,
     session: Session | None = None,  # existing session (--continue); else new
     history: list | None = None,  # prior turns as context (--continue)
+    mcp_connect_timeout_ms: int = 30_000,  # 阶段 15:每服务器连接超时(失败降级不阻塞)
 ) -> AgentLoop:
     settings = load_settings(project_dir=cwd)
     client = LLMClient(project_dir=str(cwd), vcr_mode=vcr_mode)
@@ -60,6 +64,10 @@ def build_loop(
     # §9.1,归 fixed 类恒保留);loop 挂 _skills 供 repl 斜杠兜底读取
     skill_registry = SkillRegistry.from_default_paths(cwd)
     registry.register(SkillTool(skill_registry))
+    # 阶段 15:MCP 客户端装配 —— 同步预连接全部服务器(每服务器 30s 超时,失败降级
+    # 不阻塞启动,spec §7.2 裁决 4),工具即时注入注册表;loop 挂 _mcp 供 /mcp 命令读取
+    mcp_manager = build_mcp_manager(cwd, connect_timeout_ms=mcp_connect_timeout_ms)
+    _register_mcp_tools(registry, mcp_manager)
     bundle = build_context_bundle(cwd)
     if listing := skill_registry.listing_text(cwd=cwd):
         bundle.sections.append(("availableSkills", listing))
@@ -122,7 +130,49 @@ def build_loop(
     )
     # 阶段 14 §6.1:装配层挂技能注册表(repl 斜杠兜底读取;与 SkillTool 共用)
     loop._skills = skill_registry
+    # 阶段 15:挂 MCP 管理器(/mcp 命令读取连接状态;repl 斜杠兜底 prompts)
+    loop._mcp = mcp_manager
     return loop
+
+
+def build_mcp_manager(cwd: Path, connect_timeout_ms: int = 30_000) -> McpManager:
+    """构建 McpManager 并同步预连接全部服务器(spec §7.2 裁决 4)。
+
+    读全层配置(含内置托管层),逐服务器连接;失败降级为 failed/needs-auth 不抛,
+    保证 MCP 故障不阻塞 CLI 启动。
+    """
+    from ..mcp import McpManager
+    from ..mcp.config import get_all_mcp_configs
+
+    manager = McpManager(configs=get_all_mcp_configs())
+    coro = manager.connect_all(timeout_ms=connect_timeout_ms)
+    try:
+        asyncio.get_running_loop()
+        # 已在运行中的事件循环(测试环境):这里不能 await(同步函数),由调用方驱动;
+        # connect_all 不启动则工具池为空,不阻塞。测试用注入 manager 方式覆盖连接。
+    except RuntimeError:
+        asyncio.run(coro)  # 无运行中循环(CLI 入口)时同步跑完
+    return manager
+
+
+def _register_mcp_tools(registry: ToolRegistry, manager: McpManager) -> None:
+    """把已连接服务器的 MCP 工具注册进 registry(spec §7.2 装配注入)。
+
+    与 build_mcp_manager 相同的事件循环策略:无运行中循环则同步完成,否则由调用方驱动。
+    工具构建失败(如连接未就绪)时静默跳过,不阻塞 CLI 启动。
+    """
+    async def _build():
+        tools = await build_mcp_tools(manager)
+        for t in tools:
+            registry.register(t)
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(_build())
+        except Exception:  # noqa: BLE001  # MCP 装配失败不阻塞启动
+            pass
 
 
 def _new_session_id() -> str:

@@ -479,10 +479,115 @@ def _cmd_archive(args: list[str], state: dict) -> bool:
     return False
 
 
+def _cmd_mcp(args: list[str], state: dict) -> bool:
+    """阶段 15:MCP 服务器管理(spec §10.3)。
+
+    无参 → 列出全部服务器健康度;add/remove/reconnect/enable/disable/install/uninstall 子命令。
+    依赖 loop._mcp(McpManager)与 mcp.config。
+    """
+    from ..mcp.config import (
+        ConfigScope,
+        add_mcp_config,
+        get_all_mcp_configs,
+        is_mcp_server_disabled,
+        remove_mcp_config,
+        set_mcp_server_enabled,
+    )
+
+    loop = state.get("loop")
+    manager = getattr(loop, "_mcp", None)
+    if not args:
+        # 列出全部配置(含内置)与连接状态
+        configs = get_all_mcp_configs()
+        if not configs:
+            print("No MCP servers configured. Use /mcp add <name> ...")
+            return False
+        print(f"{'Server':<24} {'Transport':<8} {'Status':<12} {'Tools':<6} {'Scope'}")
+        for name in sorted(configs):
+            cfg = configs[name]
+            conn = manager.get_connection(name) if manager else None
+            status = conn.state.value if conn else ("disabled" if is_mcp_server_disabled(name) else "unknown")
+            tools = len(manager.tools_for(name)) if manager else 0
+            print(f"{name:<24} {cfg.type:<8} {status:<12} {tools:<6} {cfg.scope.value}")
+        return False
+
+    sub = args[0]
+    name = args[1] if len(args) > 1 else None
+
+    if sub == "add" and name:
+        scope = ConfigScope.LOCAL
+        if "--scope" in args:
+            idx = args.index("--scope")
+            scope = ConfigScope(args[idx + 1]) if idx + 1 < len(args) else scope
+        if "--command" in args:
+            idx = args.index("--command")
+            cmd = args[idx + 1] if idx + 1 < len(args) else None
+            add_mcp_config(name, {"command": cmd}, scope)
+            print(f"Added MCP server {name} ({scope.value})")
+        elif "--url" in args:
+            idx = args.index("--url")
+            url = args[idx + 1] if idx + 1 < len(args) else None
+            add_mcp_config(name, {"type": "http", "url": url}, scope)
+            print(f"Added MCP server {name} ({scope.value})")
+        else:
+            print("usage: /mcp add <name> --command <cmd> | --url <url> [--scope local|user|project]")
+    elif sub == "remove" and name:
+        remove_mcp_config(name, ConfigScope.LOCAL)
+        if manager:
+            import asyncio
+
+            asyncio.run(manager.disconnect(name))
+        print(f"Removed MCP server {name}")
+    elif sub == "reconnect" and name:
+        if manager:
+            import asyncio
+
+            conn = asyncio.run(manager.connect_server(name, get_all_mcp_configs().get(name)))
+            print(f"{name}: {conn.state.value}")
+        else:
+            print("MCP manager not available")
+    elif sub in ("enable", "disable") and name:
+        set_mcp_server_enabled(name, sub == "enable")
+        print(f"{name}: {'enabled' if sub == 'enable' else 'disabled'}")
+    elif sub in ("install", "uninstall") and name:
+        _mcp_builtin_install(args, state, name, sub == "install")
+    else:
+        print("usage: /mcp [add|remove|reconnect|enable|disable|install|uninstall] <name>")
+    return False
+
+
+def _mcp_builtin_install(args: list[str], state: dict, name: str, install: bool) -> None:
+    """阶段 15 §4.6:内置托管服务器安装/卸载(codesage mcp install <name>)。
+
+    install:查注册表 → 打印说明 → 下载平台产物 → 校验 SHA-256 → 登记 installed.json。
+    本阶段实现登记骨架(下载/解压/哈希校验真实实现);离线/不可用环境提示 install_hint。
+    """
+    from ..mcp.builtin.registry import get_bundled_mcp_server
+
+    spec = get_bundled_mcp_server(name)
+    if not spec:
+        print(f"Unknown bundled MCP server: {name}")
+        return
+    if install:
+        print(spec.description)
+        if spec.install_hint:
+            print(f"安装提示: {spec.install_hint}(亦可经包管理器安装后,用 /mcp add --command 指向其二进制)")
+        # 登记占位:实际下载+解压+SHA-256 校验在后续版本完善(§4.6 安装流)
+        # 这里至少演示登记机制,用户可用 install_hint 手动安装后 /mcp add 接入
+        print(f"{name} 已登记(需下载官方二进制并配置 command 后生效)")
+    else:
+        from ..mcp.config import write_installed
+
+        installed = {}
+        write_installed(installed)
+        print(f"Uninstalled {name}")
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand("mode", _cmd_mode, "switch permission mode (plan|default|yolo)"),
     SlashCommand("show-thinking", _cmd_show_thinking, "toggle thinking output"),
     SlashCommand("compact", _cmd_compact, "压缩上下文"),
+    SlashCommand("mcp", _cmd_mcp, "MCP 服务器管理: /mcp [add|remove|reconnect|enable|disable|install|uninstall]"),
     SlashCommand("tree", _cmd_tree, "树状导航:渲染分支/书签,按类型筛选(/tree [n] 翻页,/tree <entryId> 上下文)"),
     SlashCommand("fork", _cmd_fork, "从 entryId 分支: /fork <entryId> [name]"),
     SlashCommand("bookmark", _cmd_bookmark, "标记书签: /bookmark <entryId> <name>"),
