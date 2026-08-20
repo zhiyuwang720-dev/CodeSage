@@ -553,6 +553,37 @@ def test_assemble_inherits_parent_task_list_id(tmp_path):
     assert loop._agent_name != "forkContext"
 
 
+def test_assemble_wires_subagent_skill_restore(tmp_path):
+    """14 §10.2:子代理 loop 补接 skill_restore —— 恢复段按子代理自己的
+    _agent_name 隔离(fork 用 agent_id,定义名用定义名),与主会话零串台。"""
+    from codesage.skills.state import add_invoked_skill, reset_invoked_skills
+
+    reset_invoked_skills()
+    try:
+        parent = _make_parent(FakeLLM([lambda i: text_event("x")]), tmp_path)
+        # 主会话技能记录(agent_id 缺省 = 主键)
+        add_invoked_skill("main-skill", "main prompt")
+        # 子代理内 inline 技能(按子代理自己的 _agent_name 记录)
+        runner = SubagentRunner(parent, SubagentRequest(prompt="p", name="general-purpose"),
+                                AgentRegistry(), session_root=tmp_path / "subagents")
+        loop = runner._assemble()
+        assert loop._agent_name == "general-purpose"
+        add_invoked_skill("sub-skill", "sub prompt", agent_id=loop._agent_name)
+        text = loop.skill_restore()
+        assert text is not None
+        assert "## sub-skill" in text
+        assert "## main-skill" not in text  # 不串台:子代理恢复段不含主会话技能
+
+        # forkContext(无 name):隔离键 = 唯一 agent_id
+        runner = SubagentRunner(parent, SubagentRequest(prompt="p"),
+                                AgentRegistry(), session_root=tmp_path / "subagents")
+        loop = runner._assemble()
+        assert loop._agent_name == runner._agent_id
+        assert loop.skill_restore() is None  # 该子代理无记录 → 无恢复段
+    finally:
+        reset_invoked_skills()
+
+
 def test_system_prompt_shares_parent_task_list(tmp_path):
     """§9 静态引导:task_list_id 传父的,措辞为「共享同一任务列表」。"""
     from codesage.agents.runner import build_subagent_system_prompt

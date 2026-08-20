@@ -280,56 +280,60 @@ class RecordingLLM(MockLLM):
         return super().stream(request, model)
 
 
-def test_auto_continue_ready_conditions(monkeypatch):
-    """触发条件:唤醒信号 set + 无按键 + 未达 MAX_AUTO_CONTINUE → 自动继续;
-    任一不满足 → False(输入优先,达限即停)。"""
+def test_repl_loop_delegates_to_app():
+    """repl_loop 委托 OpenCode 风格全屏应用:steer_queue 就位 + CodeSageApp。"""
     import codesage.cli.repl as repl
 
-    class FakeLoop:
-        _notifications_event = asyncio.Event()
+    assert hasattr(repl, "repl_loop")
+    # app 模块提供全屏外壳与补全数据源(_SlashCompleter 仍在 repl)
+    import codesage.cli.app as app_mod
 
-    loop = FakeLoop()
-    monkeypatch.setattr(repl, "_stdin_pending", lambda: False)
-    assert repl._auto_continue_ready(loop, 0) is False  # 信号未置位
-    loop._notifications_event.set()
-    assert repl._auto_continue_ready(loop, 0) is True
-    assert repl._auto_continue_ready(loop, repl.MAX_AUTO_CONTINUE) is False  # 达连续上限
-    monkeypatch.setattr(repl, "_stdin_pending", lambda: True)
-    assert repl._auto_continue_ready(loop, 0) is False  # 用户按键优先
+    assert hasattr(app_mod, "CodeSageApp")
+    assert hasattr(repl, "_SlashCompleter")
 
 
-def test_stdin_pending_posix(monkeypatch):
-    """POSIX 分支:select 报告 stdin 可读 → True,否则 False —— 非阻塞,
-    绝不调用阻塞的 _read_line。"""
-    import sys
+def test_slash_completer_suggests_commands():
+    """补全:非 '/' 前缀不补;'/' 补全部;前缀匹配 name/alias;描述进 meta。"""
+    from prompt_toolkit.document import Document
 
-    import codesage.cli.repl as repl
+    from codesage.cli.commands import COMMANDS
+    from codesage.cli.repl import _SlashCompleter
 
-    monkeypatch.setattr(repl.sys, "platform", "linux")
-    # _stdin_pending 函数体内 import select → 补丁打在真实 select 模块上
-    monkeypatch.setattr("select.select", lambda *a: ([sys.stdin], [], []))
-    assert repl._stdin_pending() is True
-    monkeypatch.setattr("select.select", lambda *a: ([], [], []))
-    assert repl._stdin_pending() is False
+    comp = _SlashCompleter(COMMANDS)
+    assert list(comp.get_completions(Document("hello world"), None)) == []
+    names = [c.text for c in comp.get_completions(Document("/"), None)]
+    assert "mode" in names and "quit" in names
+    assert [c.text for c in comp.get_completions(Document("/co"), None)] == ["compact"]
+    assert [c.text for c in comp.get_completions(Document("/h"), None)] == ["help"]  # alias h
+    assert [c.text for c in comp.get_completions(Document("/x"), None)] == []
+    # display 带斜杠、meta 带描述(弹窗渲染契约)
+    from prompt_toolkit.formatted_text import to_plain_text
 
-
-def test_read_line_posix_skips_prompt_when_drawn(monkeypatch):
-    """空闲等待已画过提示符(prompt_drawn)→ POSIX 分支不再画,避免双提示符。"""
-    import codesage.cli.repl as repl
-
-    monkeypatch.setattr(repl.sys, "platform", "linux")
-    calls = []
-    monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "hi")
-    assert repl._read_line({"prompt_drawn": True}) == "hi"
-    assert calls == [""]  # 已画 → 空 prompt
-    assert repl._read_line({"prompt_drawn": False}) == "hi"
-    assert calls[1] != ""  # 未画 → 正常 prompt
+    (c,) = comp.get_completions(Document("/mo"), None)
+    assert to_plain_text(c.display) == "/mode" and c.display_meta
 
 
-async def test_auto_continue_turn_injects_notification_with_history(tmp_path, monkeypatch):
-    """自动继续轮:run(None) 消费后台通知进模型请求;loop.history 刷新为会话
-    历史 —— 模型不只见通知 XML(fresh REPL 构造快照为 [] 的实证)。"""
-    from codesage.cli.repl import _auto_continue_turn
+def test_slash_completer_includes_skills():
+    """补全把可用技能也纳入(name + aliases 前缀匹配)。"""
+    from prompt_toolkit.document import Document
+
+    from codesage.cli.commands import COMMANDS
+    from codesage.cli.repl import _SlashCompleter
+    from codesage.skills import SkillDefinition, SkillRegistry
+
+    reg = SkillRegistry(builtin=[
+        SkillDefinition(name="mycheck", description="check things", body="b", aliases=("chk",)),
+    ])
+    comp = _SlashCompleter(COMMANDS, reg)
+    texts = [c.text for c in comp.get_completions(Document("/my"), None)]
+    assert "mycheck" in texts
+    assert [c.text for c in comp.get_completions(Document("/ch"), None)] == ["mycheck"]  # alias
+
+
+async def test_auto_continue_via_app_reloads_history_and_injects_notification(tmp_path, monkeypatch):
+    """自动继续轮(全屏应用路径):run(None) 消费后台通知进模型请求;loop.history
+    刷新为会话历史 —— 模型不只见通知 XML(fresh 构造快照为 [] 的实证)。"""
+    from codesage.cli.app import CodeSageApp
 
     loop = _mock_loop(
         tmp_path,
@@ -347,12 +351,15 @@ async def test_auto_continue_turn_injects_notification_with_history(tmp_path, mo
         "</task-notification>"
     )
     loop._notifications_event.set()
-    await _auto_continue_turn(loop, {"show_thinking": False, "transcript": False}, None)
+    app = CodeSageApp(loop, cwd=tmp_path)
+    await app._auto_continue()
     assert loop.history == expected  # 刷新为会话线性历史(--continue 同语义)
     assert loop.last_stop_reason == "completed"
     texts = [m.content for m in loop.client.requests[0] if isinstance(m.content, str)]
     assert any("prior question" in t for t in texts)  # 历史在模型请求里
     assert any("bg done" in t for t in texts)  # 通知经 drain 注入也在请求里
+    # 自动继续轮渲染进历史区(不是 stdout)
+    assert "auto" in app._log.plain_text()
 
 
 @pytest.mark.asyncio

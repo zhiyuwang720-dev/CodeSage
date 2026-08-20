@@ -174,6 +174,18 @@ def _fork_skill() -> SkillDefinition:
     )
 
 
+async def test_fork_skill_without_parent_loop_returns_error():
+    """fork 技能缺 parent_loop → 明确错误 tool_result(镜像 AgentTool 守卫),
+    不炸 AttributeError。"""
+    tool = SkillTool(SkillRegistry(builtin=[_fork_skill()]))
+    ctx = _ctx(parent_loop=None)
+    result = await tool._run({"skill": "forky", "args": "x"}, ctx)
+    assert result.is_error is True
+    assert result.metadata["skill"] == "forky"
+    assert result.metadata["skill_output"] is True
+    assert "parent_loop" in result.content
+
+
 async def test_fork_skill_end_to_end(tmp_path, monkeypatch):
     """fork 技能 → SubagentRunner 隔离子代理执行 → 结果回收为 tool_result。"""
     from codesage.agents import SubagentRunner as _OrigRunner
