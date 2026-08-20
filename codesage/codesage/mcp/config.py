@@ -436,7 +436,7 @@ def is_mcp_server_disabled(name: str) -> bool:
     from ..config import settings
 
     settings_obj = settings.load_settings()
-    if name in (settings_obj.disabledMcpServers or []):
+    if name in (getattr(settings_obj, "disabledMcpServers", None) or []):
         return True
     if name in (getattr(settings_obj, "enabledMcpServers", None) or []):
         return False
