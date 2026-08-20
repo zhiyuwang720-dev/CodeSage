@@ -76,6 +76,15 @@ class McpHttpServerConfig(BaseModel):
 
 McpServerConfig = McpStdioServerConfig | McpHttpServerConfig
 
+class McpJsonConfig(BaseModel):
+    """.mcp.json 文件形状(spec §3.1):{mcpServers: {name: 配置}}。
+
+    值类型宽松为 Any:解析层(parse_mcp_config)产出 ScopedMcpServerConfig(带 scope 标签),
+    原始配置模型(McpStdioServerConfig/McpHttpServerConfig)校验在各构造点完成。
+    """
+
+    mcpServers: dict[str, Any] = Field(default_factory=dict)
+
 
 class ScopedMcpServerConfig(BaseModel):
     """带来源标签的服务器配置(所有下游逻辑凭 scope 区分信任级)。
@@ -94,6 +103,20 @@ class ScopedMcpServerConfig(BaseModel):
     headers: dict[str, str] | None = None
     oauth: McpOAuthConfig | None = None
     plugin_source: str | None = None  # 预留(19 插件),本阶段恒 None
+
+    @field_validator("command")
+    @classmethod
+    def _command_nonempty(cls, v: str | None) -> str | None:
+        if v is not None and v == "":
+            raise ValueError("command cannot be empty")
+        return v
+
+    @field_validator("url")
+    @classmethod
+    def _url_scheme(cls, v: str | None) -> str | None:
+        if v is not None and not (v.startswith("https://") or v.startswith("http://localhost")):
+            raise ValueError("url must use https:// (http://localhost 除外)")
+        return v
 
     def signature(self) -> str | None:
         """内容指纹(spec §5.3 去重用):远程按 URL,stdio 按命令。scope 不参与。"""

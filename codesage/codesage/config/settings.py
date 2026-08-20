@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import paths
+from .atomic import atomic_write
 
 #: Per-tier defaults; tiers load in this order, later overrides earlier.
 TIER_ORDER = ("user", "project", "local")
@@ -104,3 +105,23 @@ class SettingsStore:
 def load_settings(project_dir: Path | None = None) -> Settings:
     """Convenience: load merged settings (cached per store instance)."""
     return SettingsStore(project_dir).load()
+
+def save_settings(mutator=None, project_dir: Path | None = None) -> None:
+    """Persist the local settings file atomically (spec §5.5: MCP 启用/禁用落点).
+
+    *mutator* 接收合并后的原始 dict 并返回新 dict;None 表示原样写回(通常配合
+    load_settings 改字段后保存)。写后清空 store 缓存让下次读取看到新值。
+    """
+    store = SettingsStore(project_dir)
+    files = [
+        paths.user_settings_path(),
+        paths.project_settings_path(project_dir),
+        paths.local_settings_path(project_dir),
+    ]
+    merged: dict = {}
+    for f in files:
+        merged = _deep_merge(merged, load_settings_file(f))
+    if mutator:
+        merged = mutator(merged)
+    atomic.atomic_write(paths.local_settings_path(project_dir), json.dumps(merged, indent=2) + "\n")
+    store.clear_cache()

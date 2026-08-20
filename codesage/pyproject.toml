@@ -18,6 +18,8 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 各模块测试目录含同名文件(test_types.py 等),importlib 模式避免 sys.path 前缀冲突
+addopts = "--import-mode=importlib"
 
 [project.scripts]
 codesage = "codesage.cli:main"
