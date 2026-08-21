@@ -63,6 +63,22 @@ def _cmd_show_thinking(args: list[str], state: dict) -> bool:
     return False
 
 
+def _cmd_ponytail(args: list[str], state: dict) -> bool:
+    """阶段 20 §5.4:/ponytail lite|full|ultra|off —— 切换懒人模式档位。"""
+    from ..intel.ponytail import PonytailState
+
+    if len(args) == 1 and args[0] in ("lite", "full", "ultra", "off"):
+        try:
+            PonytailState(state["loop"].cwd).set_mode(args[0])
+        except ValueError:
+            print("usage: /ponytail lite|full|ultra|off")
+            return False
+        print(f"ponytail -> {args[0]}")
+    else:
+        print("usage: /ponytail lite|full|ultra|off")
+    return False
+
+
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_CLEAR = " " * 24
 
@@ -585,6 +601,7 @@ def _mcp_builtin_install(args: list[str], state: dict, name: str, install: bool)
 
 COMMANDS: list[SlashCommand] = [
     SlashCommand("mode", _cmd_mode, "switch permission mode (plan|default|yolo)"),
+    SlashCommand("ponytail", _cmd_ponytail, "ponytail 懒人模式: /ponytail lite|full|ultra|off"),
     SlashCommand("show-thinking", _cmd_show_thinking, "toggle thinking output"),
     SlashCommand("compact", _cmd_compact, "压缩上下文"),
     SlashCommand("mcp", _cmd_mcp, "MCP 服务器管理: /mcp [add|remove|reconnect|enable|disable|install|uninstall]"),

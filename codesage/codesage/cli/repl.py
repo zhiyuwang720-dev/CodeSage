@@ -60,6 +60,21 @@ async def run_single_turn(
     target = out or sys.stdout
     started = time.monotonic()
     has_error = False
+
+    # 阶段 20 §5.5:停用短语整条匹配 → 关闭 ponytail(短语不进模型)。
+    # getattr 兜底:测试 FakeLoop 无 cwd 时整块跳过,行为零变化
+    _pt_cwd = getattr(loop, "cwd", None)
+    if user_input is not None and _pt_cwd is not None:
+        from ..intel.ponytail import PonytailState
+
+        _pt_state = PonytailState(_pt_cwd)
+        if _pt_state.mode != "off" and _pt_state.is_off_phrase(user_input.strip()):
+            _pt_state.set_mode("off")
+            print(_c("ponytail off — normal mode", GREY), file=target)
+            return _summarize_run(
+                loop, started=started, last_text="", has_error=False,
+                llm_calls=0, total_tokens=0,
+            )
     last_text = ""
     llm_calls = 0
     total_tokens = 0

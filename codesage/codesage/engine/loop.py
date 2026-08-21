@@ -200,6 +200,8 @@ class AgentLoop:
         self._prefetch_task: asyncio.Task | None = None  # §3.10 in-flight prefetch
         self._last_compact_turn = -1  # debounce: one compaction per turn
         self._compact_failures = 0  # consecutive failures → breaker
+        # 阶段 20 §4.1:影响面约束闸 guard(每会话一个实例,惰性化,持拦一次记忆)
+        self._mc_guard: Any | None = None
         # §7.2:熔断闭包(替代写 config.enabled,R4 解耦)。True = 熔断中,仅挡 auto
         # 触发(§7.1:manual 恒可用);压缩成功即复位
         self._compaction_breaker: bool = False
@@ -567,11 +569,6 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(state, tool_uses)
-                # 阶段 20:最小改动约束 —— 对写操作(Write/Edit)叠加影响面建议。
-                # 建议 prepend 到工具结果 content,作为引擎级「改动引导」供模型下轮参考;
-                # 不改变权限决策链(05),intel 为 None 时零变化。
-                if self.config.intel is not None:
-                    await self._apply_minimal_change_advice(scheduled)
                 # 阶段 14 §6.3(3):工具结果回收处 —— SkillTool 路径的授权落点,
                 # 读结果 metadata 的 skill_allowed_tools 并累积到会话授权集
                 for item in scheduled:
@@ -948,35 +945,27 @@ class AgentLoop:
             on_tool_start=self._record_tool_start,  # 12 §7.1:真实执行前记操作日志
             finalize=self.finalize,
             notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
+            minimal_change_check=self._minimal_change_check,  # 阶段 20 §4.1:影响面约束闸
         )
         return await queue.run()
 
-    async def _apply_minimal_change_advice(self, scheduled: list[ScheduledTool]) -> None:
-        """阶段 20:最小改动约束 —— 对写操作(Write/Edit)叠加影响面建议。
+    async def _minimal_change_check(self, item: ScheduledTool) -> ToolResult | None:
+        """阶段 20 §4.1:影响面约束闸(权限闸之后、真实执行之前)。
 
-        intel(CodeIntelligenceService)对写工具调用 minimal_change_guard,返回的
-        建议 prepend 到该工具结果 content(引擎级「改动引导」)。不改变权限决策链(05),
-        intel 为 None 或 guard 无建议时零变化。
+        guard 每会话一个实例(持拦一次记忆),惰性实例化;任何异常 fail-open
+        放行,不中断主流程。返回拦截 ToolResult 或 None(放行)。
         """
-        from ..intel import minimal_change_guard
+        if self.config.intel is None:
+            return None
+        if self._mc_guard is None:
+            from ..intel import MinimalChangeGuard
 
-        intel = self.config.intel
-        if intel is None:
-            return
-        for item in scheduled:
-            if item.result is None or item.result.is_error:
-                continue  # 只引导成功执行的写操作;失败无需改动建议
-            if item.tool.name not in ("Write", "Edit"):
-                continue  # 只约束写操作
-            try:
-                advice = await minimal_change_guard(item, intel, None)
-            except Exception:  # noqa: BLE001  # 约束层异常不中断主流程
-                advice = None
-            if advice:
-                content = item.result.content
-                item.result.content = (
-                    f"{advice}\n\n---\n{content}" if isinstance(content, str) else content
-                )
+            self._mc_guard = MinimalChangeGuard(self.config.intel)
+        try:
+            return await self._mc_guard.guard(item.tool.name, item.input)
+        except Exception:  # noqa: BLE001  # 约束层异常不中断主流程
+            logger.warning("minimal-change check failed (fail-open)", exc_info=True)
+            return None
 
     def grant_skill_tools(self, names: Iterable[str]) -> None:
         """技能授权(阶段 14 §7.1):会话内累积(CC alwaysAllowRules 同款)。

@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=system_prompt,
         session=session,
         history=history,
-        enable_intel=True,  # 阶段 20:最小改动 CodingAgent —— 真实入口自动索引代码库
+        enable_intel=os.environ.get("CODESAGE_NO_INTEL") != "1",  # 阶段 20:真实入口自动索引;开关可关
     )
     apply_tool_filter(loop, args.allowedTools, args.disallowedTools)
     _warn_if_no_api_key(loop)

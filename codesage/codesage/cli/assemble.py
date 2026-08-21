@@ -65,17 +65,17 @@ def build_loop(
     # §9.1,归 fixed 类恒保留);loop 挂 _skills 供 repl 斜杠兜底读取
     skill_registry = SkillRegistry.from_default_paths(cwd)
     registry.register(SkillTool(skill_registry))
-    # 构建代码智能服务(自动索引)。
+    # 构建代码智能服务(后台自动索引,不阻塞启动)。
     from ..intel import CodeIntelligenceService
 
     intel_service = None
     if enable_intel:
         try:
-            import asyncio as _asyncio
-
             intel_service = CodeIntelligenceService(cwd)
-            _asyncio.run(intel_service.ensure_indexed())
-            intel_service = intel_service if intel_service.available else None
+            if intel_service.discoverable:
+                # 阶段 20 §4.4:daemon 线程后台索引 —— 替代原同步 _asyncio.run
+                # 阻塞 300s;约束层经 wait_ready(限时 10s)在索引未完成时 fail-open
+                intel_service.start_background_index()
         except Exception:  # noqa: BLE001  # 代码智能不可用不阻塞启动
             intel_service = None
     # 阶段 15:MCP 客户端装配 —— 同步预连接全部服务器(每服务器 30s 超时,失败降级

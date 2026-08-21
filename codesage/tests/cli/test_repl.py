@@ -238,7 +238,7 @@ def test_match_commands_prefix_suggestions():
     assert _match_commands("/") == _match_commands("/")  # 全部指令
     names = [c.name for c in _match_commands("/")]
     assert names == [
-        "mode", "show-thinking", "compact", "mcp", "tree", "fork",
+        "mode", "ponytail", "show-thinking", "compact", "mcp", "tree", "fork",
         "bookmark", "sessions", "archive", "help", "quit",
     ]
     assert [c.name for c in _match_commands("/co")] == ["compact"]

@@ -6,16 +6,15 @@
 """
 
 from .service import CodeIntelligenceService, discover_cbm_cli
-from .minimal_change import WRITE_TOOLS, MinimalChangeGuard, minimal_change_guard
-from .ponytail import PONYTAIL_BODY, ladder_suggestion, register_ponytail
+from .minimal_change import MINIMAL_CHANGE_BLOCKED, WRITE_TOOLS, MinimalChangeGuard
+from .ponytail import PONYTAIL_FULL_BODY, register_ponytail
 
 __all__ = [
     "CodeIntelligenceService",
     "MinimalChangeGuard",
-    "PONYTAIL_BODY",
+    "MINIMAL_CHANGE_BLOCKED",
+    "PONYTAIL_FULL_BODY",
     "WRITE_TOOLS",
     "discover_cbm_cli",
-    "ladder_suggestion",
-    "minimal_change_guard",
     "register_ponytail",
 ]
