@@ -191,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 _print_history_summary(resumed, root)
 
+    # 阶段 20:ponytail 内置技能在真实入口、build_loop(SkillRegistry 构建)之前注册,
+    # 确保本会话立即可用;不在 build_loop 内注册以避免污染测试的 bundled 单例。
+    from ..intel import register_ponytail
+
+    register_ponytail()
+
     loop = build_loop(
         cwd=cwd,
         mode=mode,
@@ -202,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=system_prompt,
         session=session,
         history=history,
+        enable_intel=True,  # 阶段 20:最小改动 CodingAgent —— 真实入口自动索引代码库
     )
     apply_tool_filter(loop, args.allowedTools, args.disallowedTools)
     _warn_if_no_api_key(loop)
