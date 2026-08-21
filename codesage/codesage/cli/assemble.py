@@ -53,6 +53,7 @@ def build_loop(
     session: Session | None = None,  # existing session (--continue); else new
     history: list | None = None,  # prior turns as context (--continue)
     mcp_connect_timeout_ms: int = 30_000,  # 阶段 15:每服务器连接超时(失败降级不阻塞)
+    enable_intel: bool = False,  # 阶段 20:最小改动 CodingAgent 代码智能引擎(真实入口显式开启)
 ) -> AgentLoop:
     settings = load_settings(project_dir=cwd)
     client = LLMClient(project_dir=str(cwd), vcr_mode=vcr_mode)
@@ -64,6 +65,22 @@ def build_loop(
     # §9.1,归 fixed 类恒保留);loop 挂 _skills 供 repl 斜杠兜底读取
     skill_registry = SkillRegistry.from_default_paths(cwd)
     registry.register(SkillTool(skill_registry))
+    # 阶段 20:最小改动 CodingAgent —— 构建代码智能服务(自动索引)。
+    # 索引失败/无 codebase-memory 时 intel_service 为 None,引擎零变化(降级不阻塞)。
+    # enable_intel=False(测试环境)跳过真实索引,快速装配。
+    # 注:ponytail 内置技能注册在真实入口 main() 调用,避免污染测试的 bundled 单例。
+    from ..intel import CodeIntelligenceService
+
+    intel_service = None
+    if enable_intel:
+        try:
+            import asyncio as _asyncio
+
+            intel_service = CodeIntelligenceService(cwd)
+            _asyncio.run(intel_service.ensure_indexed())
+            intel_service = intel_service if intel_service.available else None
+        except Exception:  # noqa: BLE001  # 代码智能不可用不阻塞启动
+            intel_service = None
     # 阶段 15:MCP 客户端装配 —— 同步预连接全部服务器(每服务器 30s 超时,失败降级
     # 不阻塞启动,spec §7.2 裁决 4),工具即时注入注册表;loop 挂 _mcp 供 /mcp 命令读取
     mcp_manager = build_mcp_manager(cwd, connect_timeout_ms=mcp_connect_timeout_ms)
@@ -125,6 +142,7 @@ def build_loop(
             history=history,
             hooks=hooks,  # 阶段 09:事件钩子管理器(无配置事件走索引零路径,§4.10.1)
             skill_restore=lambda: _skill_restore(loop),  # 14 §10.2:压缩后技能恢复(闭包晚绑定,压缩时才调用)
+            intel=intel_service,  # 阶段 20:最小改动 CodingAgent 代码智能引擎(默认 None 零变化)
         ),
         mode=mode,  # 会话级运行时切换(/mode 命令写实例,不进 config)
     )

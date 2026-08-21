@@ -118,6 +118,9 @@ class AgentLoopConfig:
     #: 阶段 14 §10.2:压缩后技能恢复回调(默认 None = 零变化)。压缩完成处调用,
     #: 返回的文本并入既有 _recovery_reminder 一次性注入(08/10 机制,零新通道)。
     skill_restore: Callable[[], str | None] | None = None
+    #: 阶段 20:CodeIntelligenceService(最小改动 CodingAgent)。默认 None = 零变化;
+    #: 提供时对写操作(Write/Edit)做影响面分析,注入 minimal-change 引导建议。
+    intel: Any = None
 
     def __post_init__(self) -> None:
         max_turns = self.max_turns
@@ -564,6 +567,11 @@ class AgentLoop:
                     yield await self._stop("interrupted", INTERRUPT_TEXT, meta=True)
                     return
                 scheduled = await self._execute_tools(state, tool_uses)
+                # 阶段 20:最小改动约束 —— 对写操作(Write/Edit)叠加影响面建议。
+                # 建议 prepend 到工具结果 content,作为引擎级「改动引导」供模型下轮参考;
+                # 不改变权限决策链(05),intel 为 None 时零变化。
+                if self.config.intel is not None:
+                    await self._apply_minimal_change_advice(scheduled)
                 # 阶段 14 §6.3(3):工具结果回收处 —— SkillTool 路径的授权落点,
                 # 读结果 metadata 的 skill_allowed_tools 并累积到会话授权集
                 for item in scheduled:
@@ -942,6 +950,33 @@ class AgentLoop:
             notify=self._notify,  # 阶段 09 §2.5:tool_error 通知源
         )
         return await queue.run()
+
+    async def _apply_minimal_change_advice(self, scheduled: list[ScheduledTool]) -> None:
+        """阶段 20:最小改动约束 —— 对写操作(Write/Edit)叠加影响面建议。
+
+        intel(CodeIntelligenceService)对写工具调用 minimal_change_guard,返回的
+        建议 prepend 到该工具结果 content(引擎级「改动引导」)。不改变权限决策链(05),
+        intel 为 None 或 guard 无建议时零变化。
+        """
+        from ..intel import minimal_change_guard
+
+        intel = self.config.intel
+        if intel is None:
+            return
+        for item in scheduled:
+            if item.result is None or item.result.is_error:
+                continue  # 只引导成功执行的写操作;失败无需改动建议
+            if item.tool.name not in ("Write", "Edit"):
+                continue  # 只约束写操作
+            try:
+                advice = await minimal_change_guard(item, intel, None)
+            except Exception:  # noqa: BLE001  # 约束层异常不中断主流程
+                advice = None
+            if advice:
+                content = item.result.content
+                item.result.content = (
+                    f"{advice}\n\n---\n{content}" if isinstance(content, str) else content
+                )
 
     def grant_skill_tools(self, names: Iterable[str]) -> None:
         """技能授权(阶段 14 §7.1):会话内累积(CC alwaysAllowRules 同款)。
