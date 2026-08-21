@@ -22,6 +22,10 @@ SIBLING_ERROR_TEXT = "<tool_use_error>Sibling tool call errored</tool_use_error>
 MAX_TOOL_RESULT_CHARS = 100_000
 RESULT_PREVIEW_CHARS = 500
 
+#: 非致命 error_code:工具被引擎决策拦下,不是执行错误 —— sibling 策略(株连)豁免,
+#: 兄弟工具继续各自走自己的闸(CC 语义)。含权限拒绝(05)与影响面约束(阶段 20)。
+_NON_FATAL_CODES = frozenset({"permission_blocked", "minimal_change_blocked"})
+
 
 #: tool_use_id -> spill path; deterministic reuse keeps prompt-cache prefixes stable.
 _spill_cache: dict[str, Path] = {}
@@ -85,6 +89,7 @@ class ToolUseQueue:
         on_tool_event: Any | None = None,  # (event, tool_name, payload) lifecycle (PI-01)
         on_tool_start: Any | None = None,  # (ScheduledTool) -> None 真实执行前(权限闸通过后)回调(12 §7.1)
         notify: Any | None = None,  # async (notification_type, message, **data) — 阶段 09 §2.5 通知 emit
+        minimal_change_check: Any | None = None,  # 阶段 20 §4:影响面约束层(写操作执行前拦截,权限闸之后)
     ):
         self._tools = tools
         self._permission_check = permission_check
@@ -94,6 +99,7 @@ class ToolUseQueue:
         self._on_tool_event = on_tool_event
         self._on_tool_start = on_tool_start
         self._notify = notify
+        self._minimal_change_check = minimal_change_check
 
     def _emit_tool_event(self, event: str, tool_name: str, payload: dict) -> None:
         """Fire a lifecycle event; a misbehaving callback must never break tools."""
@@ -136,7 +142,7 @@ class ToolUseQueue:
                 or (
                     r is not None
                     and r.is_error
-                    and r.metadata.get("error_code") != "permission_blocked"
+                    and r.metadata.get("error_code") not in _NON_FATAL_CODES
                 )
                 for r in results
             )
@@ -179,6 +185,15 @@ class ToolUseQueue:
                 if self._post_hook is not None:
                     await self._post_hook(item, denied)
                 return denied
+        # 阶段 20 §4.1:影响面约束层 —— 权限闸之后、真实执行之前,写操作拦一次、
+        # 重试放行;拦截以 minimal_change_blocked 呈现,不改变权限决策链(05)
+        if self._minimal_change_check is not None:
+            blocked = await self._minimal_change_check(item)
+            if blocked is not None:
+                blocked.metadata.setdefault("error_code", "minimal_change_blocked")
+                if self._post_hook is not None:
+                    await self._post_hook(item, blocked)
+                return blocked
 
         # ---- execute (PI-01: lifecycle events) ----
         # 12 §7.1:真实执行前记录操作日志(权限拒绝路径在此前已返回,不会误记)

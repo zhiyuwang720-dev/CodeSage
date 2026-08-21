@@ -288,6 +288,15 @@ class SubagentRunner:
             parent.system_prompt, req.name or agent_id, body, parent.task_list_id, cwd
         )
         system += skills_note  # 14 §11.1:收窄后的技能静态列表随系统提示列出
+        # 阶段 20 §5.5:ponytail 传染 —— 读**父会话** cwd 的模式(worktree 子
+        # 代理的 flag 文件在隔离目录里,读父 cwd 才不丢传染);off 返回空串
+        # 不注入;body_for 内部异常回退压缩版,这里仅兜底不阻塞子代理启动
+        from ..intel.ponytail import PonytailState, ponytail_body_for
+
+        try:
+            system += ponytail_body_for(PonytailState(parent.cwd).mode)
+        except Exception:  # noqa: BLE001  # 传染失败不阻塞子代理启动
+            pass
         # 注:Agent 工具输入暂不读 permission_mode 参数(§8 参数链只参数化 model/
         # max_turns),request 级仅编程入口可达;当前实际生效面 = 定义级声明。
         declared = req.permission_mode or (definition.permission_mode if definition else None)

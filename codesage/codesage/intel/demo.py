@@ -2,8 +2,8 @@
 
 运行:python -m codesage.intel.demo
 验证「最小改动 CodingAgent」核心链路:
-1. 自动索引当前代码库(codebase-memory 知识图谱)
-2. 影响面分析:查某函数的入站调用者
+1. 自动索引当前代码库(codebase-memory 知识图谱,后台线程不阻塞)
+2. 影响面分析:structuredContent 解包(数字为 int)+ 短名歧义识别
 3. ponytail 阶梯生成最小改动建议
 需 codebase-memory-mcp 已安装;未安装则打印降级提示。
 """
@@ -26,32 +26,41 @@ async def _demo(project_dir: Path) -> int:
         print("安装:https://github.com/DeusData/codebase-memory-mcp")
         return 1
 
-    print(f"=== 阶段 20 demo:最小改动 CodingAgent ===")
+    print("=== 阶段 20 demo:最小改动 CodingAgent ===")
     print(f"目标代码库: {project_dir}")
 
-    print("\n[1/3] 自动索引代码库...")
+    print("\n[1/4] 自动索引代码库(后台线程,不阻塞启动)...")
     svc = CodeIntelligenceService(project_dir)
-    ok = await svc.ensure_indexed()
-    if not ok:
-        print("索引失败,降级。")
+    svc.start_background_index()
+    if not await svc.wait_ready(timeout_s=120):
+        print("索引未就绪,降级。")
         return 1
     print(f"  已索引,project_key={svc.project_key}")
 
-    print("\n[2/3] 影响面分析(Engine.loop 的 AgentLoop 入站调用者)...")
+    print("\n[2/4] 影响面分析(trace_path format=json,structuredContent 解包)...")
     trace = await svc.trace("AgentLoop", "inbound")
-    print(f"  Trace 有 {trace}")
-    callers = int(trace.get("callers_total", 0)) if trace else 0
-    print(f"  AgentLoop 有 {callers} 个入站调用者(改动它的影响面)")
+    if trace:
+        n = trace.get("callers_total")
+        print(f"  AgentLoop 入站调用者: {n}(int={isinstance(n, int)} — 真结构化,非文本猜测)")
+    impact = await svc.impact_of_change("run")
+    if impact:
+        print(f"  短名 'run' → status={impact.get('status')}(修正:歧义不再误判为 0 调用者)")
+        if impact.get("status") == "ambiguous":
+            names = [s.get("qualified_name") for s in impact.get("suggestions", [])][:3]
+            print(f"    候选: {names}")
+
+    print("\n[3/4] 库结构概要...")
     arch = await svc.get_architecture("structure")
     if arch:
-        print(f"  库结构: {arch.get('total_nodes')} 节点 / {arch.get('total_edges')} 边")
+        print(f"  {arch.get('total_nodes')} 节点 / {arch.get('total_edges')} 边")
 
-    print("\n[3/3] ponytail 最小改动建议(引擎级约束)...")
+    print("\n[4/4] ponytail 最小改动建议(引擎级约束层)...")
     register_ponytail()
     guard = MinimalChangeGuard(svc)
     advice = await guard.guard("Edit", {"file_path": "codesage/engine/loop.py"})
-    print(f"  约束层建议: {advice}")
-    print(f"  无调用者建议: {await guard.guard('Write', {'file_path': 'new_mod.py'})}")
+    text = advice.content if hasattr(advice, "content") else advice
+    print(f"  约束层建议: {text}")
+    print("  提示:同一目标重试将放行(拦一次语义)")
 
     print("\n=== demo 完成:自动索引 + 影响面分析 + 最小改动建议链路可用 ===")
     return 0
