@@ -1,7 +1,6 @@
-"""引擎级影响面约束层(spec 20 §4):改动最小集,拦截/引导工具调用到最小侵入路径。
+"""引擎级影响面约束层:改动最小集,拦截/引导工具调用到最小侵入路径。
 
-核心裁决(spec 20 §2 裁决 2/3):最小改动 = 引擎级约束,非提示词要求。对写操作
-(Edit/Write),先查图谱影响面,给「改动最小集」建议。不改变权限决策链(05),
+核心裁决:最小改动 = 引擎级约束,非提示词要求。对写操作(Edit/Write),先查图谱影响面,给「改动最小集」建议。不改变权限决策链,
 是独立叠加关卡;默认只「建议引导」,可 CODESAGE_NO_MINIMAL_CHANGE 关闭硬拦。
 """
 
@@ -18,15 +17,15 @@ WRITE_TOOLS = frozenset({"Write", "Edit"})
 
 
 def minimal_change_enabled() -> bool:
-    """约束层开关(spec 20 §4.3):CODESAGE_NO_MINIMAL_CHANGE 关闭硬拦(仍留建议)。"""
+    """约束层开关:CODESAGE_NO_MINIMAL_CHANGE 关闭硬拦(仍留建议)。"""
     return os.environ.get("CODESAGE_NO_MINIMAL_CHANGE", "") != "1"
 
 
 class MinimalChangeGuard:
-    """改动最小集约束器(spec 20 §4)。
+    """改动最小集约束器
 
     对写目标,查图谱「谁调用/谁依赖」,产出影响集与最小集建议。
-    ponytail 阶梯(§5)编码进建议生成:删除优先/复用既有/根因修复/一行优先。
+    ponytail 阶梯编码进建议生成:删除优先/复用既有/根因修复/一行优先。
     """
 
     def __init__(self, intel) -> None:
@@ -54,7 +53,7 @@ class MinimalChangeGuard:
         return self._build_suggestion(target, impact)
 
     def _build_suggestion(self, target: str, impact: dict) -> str:
-        """按 ponytail 阶梯生成改动建议(spec 20 §5.2)。"""
+        """按 ponytail 阶梯生成改动建议"""
         from .ponytail import ladder_suggestion
 
         callers = int(impact.get("callers_total", 0) or 0)

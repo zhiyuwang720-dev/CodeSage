@@ -53,7 +53,7 @@ def build_loop(
     session: Session | None = None,  # existing session (--continue); else new
     history: list | None = None,  # prior turns as context (--continue)
     mcp_connect_timeout_ms: int = 30_000,  # 阶段 15:每服务器连接超时(失败降级不阻塞)
-    enable_intel: bool = False,  # 阶段 20:最小改动 CodingAgent 代码智能引擎(真实入口显式开启)
+    enable_intel: bool = False,  #  最小改动 CodingAgent 代码智能引擎(真实入口显式开启)
 ) -> AgentLoop:
     settings = load_settings(project_dir=cwd)
     client = LLMClient(project_dir=str(cwd), vcr_mode=vcr_mode)
@@ -65,10 +65,7 @@ def build_loop(
     # §9.1,归 fixed 类恒保留);loop 挂 _skills 供 repl 斜杠兜底读取
     skill_registry = SkillRegistry.from_default_paths(cwd)
     registry.register(SkillTool(skill_registry))
-    # 阶段 20:最小改动 CodingAgent —— 构建代码智能服务(自动索引)。
-    # 索引失败/无 codebase-memory 时 intel_service 为 None,引擎零变化(降级不阻塞)。
-    # enable_intel=False(测试环境)跳过真实索引,快速装配。
-    # 注:ponytail 内置技能注册在真实入口 main() 调用,避免污染测试的 bundled 单例。
+    # 构建代码智能服务(自动索引)。
     from ..intel import CodeIntelligenceService
 
     intel_service = None

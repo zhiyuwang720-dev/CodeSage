@@ -39,6 +39,7 @@ async def _demo(project_dir: Path) -> int:
 
     print("\n[2/3] 影响面分析(Engine.loop 的 AgentLoop 入站调用者)...")
     trace = await svc.trace("AgentLoop", "inbound")
+    print(f"  Trace 有 {trace}")
     callers = int(trace.get("callers_total", 0)) if trace else 0
     print(f"  AgentLoop 有 {callers} 个入站调用者(改动它的影响面)")
     arch = await svc.get_architecture("structure")

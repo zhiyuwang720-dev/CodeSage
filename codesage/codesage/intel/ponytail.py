@@ -1,10 +1,10 @@
-"""ponytail 融合(spec 20 §5):懒人资深工程师阶梯接入 CodeSage。
+"""ponytail 融合:懒人资深工程师阶梯接入 CodeSage。
 
 把 ponytail 的「删优于加/复用优先/根因修复/一行优先」作为:
 1. 内置技能(经 14 register_bundled_skill 接入,用户可 /ponytail 调用);
 2. 引擎约束层的改动建议生成(§5.2):阶梯编码进 minimal_change 的建议。
 
-ponytail 阶梯(spec 20 §5.1):
+ponytail 阶梯:
 1. 改动是否需要存在(YAGNI)
 2. 库内已有 helper/模式可复用?
 3. stdlib/平台能力覆盖?
@@ -68,7 +68,7 @@ def register_ponytail() -> None:
 
 
 def ladder_suggestion(impact_callers: int) -> str:
-    """把 ponytail 阶梯编码进改动建议(spec 20 §5.2,供 minimal_change 用)。
+    """把 ponytail 阶梯编码进改动建议供 minimal_change 用)。
 
     *impact_callers*:目标符号的入站调用者数。按阶梯给最小改动建议。
     """
