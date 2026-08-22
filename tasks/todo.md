@@ -63,6 +63,28 @@
 - [ ] **19 plugins 热插拔注册层** (`feat/19-plugins`)
   - 验收:模块注册表;≥2 实现切换零代码侵入;插件化工具/技能/MCP 统一入口
   - 验证:切换单测 + 最终全量回归
+  - ⚠️ **被阶段 21+ 取代**(V2 插件化转向,2026-08-22 决策);验收标准由 22+ 接棒
+
+## V2 插件化(阶段 21-25,2026-08-22 新增)
+
+> 规格:`docs/specs/21-plugin-kernel.md`(内核)+ `docs/specs/22-pluginization.md`(改造路线图);
+> 战略决策:`docs/specs/后续设计想法.md`「V2 插件化转向」。
+
+- [ ] **21 plugin-kernel 插件内核** (`feat/21-plugin-kernel`)
+  - 验收:五概念(插件/上下文/inject/四派发事件/可逆 effect)+ Loader + Patch(按 id last-wins);纯 stdlib 零新依赖;Fake LLM 最小 loop demo;既有 1400+ 测试全绿
+  - 验证:kernel 六测试文件全绿 + demo 可跑 + 全量回归
+- [ ] **22 boot Profile/Bundle 组合层** (`feat/22-boot`)
+  - 验收:manifest 分层(内置 → 用户 → --patch)+ patch last-wins + dump-tree 等价命令;assemble.py 转 compat shim(双轨,既有测试保绿)
+  - 验证:manifest 覆盖矩阵单测 + 既有全量回归
+- [ ] **23 seams 核心 seam 化** (`feat/23-seams`)
+  - 验收:llm/tools/permissions/hooks 四服务进 ctx(服务定义/提供者/消费方);manifest 单行换 llm adapter 生效;事件总线兼容层(hooks 快照回调 → emit)
+  - 验证:seam 切换单测 + loop 回归(11x 热路径,兼容层兜底)
+- [ ] **24 session-scope 会话事件溯源 + Scope** (`feat/24-session-scope`)
+  - 验收:SessionEventMap 词汇表 + deriveMessages() 派生层 + 「模型可见=已记日志」运行时断言 + fork;每 agent 隔离 ctx(注册随 agent 销毁回滚)
+  - 验证:派生层单测(重放/增量)+ 断言测试 + 旧会话 JSONL 可读回归
+- [ ] **25 finalize 全模块迁移收尾** (`feat/25-finalize`)
+  - 验收:skills/mcp/intel/agents/config 全部插件化;manifest 全量行;assemble.py shim 下线;全量回归绿
+  - 验证:全量回归 + 手工冒烟(manifest 装配启动)
 
 ## 收尾
 
