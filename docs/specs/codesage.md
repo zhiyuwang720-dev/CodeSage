@@ -157,10 +157,28 @@ V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,
 | 16 | `feat/16-bash-safety` | Bash 安全纵深 | 破坏性守卫、LLM 意图闸门(fail-closed #8)、沙箱计划(#9,Windows 降级为文档 + Linux 预留) | 安全 + 单测 |
 | 17 | `feat/17-memory` | 记忆系统 | JSONL 事件溯源、保守提取、本地词法检索、注入标注(#17) | 记忆 + 单测 |
 | 18 | `feat/18-multimodel` | 多模型编排 | 专家模型、辅助回退增强、上下文感知切换 | 编排 + 单测 |
-| 19 | `feat/19-plugins` | 热插拔注册层 | 收尾:模块注册表、≥2 个真实实现后设计接口、插件化工具/技能/MCP 统一入口 | 注册层 + 单测 |
+| 19 | `feat/19-plugins` | 热插拔注册层 | ~~收尾:模块注册表、≥2 个真实实现后设计接口、插件化工具/技能/MCP 统一入口~~ | — | ⚠️ 被 21+ 取代(验收由 22+ 接棒) |
+| 20 | `feat/20-minimal-change` | 最小改动 CodingAgent | 战略转向(intel 三文件 + 执行前拦截 + ponytail 生产级),权威地图见 `docs/specs/后续设计想法.md` | intel + 单测 | ✅ 已交付 + 修正 |
+| 21 | `feat/21-plugin-kernel` | 插件内核 | Python 版 Cordis 五概念 + Loader + Patch(规格:`docs/specs/21-plugin-kernel.md`) | 内核 + 单测 | 规划中 |
+| 22 | `feat/22-boot` | Profile/Bundle 组合层 | manifest 分层 + patch last-wins + dump-tree + assemble 转 compat shim | 组合层 + 单测 | 规划中 |
+| 23 | `feat/23-seams` | 核心 seam 化 | llm/tools/permissions/hooks 进 ctx + 事件总线兼容层(规格:`docs/specs/22-pluginization.md`) | seam + 单测 | 规划中 |
+| 24 | `feat/24-session-scope` | 会话事件溯源 + Scope | SessionEventMap + deriveMessages 派生层 + fork + 每 agent 作用域 | 会话 + 单测 | 规划中 |
+| 25 | `feat/25-finalize` | 全模块迁移收尾 | skills/mcp/intel/agents/config 插件化 + assemble shim 下线 + 全量回归 | 迁移 + 单测 | 规划中 |
 
 每阶段交付:`[代码] + docs/modules/0N-*.md(理解文档)+ 单测全绿 + 合并回 master`。
 阶段规格在该分支细化(六项核心区 + 完成标准 + 对照保留清单)。
+
+## V2 插件化路线图(阶段 21-25,2026-08 决策)
+
+**决策**:语言不变(Python ≥3.11,零新依赖);自研 Python 版 Cordis 内核,不引 cordis-py
+(第三方移植版 = 新依赖 + API 绑定);改造为「组合层 + 每模块一个插件文件」,非重写。
+
+- 依据:DSH 深度解读(`docs/deepseek-harness 项目深度解读.md`)+ cordis-mini 600 行验证 +
+  代码量评估(内核 1200~1900 + 改造 2300~3700 行,5 阶段)
+- 深度档位:表面插件化(基线)+ 会话事件溯源派生层(采纳);waterfall/claim 对齐后置;
+  sandbox/web/workflow 等能力对齐档明确不做
+- 兼容:assemble.py 转 compat shim 全程保留,全部迁移完(25)才删 —— 既有测试几乎不动
+- 权威地图:阶段 21 规格 + 阶段 22-25 规格(`docs/specs/22-pluginization.md`)
 
 ## V1 生产级强化记录(2026-08-05,三轮修复)
 
@@ -190,6 +208,7 @@ V1(01–07)交付后经 7 代理对照 Kode 审查(功能级 + 文件级两轮),
 - [ ] 阶段 01–19 每阶段:模块完成 + 理解文档 + 单测全绿 + master 干净合并
 - [ ] 热插拔:同一类模块存在 ≥2 个实现,注册层切换无代码侵入
 - [ ] 未来适配预留:权限运行时审计事件可被安全领域逻辑消费(无需改核心)
+- [ ] V2(21–25):插件内核五概念落地;manifest 单行换 llm adapter 生效;assemble shim 下线后全量回归绿;「模型可见 = 已记日志」运行时断言生效
 
 ## Open Questions
 

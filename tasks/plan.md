@@ -17,8 +17,23 @@
 03 tools ──→ 15 mcp(还需 04)
 05 permissions + 03 tools ──→ 16 bash-safety
 02 ai ──→ 18 multimodel
-全部 ──→ 19 plugins(收尾)
+全部 ──→ 19 plugins(收尾)【被 21+ 取代】
+
+## V2 插件化主线(阶段 21-25,规格见 docs/specs/21 与 22)
+
 ```
+21 插件内核 ──→ 22 boot(profile/bundle + assemble shim)
+                   │
+                   └─→ 23 核心 seam(llm/tools/permissions/hooks + 事件总线)
+                        │
+                        └─→ 24 会话事件溯源派生层 + Scope
+                             │
+                             └─→ 25 全模块迁移收尾 + shim 下线
+```
+
+- 21 内核自含(五概念 + loader/patch),22 起才接线既有模块
+- 16/17/18 未交付阶段与 V2 互不阻塞,可按需穿插(16 依赖 05+03,17 依赖 01,18 依赖 02)
+- 兼容主线:assemble.py compat shim 从 22 保留到 25,双轨测试全绿是每阶段合并门
 
 主线串行(V1):01→02→03→04→05→06→07,依赖强制,无并行。
 V2+(08–18):依赖上互不阻塞,可任意顺序推进;单开发者按编号顺序即可,某阶段受阻不阻塞后续。

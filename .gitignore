@@ -37,3 +37,6 @@ codesage/sessions/
 # vendored third-party tools (本地内建集成用,不随仓库上传)
 codebase-memory-mcp/
 ponytail/
+
+# 参考实现(只读,不随仓库上传)
+deepseek-harness/
