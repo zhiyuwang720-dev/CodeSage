@@ -70,9 +70,9 @@
 > 规格:`docs/specs/21-plugin-kernel.md`(内核)+ `docs/specs/22-pluginization.md`(改造路线图);
 > 战略决策:`docs/specs/后续设计想法.md`「V2 插件化转向」。
 
-- [ ] **21 plugin-kernel 插件内核** (`feat/21-plugin-kernel`)
+- [x] **21 plugin-kernel 插件内核** (`feat/21-plugin-kernel`)✅ 2026-08-22
   - 验收:五概念(插件/上下文/inject/四派发事件/可逆 effect)+ Loader + Patch(按 id last-wins);纯 stdlib 零新依赖;Fake LLM 最小 loop demo;既有 1400+ 测试全绿
-  - 验证:kernel 六测试文件全绿 + demo 可跑 + 全量回归
+  - 验证:kernel 六测试文件全绿 + demo 可跑 + 全量回归;**1508 passed, 9 skipped**
 - [ ] **22 boot Profile/Bundle 组合层** (`feat/22-boot`)
   - 验收:manifest 分层(内置 → 用户 → --patch)+ patch last-wins + dump-tree 等价命令;assemble.py 转 compat shim(双轨,既有测试保绿)
   - 验证:manifest 覆盖矩阵单测 + 既有全量回归
