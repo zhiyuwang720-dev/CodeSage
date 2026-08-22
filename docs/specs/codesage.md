@@ -159,7 +159,7 @@ V1 = 阶段 01–07(最小闭环:REPL + 单模型 + 核心工具 + 权限门控,
 | 18 | `feat/18-multimodel` | 多模型编排 | 专家模型、辅助回退增强、上下文感知切换 | 编排 + 单测 |
 | 19 | `feat/19-plugins` | 热插拔注册层 | ~~收尾:模块注册表、≥2 个真实实现后设计接口、插件化工具/技能/MCP 统一入口~~ | — | ⚠️ 被 21+ 取代(验收由 22+ 接棒) |
 | 20 | `feat/20-minimal-change` | 最小改动 CodingAgent | 战略转向(intel 三文件 + 执行前拦截 + ponytail 生产级),权威地图见 `docs/specs/后续设计想法.md` | intel + 单测 | ✅ 已交付 + 修正 |
-| 21 | `feat/21-plugin-kernel` | 插件内核 | Python 版 Cordis 五概念 + Loader + Patch(规格:`docs/specs/21-plugin-kernel.md`) | 内核 + 单测 | 规划中 |
+| 21 | `feat/21-plugin-kernel` | 插件内核 | Python 版 Cordis 五概念 + Loader + Patch(规格:`docs/specs/21-plugin-kernel.md`) | 内核 + 单测 | ✅ 已交付 |
 | 22 | `feat/22-boot` | Profile/Bundle 组合层 | manifest 分层 + patch last-wins + dump-tree + assemble 转 compat shim | 组合层 + 单测 | 规划中 |
 | 23 | `feat/23-seams` | 核心 seam 化 | llm/tools/permissions/hooks 进 ctx + 事件总线兼容层(规格:`docs/specs/22-pluginization.md`) | seam + 单测 | 规划中 |
 | 24 | `feat/24-session-scope` | 会话事件溯源 + Scope | SessionEventMap + deriveMessages 派生层 + fork + 每 agent 作用域 | 会话 + 单测 | 规划中 |
