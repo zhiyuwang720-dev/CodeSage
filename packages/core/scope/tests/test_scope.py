@@ -13,8 +13,9 @@ import pytest
 
 _CORE = Path(__file__).resolve().parents[2]  # packages/core
 _ROOT = Path(__file__).resolve().parents[4]  # 仓库根(CodeSage)
+# cordis 内核独立仓库(与 CodeSage 平级的兄弟目录,见项目约定)
 sys.path.insert(0, str(_CORE))
-sys.path.insert(0, str(_ROOT / "cordis-py"))
+sys.path.insert(0, str(_ROOT.parent / "cordis-py"))
 
 from cordis import Context  # noqa: E402
 from cordis.service import FILTER  # noqa: E402
