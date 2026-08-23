@@ -41,3 +41,6 @@ ponytail/
 # 参考实现(只读,不随仓库上传)
 deepseek-harness/
 cordis-mini/
+
+# 嵌套仓库:Python 版 Cordis 内核(独立 git,单独 push)
+cordis-py/
