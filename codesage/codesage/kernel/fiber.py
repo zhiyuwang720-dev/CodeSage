@@ -19,7 +19,7 @@ import inspect
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
-from .utils import DisposableList, INIT_HOOKS, INIT, is_constructor, is_object
+from .utils import FALLBACK, DisposableList, INIT_HOOKS, INIT, is_constructor, is_object
 
 if TYPE_CHECKING:
     from .context import Context
@@ -143,6 +143,9 @@ class Fiber:
 
             self.uid = parent.registry.counter
             self.ctx = self.context = parent.extend({"fiber": self})
+            # 原型链:TS Object.create(parent) 的运行时等价 —— 父 ctx 后加的
+            # 真实属性(loader 的 entry/delim 等)沿 _fallback 可见
+            object.__setattr__(self.ctx, FALLBACK, parent)
 
             # inject 拦截配置:写时复制 intercept 链(TS Object.create 原型链)
             entries = {k: v for k, v in self.inject.items() if v is not None}
@@ -487,10 +490,13 @@ class Fiber:
             lambda: self._apply_update(config),
         )
 
-    def _apply_update(self, config: Any) -> Any:
+    async def _apply_update(self, config: Any) -> Any:
         self.config = config
         self._error = None
-        return self.restart()
+        # TS: `return this.restart()` 的 Promise 由 internal/update 链末端
+        # await;Python 同步 waterfall 只 await 一层的返回值 —— 不 await
+        # restart 协程会被丢弃(组禁用传播/配置热更全部断链),须显式展开
+        return await self.restart()
 
     # --- 内部:dispose effect(注册到父 fiber)---
 

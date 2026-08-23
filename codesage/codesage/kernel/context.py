@@ -25,7 +25,28 @@ from .fiber import Fiber
 from .logger import LoggerService
 from .reflect import ReflectService
 from .registry import RegistryService
-from .utils import INTERCEPT, ISOLATE, is_special_property
+from .utils import FALLBACK, INTERCEPT, ISOLATE, is_special_property
+
+
+#: 哨兵:区分「沿链未命中」与「命中值为 None」
+_MISSING = object()
+
+
+def _get_real(ctx: "Context", name: str) -> Any:
+    """沿 ``_fallback`` 原型链查真实属性(loader 的 ctx re-point)。
+
+    TS ``Object.setPrototypeOf(entry.ctx, entry.parent.ctx)`` 后,``prop in
+    target`` / ``Reflect.get`` 沿裸对象链只命中 own 属性 —— 不触发祖先的
+    服务解析(服务解析在下方走 ``self.fiber`` 链,两者语义不同)。
+    """
+    seen: set[int] = set()
+    node = ctx.__dict__.get(FALLBACK)
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        if name in node.__dict__:
+            return node.__dict__[name]
+        node = node.__dict__.get(FALLBACK)
+    return _MISSING
 
 
 class Context:
@@ -40,6 +61,7 @@ class Context:
         object.__setattr__(self, INTERCEPT, {})
         object.__setattr__(self, "root", self)
         object.__setattr__(self, "baseUrl", None)
+        object.__setattr__(self, FALLBACK, None)
         object.__setattr__(self, "fiber", Fiber(self, {}, {}, None))
         object.__setattr__(self, "reflect", ReflectService(self))
         object.__setattr__(self, "registry", RegistryService(self))
@@ -65,6 +87,10 @@ class Context:
         prop = reflect.props.get(name)
         if prop is not None and prop["type"] == "accessor":
             return prop["get"](self, None)
+        # 原型链真实属性优先(TS prop-in-target → Reflect.get;loader 场景)
+        real = _get_real(self, name)
+        if real is not _MISSING:
+            return real
         if not self.fiber.runtime:
             # 根 ctx:无 waterfall,非严格读仓库
             return reflect.get(name, False)
@@ -86,6 +112,10 @@ class Context:
         reflect = self.__dict__.get("reflect")
         prop = reflect.props.get(name) if reflect is not None else None
         if prop is None:
+            if name in self.__dict__:
+                # 已有 own 属性直接写(TS prop-in-target → Reflect.set)
+                object.__setattr__(self, name, value)
+                return
             if not self.fiber.runtime:
                 object.__setattr__(self, name, value)
                 return
@@ -107,8 +137,10 @@ class Context:
         )
 
     def __contains__(self, name: str) -> bool:
-        """TS handler.has:own 属性或已声明的 props(不含类方法)。"""
+        """TS handler.has:own 属性(含原型链)或已声明的 props(不含类方法)。"""
         if name in self.__dict__:
+            return True
+        if _get_real(self, name) is not _MISSING:
             return True
         reflect = self.__dict__.get("reflect")
         return reflect is not None and name in reflect.props

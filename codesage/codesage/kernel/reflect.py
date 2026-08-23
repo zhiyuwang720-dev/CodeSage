@@ -89,14 +89,23 @@ class ReflectService:
 
     # --- 注册 ---
 
-    def provide(self, name: str, value: Any = None, check: Callable[[], bool] | None = None):
-        """注册服务(由当前 fiber 拥有);返回注销 disposer(fiber 卸载自动跑)。"""
-        return self.ctx.fiber.effect(
-            lambda: self._provide_impl(name, value, check),
+    def provide(self, name: str, value: Any = None, check: Callable[[], bool] | None = None, ctx: "Context | None" = None):
+        """注册服务(由当前 fiber 拥有);返回注销 disposer(fiber 卸载自动跑)。
+
+        ``ctx``:提供方的调用 ctx(经 mixin 注入)。TS 的 ``value.bind(withProps(
+        receiver, service))`` 令 mixed 方法里 ``this.ctx`` 恒为 service 的 ctx
+        (root)—— isolate 场景(entry 专属 fiber 提供同名服务)必须用调用方 ctx
+        取 key / 归属 fiber,fork 原版同样失效(其测试已剥离),此处与
+        ``registry.plugin(parent=ctx)`` 一样兑现意图。
+        """
+        if ctx is None:
+            ctx = self.ctx
+        return ctx.fiber.effect(
+            lambda: self._provide_impl(name, value, check, ctx),
             f"ctx.provide({name})",
         )
 
-    def _provide_impl(self, name: str, value: Any, check: Callable[[], bool] | None):
+    def _provide_impl(self, name: str, value: Any, check: Callable[[], bool] | None, ctx: "Context"):
         props = self.props
         if name not in props:
             props[name] = {"type": SERVICE_PROP}
@@ -105,18 +114,18 @@ class ReflectService:
         props[name] = {"type": SERVICE_PROP}
 
         # root 首次提供该服务名 → 建立全局 isolate 标签
-        root_isolate = getattr(self.ctx.root, ISOLATE)
+        root_isolate = getattr(ctx.root, ISOLATE)
         if name not in root_isolate:
             root_isolate[name] = object()
-        key = getattr(self.ctx, ISOLATE)[name]
-        impl = Impl(name=name, value=value, fiber=self.ctx.fiber, check=check)
+        key = getattr(ctx, ISOLATE)[name]
+        impl = Impl(name=name, value=value, fiber=ctx.fiber, check=check)
         if key in self.store:
             raise RuntimeError(
                 f'service "{name}" has been registered at <{self.store[key].fiber.name}>'
             )
         self.store[key] = impl
-        self.ctx.fiber.store[name] = impl  # type: ignore[index]
-        if self.ctx.fiber.state is FiberState.ACTIVE:
+        ctx.fiber.store[name] = impl  # type: ignore[index]
+        if ctx.fiber.state is FiberState.ACTIVE:
             self.notify([name])
 
         async def disposer() -> None:
@@ -124,7 +133,7 @@ class ReflectService:
             fibers = self.notify([name])
             await asyncio.gather(*(f.wait() for f in fibers))
             # 确保自身访问先于依赖清理
-            del self.ctx.fiber.store[name]  # type: ignore[index]
+            del ctx.fiber.store[name]  # type: ignore[index]
 
         return disposer
 
@@ -167,7 +176,7 @@ class ReflectService:
         disposers = []
         for key, ctx_key in entries:
             options = {
-                "get": lambda ctx, receiver=None, key=key: _mixin_get(get_target(ctx), key),
+                "get": lambda ctx, receiver=None, key=key: _mixin_get(get_target(ctx), key, ctx),
                 "set": lambda ctx, value, receiver=None, key=key: _mixin_set(get_target(ctx), key, value),
             }
             disposers.append(self.accessor(ctx_key, options))
@@ -211,9 +220,12 @@ class ReflectService:
         return fibers
 
 
-def _mixin_get(service: Any, key: str) -> Any:
+def _mixin_get(service: Any, key: str, ctx: Any = None) -> Any:
     if service is None:
         return None
+    if ctx is not None and key == "provide":
+        # 携带调用方 ctx(见 provide 文档:TS withProps 绑定丢失 receiver)
+        return lambda *a, **k: getattr(service, key)(*a, ctx=ctx, **k)
     return getattr(service, key)
 
 

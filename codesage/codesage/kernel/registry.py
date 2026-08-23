@@ -141,8 +141,14 @@ class RegistryService:
         """ctx.inject:依赖就绪后执行 callback。"""
         return self.plugin({"inject": deps, "apply": callback, "name": getattr(callback, "__name__", None)})
 
-    def plugin(self, plugin: Any, config: Any = None) -> "Fiber":
-        """启动插件,返回可 await 的 fiber(等装载完成)。"""
+    def plugin(self, plugin: Any, config: Any = None, get_outer_stack: Callable[[], list] | None = None, parent: "Context | None" = None) -> "Fiber":
+        """启动插件,返回可 await 的 fiber(等装载完成)。
+
+        ``get_outer_stack``:loader 传入的外部调用栈整形器(TS 第三参;
+        Python 侧仅存入 fiber,供 loader 的诊断,不参与栈整形)。
+        ``parent``:fiber 的父 ctx(TS ``ctx.plugin()`` mixin 显式传调用方
+        ctx;Python mixin 绑定丢失 ctx,loader 场景须显式传 entry.ctx)。
+        """
         callback = self.resolve(plugin)
         if not callback:
             raise TypeError(
@@ -164,4 +170,4 @@ class RegistryService:
             self._internal[callback] = runtime
 
         inject = _plugin_attr(plugin, "inject")
-        return Fiber(self.ctx, config, resolve_inject(inject), runtime)
+        return Fiber(parent or self.ctx, config, resolve_inject(inject), runtime, get_outer_stack)

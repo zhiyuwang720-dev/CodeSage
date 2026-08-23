@@ -28,6 +28,10 @@ EFFECT = "__cordis_effect__"
 FILTER = "__cordis_filter__"
 ISOLATE = "__cordis_isolate__"
 INTERCEPT = "__cordis_intercept__"
+FALLBACK = "__cordis_fallback__"
+#: loader 牌子:Entry 挂到子 ctx 的键 / EntryGroup 插件标记(TS symbol)
+ENTRY = "__cordis_entry__"
+GROUP = "__cordis_group__"
 INIT = "__cordis_init__"
 CHECK = "__cordis_check__"
 CONFIG = "__cordis_config__"
@@ -62,11 +66,14 @@ def is_constructor(func: Any) -> bool:
 
 
 class AggregateError(Exception):
-    """并发错误聚合(TS 内建 AggregateError,Python 无同名内建)。"""
+    """并发错误聚合(TS 内建 AggregateError,Python 无同名内建)。
 
-    def __init__(self, errors: list) -> None:
+    message 可选:TS 构造签名 ``AggregateError(errors, message?)``。
+    """
+
+    def __init__(self, errors: list, message: str | None = None) -> None:
         self.errors = errors
-        super().__init__(f"{len(errors)} error(s) aggregated")
+        super().__init__(message or f"{len(errors)} error(s) aggregated")
 
 
 class DisposableList:
