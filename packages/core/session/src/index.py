@@ -1,27 +1,16 @@
-"""index.py —— Session 与 SessionStore:事件溯源会话服务(DSH index.ts 移植)。
+"""index.py —— Session 与 SessionStore:事件溯源会话服务
 
-DSH index.ts(1157 行)是整个会话包的门面:内存里的会话对象
-(Session)、活会话仓库(SessionStore,挂 ctx.sessions)、以及全部
-接纳/恢复边界的校验族。本文件按同一分工移植:
+是整个会话包的门面:内存里的会话对象(Session)、活会话仓库(SessionStore,挂 ctx.sessions)、以及全部接纳/恢复边界的校验族。
 
-- Session:append-only 事件日志的持有者。日志是唯一事实源,
-  消息历史(derive_messages)、请求头(request_header)都是从
-  日志派生的缓存纯函数;append 是唯一写入通道,先校验后入日志,
-  一旦入日志即不可变(快照产物为冻结结构)。
-- SessionStore:活会话仓库,一个 cordis 服务。会话生命周期
-  prepare → enter → announce → flush 四步:
-  prepare 只构造(校验 id/meta,不进仓库);enter 装发布钩子并
-  入仓库,返回 detach 一次性能力;announce 宣布创建(同步抛错
-  可否决并触发配对回滚);flush 是持久化耐久检查点(并行等待
-  全部监听者落盘)。持久化不是本包的事 —— 插件订阅 session/event
-  并在 session/flush 时排干缓冲(DSH 原话:persistence is a
-  plugin concern)。
-- 校验族:validate_session_header 族管创建元数据,assert 族管
-  恢复边界的信封/消息形状 —— 与 invariant 的分工:invariant 管
-  关系(seq 连续、turn/step 嵌套),本文件管形状(键、类型、
-  消息身份),各管一摊。
+- Session:append-only 事件日志的持有者。日志是唯一事实源, 消息历史(derive_messages)、请求头(request_header)都是从日志派生的缓存纯函数;
+  append 是唯一写入通道,先校验后入日志, 一旦入日志即不可变(快照产物为冻结结构)。
+- SessionStore:活会话仓库,一个 cordis 服务。会话生命周期 prepare → enter → announce → flush 四步:
+  prepare 只构造(校验 id/meta,不进仓库);
+  enter 装发布钩子并入仓库,返回 detach 一次性能力;
+  announce 宣布创建(同步抛错可否决并触发配对回滚);
+  flush 是持久化耐久检查点(并行等待全部监听者落盘)。持久化不是本包的事 —— 插件订阅 session/event并在 session/flush 时排干缓冲
+- 校验族:validate_session_header 族管创建元数据,assert 族管恢复边界的信封/消息形状 —— 与 invariant 的分工:invariant 管关系(seq 连续、turn/step 嵌套),本文件管形状(键、类型、消息身份),各管一摊。
 
-错误消息文本照 DSH 逐字保留(英文),注释为架构解读(中文)。
 """
 
 from __future__ import annotations
@@ -42,7 +31,7 @@ from .surface import (
 )
 from .types import SESSION_FORMAT_VERSION, SessionId
 
-from packages.core.scope import scope_of, scope_target  # 路由牌铸造(enter 边界)
+from core.scope import scope_of, scope_target  # 路由牌铸造(enter 边界)
 
 __all__ = [
     "Session",
@@ -476,9 +465,6 @@ class Session:
     都是从它派生的纯函数;事件一旦入日志,其嵌套数据全部深度冻结
     (快照产物),任何写操作抛 TypeError —— 持久化历史不可改写。
 
-    Python 移植注记:DSH 用 deepFreeze 原地冻结调用方传入的种子
-    事件;Python 无原地冻结,快照器产出一份冻结拷贝。所有权语义
-    (调用方不得保留可变别名)不变。
     """
 
     #: 私有 append-only 日志(唯一事实源)。
@@ -591,18 +577,13 @@ class Session:
     def append(self, type_: str, data, *, surface_op=None, source_event_seqs=None) -> dict:
         """向日志追加一个事件,并同步通知观察者。
 
-        热路径从不阻塞 I/O —— 持久化插件异步缓冲。事件入日志即
-        提交:观察者失败被逐监听者记录并包含,不改变返回值,也
-        不阻止后续监听者看到同一已接受事件。
+        热路径从不阻塞 I/O —— 持久化插件异步缓冲。事件入日志即提交:观察者失败被逐监听者记录并包含,不改变返回值,也不阻止后续监听者看到同一已接受事件。
 
         surface_op/source_event_seqs 是表面元数据:消息产生类事件
         (user/message、assistant/message、tool/result)必须声明如何
-        进入表面(表面是派生消息历史的唯一来源);非表面类型携带
-        标记会被表面校验拒绝。
+        进入表面(表面是派生消息历史的唯一来源);非表面类型携带标记会被表面校验拒绝。
 
-        返回入日志的事件 —— 其 seq/time 是分配值,data 是入日志
-        的 SNAPSHOT(读 event["data"] 永远看到日志里的值,而非
-        调用方仍可变的输入)。
+        返回入日志的事件 —— 其 seq/time 是分配值,data 是入日志的 SNAPSHOT(读 event["data"] 永远看到日志里的值,而非调用方仍可变的输入)。
         """
         surface_metadata = {}
         if source_event_seqs is not None:
