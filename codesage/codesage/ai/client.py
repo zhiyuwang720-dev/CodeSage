@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any, Callable
 
 import httpx
 from pydantic import BaseModel
@@ -39,7 +39,8 @@ class ModelProfile(BaseModel):
     config file is private (0600) and the user asked for it explicitly.
     """
 
-    provider: Literal["openai_compatible", "anthropic"] = "openai_compatible"
+    #: 内置两家 + 能力接缝注册的外部 provider(名由注册方决定)
+    provider: str = "openai_compatible"
     model: str
     base_url: str | None = None
     api_key_env: str | None = None
@@ -61,6 +62,7 @@ class LLMClient:
         vcr_mode: str | None = None,
         total_cost: list[float] | None = None,
         cancel_event: asyncio.Event | None = None,
+        provider_factories: dict[str, Callable[["ModelProfile"], "BaseAdapter"]] | None = None,
     ):
         self._cfg = GlobalConfig.load()
         self._http = http or httpx.AsyncClient(
@@ -68,6 +70,8 @@ class LLMClient:
             transport=VCRTransport(vcr_mode) if vcr_mode else None,
         )
         self._adapters: dict[tuple[str, str], BaseAdapter] = {}
+        #: 能力接缝:provider 名 → 适配器工厂(外部提供者注册,缺省回退内置两家)
+        self._provider_factories = provider_factories or {}
         # list so cost can be shared across clients (design: session total)
         self.total_cost = total_cost if total_cost is not None else [0.0]
         #: when set, in-flight requests and retry backoff abort (LLMError "cancelled")
@@ -95,7 +99,8 @@ class LLMClient:
             return ModelProfile(**{**{"provider": "openai_compatible", "model": name}, **profiles[name]})
         if ":" in name:
             provider, model_name = name.split(":", 1)
-            if provider in ("anthropic", "openai_compatible"):
+            # 内置两家 + 能力接缝注册的外部 provider 都按 名:模型 字面量解析
+            if provider in ("anthropic", "openai_compatible") or provider in self._provider_factories:
                 return ModelProfile(provider=provider, model=model_name)
         # literal fallback: env vars configure the default endpoint
         # (CODESAGE_MODEL / CODESAGE_BASE_URL / CODESAGE_API_KEY_ENV)
@@ -111,10 +116,32 @@ class LLMClient:
         key = (profile.provider, profile.model)
         adapter = self._adapters.get(key)
         if adapter is None:
-            cls = AnthropicAdapter if profile.provider == "anthropic" else OpenAICompatibleAdapter
-            adapter = cls(profile, self._http)
+            # 能力接缝:外部注册的 provider 工厂优先,缺省回退内置两家
+            factory = self._provider_factories.get(profile.provider)
+            if factory is not None:
+                adapter = factory(profile)
+            else:
+                cls = AnthropicAdapter if profile.provider == "anthropic" else OpenAICompatibleAdapter
+                adapter = cls(profile, self._http)
             self._adapters[key] = adapter
         return adapter
+
+    def register_provider_factory(
+        self, provider: str, factory: Callable[["ModelProfile"], "BaseAdapter"]
+    ) -> Callable[[], None]:
+        """能力接缝:注册外部 provider 适配器工厂,返回撤销 disposer。
+
+        同名重复注册抛错;撤销后该 provider 名回到内置解析。llm 包的
+        LLMService 用它把注册挂到 fiber 生命周期上。
+        """
+        if provider in self._provider_factories:
+            raise ValueError(f"provider already registered: {provider}")
+        self._provider_factories[provider] = factory
+
+        def dispose() -> None:
+            self._provider_factories.pop(provider, None)
+
+        return dispose
 
     # ---- completion ----
 

@@ -6,8 +6,6 @@
 
 「每作用域一张表」的模型:全局层常驻,作用域层首次贡献时才创建,
 彻底清空即回收 —— 长期运行的组合不会因空作用域泄漏内存。
-
-与 TS 原版(@deepseek-ai/dsh-scope/src/store.ts)逐文件 1:1 对应。
 """
 
 from __future__ import annotations

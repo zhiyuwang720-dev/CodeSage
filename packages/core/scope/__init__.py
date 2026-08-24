@@ -15,14 +15,13 @@
 边界:scope 不是权限机制 —— 只管「看得见/看不见」,不管「能不能用」,
 与 CodeSage 的权限链(deny > ask > allow)正交。
 
-本包与 deepseek-harness/packages/core/scope 逐文件 1:1 对应:
-  index.ts                  → index.py        三概念:铸造/路由牌/绑定/链
-  store.ts                  → store.py        每作用域一张表 + 插入序表
-  scoped-events.generated.ts→ scoped_events_generated.py 作用域事件主题表
-  invariant.ts              → invariant.py    派发检查岗(依赖 invariants 服务)
 
-依赖 cordis 内核(与 deepseek-harness 同款的 Python 移植版,在
-cordis-py 仓库,运行时由宿主保证可导入)。
+  index.py        三概念:铸造/路由牌/绑定/链
+  store.py        每作用域一张表 + 插入序表
+  scoped_events_generated.py 作用域事件主题表
+  invariant.py    派发检查岗(依赖 invariants 服务)
+
+依赖 cordis 内核(在cordis-py 仓库)。
 """
 
 from .index import (

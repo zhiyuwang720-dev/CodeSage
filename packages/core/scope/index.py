@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from cordis import Context
     from cordis.fiber import Fiber
 
-#: 作用域标签的键(TS 的 Symbol('dsh.scope') 的 Python 等价物)。
+#: 作用域标签的键
 #: 只能经 __dict__ 存取,不能经属性语法访问。
 K_SCOPE = "__dsh_scope__"
 
@@ -44,8 +44,7 @@ K_SCOPE = "__dsh_scope__"
 _carrier_keys: WeakKeyDictionary = WeakKeyDictionary()
 
 #: 每个作用域键的父指针,单向向上(TS 的 scopeParents)。一个关系支撑
-#: 两个方向:注册视图沿链向下继承(子作用域看到祖先的层),事件放行沿
-#: 链向上延伸(带祖先标签的监听器收到派发给子孙键的事件)。
+#: 两个方向:注册视图沿链向下继承(子作用域看到祖先的层),事件放行沿链向上延伸(带祖先标签的监听器收到派发给子孙键的事件)。
 _scope_parents: WeakKeyDictionary = WeakKeyDictionary()
 
 
@@ -110,7 +109,7 @@ def scope_chain_of(key: Any) -> list:
 
 
 def _scope_noop(ctx: "Context", config: Any = None) -> None:
-    """无操作插件:仅作为作用域 fiber 的载体(TS 同款)。"""
+    """无操作插件:仅作为作用域 fiber 的载体"""
 
 
 async def _quiesce_fiber(fiber: "Fiber") -> None:
