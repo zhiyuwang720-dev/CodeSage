@@ -47,9 +47,10 @@ def register(ctx) -> None:
     ctx.llm.register_provider(PROVIDERS, _make_adapter)
 
 
-def install(ctx) -> None:
+def install(ctx, config: dict | None = None) -> None:
     """安装本提供者包(register 的别名,组合语义更直观)。
 
     组合里 load 本包即注册:ctx 上先有 llm 服务,再挂提供者。
     """
     register(ctx)
+install.inject = ["llm"]

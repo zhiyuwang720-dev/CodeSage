@@ -11,7 +11,7 @@ from llm import LLMService
 from llm_deepseek import install
 
 ctx.plugin(LLMService)
-install(ctx)  # 注册 deepseek / qwen / glm ... 五个名字
+ctx.plugin(install)  # install.inject = ["llm"],llm 未挂先报错
 ```
 
 key 环境变量按提供者自动补全:deepseek → DEEPSEEK_API_KEY,

@@ -72,7 +72,7 @@ from llm import LLMService
 from llm_deepseek import install
 
 ctx.plugin(LLMService)   # 先有契约服务
-install(ctx)             # 再挂提供者:deepseek / openai_compatible 等名可用
+ctx.plugin(install)      # 再挂提供者:install 声明 inject = ["llm"],依赖显式
 ```
 
 能力接缝是唯一入口:未注册的提供者名在解析时直接报错(提醒加载

@@ -38,5 +38,20 @@ async def _install_registers_and_resolves():
     assert "deepseek" in ctx.llm.list_providers()
 
 
+async def _inject_waits_for_service():
+    # 插件路径:install 声明 inject = ["llm"],依赖缺失时挂起不激活,
+    # llm 服务提供后自动激活 —— 声明式顺序,不依赖调用先后
+    ctx = Context()
+    fiber = ctx.plugin(install)
+    assert ctx.llm is None
+    LLMService(ctx)
+    await fiber
+    assert "deepseek" in ctx.llm.list_providers()
+
+
+def test_inject_waits_for_service():
+    asyncio.run(_inject_waits_for_service())
+
+
 def test_install_registers_and_resolves():
     asyncio.run(_install_registers_and_resolves())
