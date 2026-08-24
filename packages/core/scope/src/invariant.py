@@ -1,4 +1,4 @@
-"""作用域派发的检查岗(可选插件,与 TS 的 scope/invariant.ts 1:1 对应)。
+"""作用域派发的检查岗(可选插件)。
 
 派发拦截器:如果事件名是「作用域筛选事件」(见 scoped_events_generated),
 强制要求派发的 thisArg 是作用域载体,且载体键与事件 payload 里的主题
@@ -6,9 +6,6 @@
 - 忘挂路由牌:作用域事件直接派发,没经 scope_target 造载体;
 - 挂错牌:载体键与 payload 里的 agent/scope 不是同一个对象。
 
-依赖 @deepseek-ai/dsh-invariants 的 ctx.invariants 服务 —— 该服务未
-移植时本插件不可装载(与 TS 缺依赖插件的行为一致)。CodeSage 移植期
-可先不做,文档注明即可。
 """
 
 from __future__ import annotations
