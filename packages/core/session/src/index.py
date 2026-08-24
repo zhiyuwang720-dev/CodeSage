@@ -42,7 +42,7 @@ from .surface import (
 )
 from .types import SESSION_FORMAT_VERSION, SessionId
 
-from core.scope import scope_of, scope_target  # 路由牌铸造(enter 边界)
+from packages.core.scope import scope_of, scope_target  # 路由牌铸造(enter 边界)
 
 __all__ = [
     "Session",
