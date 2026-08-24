@@ -20,7 +20,7 @@ sys.path.insert(0, str(_ROOT / "cordis-py"))
 from cordis import Context  # noqa: E402
 from cordis.service import FILTER  # noqa: E402
 
-from scope import (  # noqa: E402
+from src import (  # noqa: E402
     AnonymousEntries,
     NamedEntries,
     ScopedLayers,
