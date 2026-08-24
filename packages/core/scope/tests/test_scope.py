@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-_CORE = Path(__file__).resolve().parents[2]  # packages/core
+_CORE = Path(__file__).resolve().parents[1]  # packages/core/scope(src 包所在)
 _ROOT = Path(__file__).resolve().parents[4]  # 仓库根(CodeSage)
 # cordis 内核独立仓库(在 CodeSage 内的嵌套仓库,见项目约定)
 sys.path.insert(0, str(_CORE))
