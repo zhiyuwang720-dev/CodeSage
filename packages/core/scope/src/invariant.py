@@ -15,7 +15,7 @@ from typing import Any
 from .index import carrier_key_of, is_scope_carrier
 from .scoped_events_generated import _NOT_SCOPED, scoped_subject_resolver_for
 
-#: 检查岗插件名与依赖(TS 同款:companion plugin 挂在 invariants 服务下)。
+#: 检查岗插件名与依赖
 PACKAGE_NAME = "@deepseek-ai/dsh-scope"
 name = "scope-invariant"
 inject = ["invariants"]

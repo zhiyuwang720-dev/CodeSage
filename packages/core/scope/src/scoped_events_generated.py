@@ -1,5 +1,4 @@
-"""作用域筛选事件的主题解析表(与 TS 的 scoped-events.generated.ts 1:1
-对应,生成文件,勿手改)。
+"""作用域筛选事件的主题解析表
 
 每个作用域筛选事件配一个「主题解析器」:从事件参数里取出路由键
 (即事件的 subject)。解析器为 None 表示该事件的 payload 无法暴露外部
@@ -11,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-#: 非作用域事件的哨兵(TS 里对应 undefined —— 解析表里没有该项)。
+#: 非作用域事件的哨兵
 _NOT_SCOPED = object()
 
 _SCOPED_SUBJECT_RESOLVERS: dict[str, Callable[[list], Any] | None] = {
