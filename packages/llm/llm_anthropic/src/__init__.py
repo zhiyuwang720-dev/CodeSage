@@ -11,7 +11,7 @@ from __future__ import annotations
 import httpx
 
 from llm import ModelProfile
-from llm.adapters.base import BaseAdapter
+from llm.src.adapters.base import BaseAdapter
 
 from .anthropic import AnthropicAdapter
 

@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from llm.types import (
+from llm.src.types import (
     ContentBlock,
     LLMError,
     LLMRequest,
@@ -23,7 +23,7 @@ from llm.types import (
     StreamEvent,
     Usage,
 )
-from llm.adapters.base import BaseAdapter
+from llm.src.adapters.base import BaseAdapter
 
 
 class OpenAICompatibleAdapter(BaseAdapter):

@@ -1,13 +1,10 @@
 """llm_deepseek 提供者包:OpenAI 兼容协议适配(DeepSeek / Qwen / GLM / OpenAI)。
 
-对应 DSH 的 dsh-llm-deepseek:提供者在独立包中独立演进,不触碰
-llm 包与服务消费者。本包只做两件事 —— 持有适配器实现,以及经
-install 把它注册到 llm 服务的能力接缝上。
+对应 DSH 的 dsh-llm-deepseek:提供者在独立包中独立演进,不触碰llm 包与服务消费者。本包只做两件事 ——
+持有适配器实现,以及经install 把它注册到 llm 服务的能力接缝上。
 
-注册名:deepseek(DSH 风格名)与 openai_compatible(legacy 配置
-名,向后兼容)等一套兼容协议名,配置与字面量写哪个都解析到同一
-适配器。密钥缺省按提供者取环境变量;profile 显式指定 api_key_env
-时以它为准。
+注册名:deepseek(DSH 风格名)与 openai_compatible(legacy 配置名,向后兼容)等一套兼容协议名,配置与字面量写哪个都解析到同一适配器。
+密钥缺省按提供者取环境变量;profile 显式指定 api_key_env时以它为准。
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ from __future__ import annotations
 import httpx
 
 from llm import LLMRequest, LLMResponse, ModelProfile, StreamEvent
-from llm.adapters.base import BaseAdapter
+from llm.src.adapters.base import BaseAdapter
 
 from .openai_compatible import OpenAICompatibleAdapter
 
