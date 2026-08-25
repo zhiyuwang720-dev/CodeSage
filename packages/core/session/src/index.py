@@ -56,7 +56,7 @@ __all__ = [
 
 
 def _now_ms() -> int:
-    """当前毫秒时间戳(DSH Date.now())—— 事件入日志时刻。"""
+    """当前毫秒时间戳(参考实现 Date.now())—— 事件入日志时刻。"""
     return int(time.time() * 1000)
 
 
@@ -73,7 +73,7 @@ def _is_safe_int(value) -> bool:
 def _freeze_json(value):
     """把一棵(已校验或待校验的)普通 JSON 树转换为冻结结构。
 
-    DSH 的 deepFreeze 原地冻结调用方的对象;Python 没有原地冻结,
+    参考实现 的 deepFreeze 原地冻结调用方的对象;Python 没有原地冻结,
     只能经无损通道重建一份冻结结构(快照产物)。对已冻结的输入
     (快照产物回流)原样返回,不拷贝 —— 保持身份。
     """
@@ -92,7 +92,7 @@ def validate_session_header(id: str, input):
     """校验并冻结一份(分离的)创建元数据。
 
     只认普通 JSON 记录;字段级白名单校验,多余字段不拒绝(header
-    可携带插件字段,DSH 同样只校验它认识的键)。返回值是冻结结构:
+    可携带插件字段,参考实现 同样只校验它认识的键)。返回值是冻结结构:
     header 不参与重放,但它是对外发布的创建事实,不可变。
     """
     if input is None or not isinstance(input, dict):
@@ -135,7 +135,7 @@ def validate_session_header(id: str, input):
 
 
 def _is_absolute_path(value: str) -> bool:
-    """绝对路径判定(DSH isAbsolute)。Windows 下驱动器/UNC 前缀也是绝对。"""
+    """绝对路径判定(参考实现 isAbsolute)。Windows 下驱动器/UNC 前缀也是绝对。"""
     from os import path
 
     return path.isabs(value)
@@ -144,7 +144,7 @@ def _is_absolute_path(value: str) -> bool:
 def validate_restored_session_header(id: str, input):
     """恢复边界:先验证「普通记录」原型,再走常规校验。
 
-    恢复的 header 来自持久化(独占所有权),DSH 先查原型链防止
+    恢复的 header 来自持久化(独占所有权),参考实现 先查原型链防止
     类实例混入;Python 侧等价物是类型精确性 —— 只接受普通 dict
     与我们自己的 FrozenDict(dict 子类是 JS 类实例的对应物,拒绝),
     序列与其它类实例一律拒绝,再委托 validate_session_header。
@@ -376,7 +376,7 @@ def collect_session_callbacks(ctx, args: list) -> list:
 def _observe_rejection(awaitable, ctx, id: str, name: str) -> None:
     """观察一个异步监听者返回值的拒绝并记日志(不传播)。
 
-    同步派发边界无法回滚,拒绝只能被记录(DSH:rejection is too
+    同步派发边界无法回滚,拒绝只能被记录(参考实现:rejection is too
     late to roll back and must be logged instead of becoming
     unhandled)。无运行中事件循环时忽略 —— 同步上下文里本就无法
     调度它。
@@ -396,7 +396,7 @@ def invoke_contained_session_observers(ctx, name: str, id: str, args: list, call
 
     observe-only 事件(session/event 与 session/disposed)的监听者
     失败只记日志:事件已入日志,通知失败不改变已提交的事实,也
-    不能阻止后续监听者看到同一事件(DSH:observer failures are
+    不能阻止后续监听者看到同一事件(参考实现:observer failures are
     logged and contained)。
     """
     for callback in callbacks:
@@ -449,7 +449,7 @@ class SessionEntry:
 
 #: 会话 → 活条目的弱附件。弱引用:条目生命周期由 store 所有,
 #: 会话对象被外部丢弃时不应把条目钉在内存里。Python 侧对应
-#: DSH 的 WeakMap —— Session 必须可弱引用(普通类即可)。
+#: 参考实现 的 WeakMap —— Session 必须可弱引用(普通类即可)。
 attachments = WeakKeyDictionary()
 
 
@@ -480,13 +480,13 @@ class Session:
         是恢复创建(种子为独占所有权的新鲜解析值,校验后直接冻结,
         不额外拷贝 —— 所有权已转让)。
         """
-        self._log = []
-        self._surface_manager = SurfaceManager(self._log)
+        self._log = []    # append-only 事件日志（唯一事实源）
+        self._surface_manager = SurfaceManager(self._log) # 维护"模型可见历史"的投影
         # 派生缓存(每次 append 后失效/推进):事件快照、请求头折叠、
         # 上下文折叠、派生消息 —— 全部实例级,避免类级共享。
         self._events_snapshot = None
         self._header_fold = None
-        self._header_fold_seq = 0
+        self._header_fold_seq = 0 # 对应的 seq 水位
         self._context_fold = None
         self._context_fold_seq = 0
         self._derived: list = []
@@ -506,7 +506,9 @@ class Session:
                     raise ValueError(
                         f"seed event at index {index} is not losslessly JSON-serializable"
                     )
+                # 校验：信封结构合法（type, seq, time, data 都在）
                 assert_session_event_envelope(snapshot, index)
+                # 校验：核心事件类型（turn/start、user/message 等）的 data 结构合法
                 assert_supported_request_header(snapshot["type"], snapshot["data"], f"seed event at index {index}")
                 if snapshot["seq"] != index:
                     raise ValueError(
@@ -623,7 +625,7 @@ class Session:
             callback_args = [self, event]
             if entry is not None:
                 # 发布快照在入日志前解析,回调在入日志后运行 ——
-                # 提交原子性(DSH:listener snapshot resolves before
+                # 提交原子性(参考实现:listener snapshot resolves before
                 # the log push, but callbacks run after it)。
                 callbacks = collect_session_callbacks(
                     entry.emit_ctx, [entry.carrier, "session/event", *callback_args]
@@ -667,7 +669,7 @@ class Session:
         """最新解析的路由元数据;尚无 request/context 事件时为 None。
 
         每个事件折叠一次。data 已是冻结快照,这里只重建顶层
-        (DSH 的 { ...event.data } 同款浅拷贝)后冻结。
+        (参考实现 的 { ...event.data } 同款浅拷贝)后冻结。
         """
         if self._context_fold_seq < len(self._log):
             for event in self._log[self._context_fold_seq:]:
@@ -744,7 +746,7 @@ class SessionStore(Service):
     """内存会话仓库(ctx.sessions)。
 
     持久化故意不在这里实现 —— 持久化插件订阅 session/event,并在
-    session/flush 与 dispose 时排干(DSH:persistence is intentionally
+    session/flush 与 dispose 时排干(参考实现:persistence is intentionally
     not implemented here)。服务构造即注册:super().__init__(ctx)
     经 ctx.reflect.provide("sessions", self) 挂到 ctx 上。
     """
@@ -755,8 +757,8 @@ class SessionStore(Service):
         super().__init__(ctx)
         self.store: dict[str, SessionEntry] = {}
         self.counter = 0
-        # DSH 在此经 ctx.inject(['typert'], ...) 注册 typert 查找;
-        # Python 移植把类型注册表内部化(typert.py,包内自建),
+        # 参考实现 在此经 ctx.inject(['typert'], ...) 注册 typert 查找;
+        # Python 实现把类型注册表内部化(typert.py,包内自建),
         # 无人消费该查找 —— 留作可扩展位,见 src/typert.py 注释。
 
     def create(self, id: str | None = None, options: dict | None = None) -> Session:

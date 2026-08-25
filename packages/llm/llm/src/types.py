@@ -7,9 +7,28 @@ reasoning_content, etc. all land here as blocks or stream events.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
+
+
+class ToolSchema(TypedDict):
+    """一个模型的工具可见 schema(纯字典形状,可被结构化拷贝/冻结)。
+
+    与 ContentBlock 契约正交:装配面(system-prompt/agent-loop)用
+    这个形状把工具传给请求,适配器在边界转成 provider 格式。
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+class ContextSnapshotSection(TypedDict):
+    """一条已命名动态上下文贡献(快照 form 的分节),按装配序。"""
+
+    name: str
+    text: str
 
 
 class ContentBlock(BaseModel):
