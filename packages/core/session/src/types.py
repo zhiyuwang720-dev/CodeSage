@@ -45,9 +45,7 @@ SESSION_FORMAT_VERSION = 0
 def SessionId(id: str) -> str:  # noqa: N802 -- 对齐 DSH 的构造函数命名
     """把一个字符串铸造为会话 id。
 
-    DSH 中 SessionId 是 branded 类型 —— 编译期标记,零运行时成本。
-    Python 中就是原字符串;保留此函数是为了让"铸造"这个语义动作
-    有落点,后续若引入 id 校验或类型系统可在此收口。
+    保留此函数是为了让"铸造"这个语义动作有落点,后续若引入 id 校验或类型系统可在此收口。
     """
     return id
 

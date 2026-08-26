@@ -367,8 +367,7 @@ def collect_session_callbacks(ctx, args: list) -> list:
     """解析一份监听者快照(含 cordis 的内部派发检查)。
 
     dispatch 就地消费 args 的前两项:thisArg(路由牌)与事件名;
-    剩余参数留给调用方逐个回调。collect 只解析、不调用 ——
-    让调用方拥有「先快照、后入日志、再通知」的提交原子性。
+    剩余参数留给调用方逐个回调。collect 只解析、不调用 —— 让调用方拥有「先快照、后入日志、再通知」的提交原子性。
     """
     return list(ctx.events.dispatch("emit", args))
 
@@ -414,10 +413,8 @@ def invoke_contained_session_observers(ctx, name: str, id: str, args: list, call
 class SessionEntry:
     """一个精确活条目的全部可变生命周期状态。
 
-    一次 enter 造一个:会话、路由牌(carrier,派发时按它筛选
-    监听者)、发布用的 ctx、以及 announce/append 互斥与延迟
-    detach 标记。detach 由 enter 装配 —— 一次性能力与延迟语义
-    都在闭包里,条目自身只存布尔标记。
+    一次 enter 造一个:会话、路由牌(carrier,派发时按它筛选监听者)、发布用的 ctx、以及 announce/append 互斥与延迟
+    detach 标记。detach 由 enter 装配 —— 一次性能力与延迟语义都在闭包里,条目自身只存布尔标记。
     """
 
     __slots__ = (
@@ -439,7 +436,7 @@ class SessionEntry:
         self.emit_ctx = emit_ctx
         self.announced = False  # session/created 已发出(配对 session/disposed 的门槛)
         self.announcing = False  # 创建派发进行中(同步边界,detach 需延迟)
-        self.appending = False  # append 发布进行中(重入护栏 + detach 延迟)
+        self.appending = False  # append 发布进行中(重入护栏 + detach 延迟) # ?
         self.detach_requested = False  # detach 被要求但派发未退栈
         self.detach = None  # 由 enter 装配(闭包,非 None)
 
@@ -450,7 +447,7 @@ class SessionEntry:
 #: 会话 → 活条目的弱附件。弱引用:条目生命周期由 store 所有,
 #: 会话对象被外部丢弃时不应把条目钉在内存里。Python 侧对应
 #: 参考实现 的 WeakMap —— Session 必须可弱引用(普通类即可)。
-attachments = WeakKeyDictionary()
+attachments = WeakKeyDictionary()       # ?
 
 
 # ---- 会话本体 ----
@@ -745,10 +742,9 @@ class SessionForkError(Exception):
 class SessionStore(Service):
     """内存会话仓库(ctx.sessions)。
 
-    持久化故意不在这里实现 —— 持久化插件订阅 session/event,并在
-    session/flush 与 dispose 时排干(参考实现:persistence is intentionally
-    not implemented here)。服务构造即注册:super().__init__(ctx)
-    经 ctx.reflect.provide("sessions", self) 挂到 ctx 上。
+    持久化故意不在这里实现 —— 持久化插件订阅 session/event,并在session/flush 与 dispose 时排干(参考实现:persistence is intentionally not implemented here)。
+
+    服务构造即注册:super().__init__(ctx)经 ctx.reflect.provide("sessions", self) 挂到 ctx 上。
     """
 
     provide = "sessions"
@@ -874,17 +870,14 @@ class SessionStore(Service):
     def announce(self, session: Session) -> None:
         """对已 enter 的会话发出恰好一次 session/created。
 
-        与 enter 分离,使调用方能先 yield detach disposer(回滚
-        安全)。同步抛错的监听者否决发布;随之 yield 的 detach
-        触发配对销毁边。异步监听者的拒绝太迟、无法回滚,记日志
-        而不是变成未处理异常。
+        与 enter 分离,使调用方能先 yield detach disposer(回滚安全)。同步抛错的监听者否决发布;
+        随之 yield 的 detach触发配对销毁边。
+        异步监听者的拒绝太迟、无法回滚,记日志而不是变成未处理异常。
         """
         entry = self._live_entry_for(session)
         if entry.announced or entry.announcing:
             raise ValueError(f'session "{entry.id}" was already announced')
-        # 先标记再派发:cordis 的派发可能先投递给较早的监听者再
-        # 抛错,回滚必须仍把部分创建与销毁配对;监听者也不能
-        # 递归地创建第二条生命周期边。
+        # 先标记再派发:cordis 的派发可能先投递给较早的监听者再抛错,回滚必须仍把部分创建与销毁配对;监听者也不能递归地创建第二条生命周期边。
         entry.announced = True
         entry.announcing = True
         callback_args = [session]

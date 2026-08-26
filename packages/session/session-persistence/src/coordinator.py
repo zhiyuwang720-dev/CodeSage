@@ -1,31 +1,13 @@
 """共享缓冲、串行化、采纳、修复与拆解编排(第一方后端)。
 
-DSH coordinator.ts 的 Python 移植。第三方后端可以直接实现公共
-持久化接缝;第一方后端组合本协调器获得其余一切:缓冲、串行化、
-游标、采纳、崩溃修复排序、拆解静默。
+第三方后端可以直接实现公共持久化接缝;
+第一方后端组合本协调器获得其余一切:缓冲、串行化、游标、采纳、崩溃修复排序、拆解静默。
 
-架构叙事:
-- **每 id 串行化链**:同一会话的全部操作挂在一条链上依次执行,
-  一个会话的写永不交错;错误不毒化链(下一位等待者照常运行)。
-- **惰性物化**:create 只记录意图,首个 append 原子物化 header+事件;
-  从未 append 的身份不留任何痕迹,reclaim 用它区分废弃 id 与
-  持久化冲突。
-- **崩溃修复**:读路径 adopt/snapshot 存储事件时内联执行 legacy
-  迁移与回合平衡(interruptedTurnClosers);commitPrepared 把修复
-  落盘后丢弃旧内存视图(修订号已变),重读精确提交后的图。
-- **写路径**:活会话的 session/event 进 write-behind 缓冲,固定
-  窗口后落盘;flush 是显式耐久屏障;dispose 逆序拆解(事件准入
-  先关,再排干,再关后端)。
-
-与 Node 的差异(注释即文档):
-- AbortSignal 参数全部取消(Python 无原生等价物);取消语义由
-  调用方在编排层自行处理。
-- ``this.ctx.effect(...)`` → ``ctx.fiber.effect(execute, label)``
-  (cordis-py 无 ctx.effect;fiber.effect 支持 async disposer,
-  卸载时逆序 await)。
-- ``Promise.withResolvers``/promise 链 → asyncio Future/_serialize
-  链;``Promise.allSettled`` → asyncio.gather(return_exceptions=True)。
-- 英文错误消息保留逐字(与 DSH 一致)。
+架构:
+- **每 id 串行化链**:同一会话的全部操作挂在一条链上依次执行,一个会话的写永不交错;错误不毒化链(下一位等待者照常运行)。
+- **惰性物化**:create 只记录意图,首个 append 原子物化 header+事件; 从未 append 的身份不留任何痕迹,reclaim 用它区分废弃 id 与持久化冲突。
+- **崩溃修复**:读路径 adopt/snapshot 存储事件时内联执行 legacy 迁移与回合平衡(interruptedTurnClosers);commitPrepared 把修复落盘后丢弃旧内存视图(修订号已变),重读精确提交后的图。
+- **写路径**:活会话的 session/event 进 write-behind 缓冲,固定窗口后落盘;flush 是显式耐久屏障;dispose 逆序拆解(事件准入先关,再排干,再关后端)。
 """
 
 from __future__ import annotations
@@ -87,10 +69,7 @@ class SessionFormatUnsupportedError(Exception):
 
 
 class AggregateError(Exception):
-    """JS AggregateError 的 Python 等价物:携带一组被收集的排干错误。
-
-    Python 无内建同名异常(ExceptionGroup 需要 3.11+ 且语义不同),
-    这里按 JS 语义定义 —— message 可选,errors 按收集顺序保留。
+    """携带一组被收集的排干错误。
     """
 
     def __init__(self, errors: list, message: str = "") -> None:
@@ -102,8 +81,6 @@ def sessionFormatVersionRefusal(id: str, version: int) -> str:
     """对携带本构建读不了的格式版本的存储会话,给出方向性拒绝文本。
 
     协调器的加载时检查与必须在解码版本相关结构**之前**拒绝的后端
-    共享此文本:未来格式可能连今天的结构检查都过不了,用户必须
-    看到「升级 harness」而不是「损坏」。
     """
     if version > SESSION_FORMAT_VERSION:
         return (
@@ -118,9 +95,7 @@ def sessionFormatVersionRefusal(id: str, version: int) -> str:
 
 
 class StoredPrefix:
-    """一个存储会话的 header、有效连续事件前缀、源限定修订号与
-    可选的撕裂尾标记。修订号标识确切的前缀;协调器只检查标记
-    是否存在并把它的值交还 commitRepair —— 标记类型由后端所有。
+    """一个存储会话的 header、有效连续事件前缀、源限定修订号与可选的撕裂尾标记。修订号标识确切的前缀;协调器只检查标记是否存在并把它的值交还 commitRepair —— 标记类型由后端所有。
     """
 
     __slots__ = ("meta", "events", "revision", "tornMarker")
@@ -133,8 +108,7 @@ class StoredPrefix:
 
 
 class StoredSuffix:
-    """一个存储会话的 header 加 seq >= fromSeq 的事件(可寻址后缀读
-    的返回形状)。非变更读不携带撕裂标记:无可修复。
+    """一个存储会话的 header 加 seq >= fromSeq 的事件(可寻址后缀读的返回形状)。非变更读不携带撕裂标记:无可修复。
     """
 
     __slots__ = ("meta", "events")
@@ -145,9 +119,8 @@ class StoredSuffix:
 
 
 class PersistenceBackend:
-    """PersistenceCoordinator 与具体后端之间的存储契约:编排调用的
-    最小耐久原语集合。后端(文件/行/对象存储…)实现这些;协调器
-    提供其余一切。
+    """PersistenceCoordinator 与具体后端之间的存储契约:编排调用的最小耐久原语集合。后端(文件/行/对象存储…)实现这些;
+    协调器提供其余一切。
 
     TornMarker 是后端的不透明撕裂尾修复令牌,协调器完全当它不透明。
     方法(除 name 外均为后端必须实现或可选钩子):
@@ -165,17 +138,15 @@ async def _settled_errors(promises) -> list:
 
 
 def _is_safe_integer(value: Any) -> bool:
-    """TS Number.isSafeInteger:整数且在安全整数界内(排除 bool)。"""
     return isinstance(value, int) and not isinstance(value, bool) and abs(value) <= _MAX_SAFE_INTEGER
 
 
 def _is_number(value: Any) -> bool:
-    """TS typeof === 'number':int/float 均可,排除 bool。"""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _as_record(value: Any) -> dict | None:
-    """返回对象记录,不把数组扩成消息负载(TS asRecord)。"""
+    """返回对象记录,不把数组扩成消息负载"""
     return value if isinstance(value, dict) else None
 
 
@@ -187,8 +158,7 @@ def _has_only_keys(record: dict, required: list, optional: list | None = None) -
 
 
 def _seed_covers_prefix(seed: list, prefix: list) -> bool:
-    """活会话种子是否逐字重现持久化前缀(DSH JSON.stringify 等价:
-    键序一致的冻结图,json.dumps 值比较)。"""
+    """活会话种子是否逐字重现持久化前缀"""
     if len(prefix) > len(seed):
         return False
     for index, event in enumerate(prefix):
@@ -199,8 +169,7 @@ def _seed_covers_prefix(seed: list, prefix: list) -> bool:
 
 
 def _assert_supported_events(events: list, id: str) -> None:
-    """拒绝本构建无法重放的 v0 旧词表事件(逐个找首个命中,照 DSH
-    的 find 语义)。"""
+    """拒绝本构建无法重放的 v0 旧词表事件"""
     for event in events:
         if event.get("type") == "request/header-delta":
             raise RuntimeError(
@@ -297,7 +266,7 @@ def _migrate_legacy_turn_start_event(event: dict, id: str) -> dict:
 
 
 def _migrate_legacy_turn_end_event(event: dict, id: str) -> dict:
-    """升级旧回合结尾,保留最新 master 信封(逐字移植 DSH)。"""
+    """升级旧回合结尾,保留最新 master 信封"""
     if event.get("type") != "turn/end":
         return event
     data = _as_record(event.get("data"))
@@ -380,9 +349,6 @@ def _migrate_legacy_turn_end_event(event: dict, id: str) -> dict:
 
 def _migrate_legacy_message_event(event: dict, id: str, messageIds: dict) -> dict:
     """把一条身份机制前的消息事件升级为当前包装形状。
-
-    看起来像当前形状的畸形事件保持原样,由校验器拒绝 —— 不把
-    损坏伪装成 legacy 数据。
     """
     data = _as_record(event.get("data"))
     if data is None:
@@ -542,7 +508,7 @@ class PreparedSessionSource:
 
 
 def _resolved_future() -> asyncio.Future:
-    """一个已落定的 Future(TS Promise.resolve 等价物)。"""
+    """一个已落定的 Future"""
     future = asyncio.get_running_loop().create_future()
     future.set_result(None)
     return future
@@ -614,8 +580,7 @@ class PersistenceCoordinator:
     # --- 公共 API(后端的服务方法委托到这里)---
 
     async def create(self, meta: dict) -> None:
-        """为惰性创建注册分离的会话元数据;重复的已跟踪/已持久化
-        id 拒绝。"""
+        """为惰性创建注册分离的会话元数据;重复的已跟踪/已持久化 id 拒绝。"""
         # 排队前快照:调用方的后续变更不得让键与 header 分叉。
         snapshot = snapshot_json_value(meta)
         if snapshot is None:
@@ -650,11 +615,9 @@ class PersistenceCoordinator:
         await self._serialize(id, lambda: self._appendCore(id, batch))
 
     async def _appendCore(self, id: str, events: list) -> None:
-        # 全部 append 路由在此汇聚:公共服务、活 write-behind 排干、
-        # HMR 种子/后缀采纳。legacy 形状拒绝停留在这一共享边界,
-        # 过时的插件不能持久化本后端拒绝装载的形状。未知类型守卫
-        # 刻意只放在读侧:append 时拒绝会让活会话的耐久性半路
-        # 停摆,比日志下次装载时大声拒绝更贵(取舍归日志版本机制)。
+        # 全部 append 路由在此汇聚:公共服务、活 write-behind 排干、HMR 种子/后缀采纳。
+        # legacy 形状拒绝停留在这一共享边界, 过时的插件不能持久化本后端拒绝装载的形状。
+        # 未知类型守卫刻意只放在读侧: append 时拒绝会让活会话的耐久性半路停摆,比日志下次装载时大声拒绝更贵(取舍归日志版本机制)。
         _assert_supported_events(events, id)
         if len(events) == 0:
             return
@@ -1022,14 +985,14 @@ class PersistenceCoordinator:
         # 为每个冻结事件保留持久化自有副本并启动其有界窗口。
         def _on_event(session, event):
             live = self._initFor(session)
-            live.writes.enqueue(event)
+            live.writes.enqueue(event) # 每个事件入日志后，放入写缓冲队列。 入队，不落盘
 
         ctx.events.on("session/event", _on_event)
 
-        # 调用方用 flush 作为缓冲写的即时耐久屏障。
+        # # ③ 监听 session/flush：主动触发持久化（turn/end 时调用）
         ctx.events.on("session/flush", lambda session: self._flush(session))
 
-        # 会话拆解只观察:退休自带失败处理。
+        # 会话拆解只观察:退休自带失败处理。 监听 session/disposed：会话销毁时，排干剩余事件
         ctx.events.on("session/disposed", lambda session: self.retire(session))
 
         # HMR:热重载不重放 session/created,种子化既有活会话
