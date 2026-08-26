@@ -765,17 +765,12 @@ class SessionStore(Service):
         """创建归属当前 fiber 的会话:卸载该 fiber 即停止通知并移除。
 
         options.seed 用这些事件的拷贝填充会话(重放/分叉);
-        options.meta 附加创建元数据(校验过的绝对 cwd、血缘、
-        委托深度)作为不可变 header(version/id/createdAt 由仓库补)。
+        options.meta 附加创建元数据(校验过的绝对 cwd、血缘、委托深度)作为不可变 header(version/id/createdAt 由仓库补)。
 
-        声明后同步抛错的 session/created 监听者可否决创建,并把
-        附件回滚(配对销毁)而不是泄漏仓库条目与发布钩子 ——
-        这正是把 enter 的 detach 先 yield 进 effect、再 announce 的
-        原因(generator effect 同步失败时逆序回滚已收集的 disposer)。
+        声明后同步抛错的 session/created 监听者可否决创建,并把附件回滚(配对销毁)而不是泄漏仓库条目与发布钩子 ——
+        这正是把 enter 的 detach 先 yield 进 effect、再 announce 的原因(generator effect 同步失败时逆序回滚已收集的 disposer)。
 
-        对「会话必须与其 agent 循环按序拆解」的组合(循环的收尾
-        事件要在附件结束前发布),不要用本方法 —— 用 prepare +
-        enter + announce 把生命周期折进 agent 自己的 effect。
+        对「会话必须与其 agent 循环按序拆解」的组合(循环的收尾事件要在附件结束前发布),不要用本方法 —— 用 prepare + enter + announce 把生命周期折进 agent 自己的 effect。
         """
         session = self.prepare(id, options)
 
@@ -789,17 +784,11 @@ class SessionStore(Service):
     def prepare(self, id: str | None = None, options: dict | None = None) -> Session:
         """构造会话但不入仓库:校验 id/cwd 并构建 Session。
 
-        与 enter + announce 配对:持有复合 ctx.effect 的调用方
-        (agent 工厂)把会话生命周期折进那一个 effect,使 fiber 卸载
-        时会话 + agent 按一条有序链拆解 —— 而不是作为竞争兄弟
-        effect —— 后者会在驱动者的收尾事件提交前移除发布钩子,
-        丢掉事件。
+        与 enter + announce 配对:持有复合 ctx.effect 的调用方(agent 工厂)把会话生命周期折进那一个 effect,使 fiber 卸载时会话 + agent 按一条有序链拆解 —— 而不是作为竞争兄弟
+        effect —— 后者会在驱动者的收尾事件提交前移除发布钩子,丢掉事件。
 
-        options:seed=种子事件;meta=创建元数据(createdAt 缺省
-        取当前时刻,其余键缺省省略);seed_source='persistence' 时
-        元数据与事件必须是独占所有权的新鲜分离图,经
-        Session.from_restore 校验并原地冻结 —— 调用方不得保留
-        可变别名。
+        options:seed=种子事件;meta=创建元数据(createdAt 缺省取当前时刻,其余键缺省省略);
+        seed_source='persistence' 时元数据与事件必须是独占所有权的新鲜分离图,经Session.from_restore 校验并原地冻结 —— 调用方不得保留可变别名。
         """
         if id is None:
             while True:
@@ -832,9 +821,7 @@ class SessionStore(Service):
     def enter(self, session: Session):
         """把一个 prepare 过的会话放入仓库:安装发布钩子并加入。
 
-        返回 DETACH disposer(钩子 + 仓库移除)。不发出
-        session/created —— 调用方在自己的 effect 里先 yield 这个
-        disposer 再 announce,使抛错的创建监听者能回滚附件。
+        返回 DETACH disposer(钩子 + 仓库移除)。不发出 session/created —— 调用方在自己的 effect 里先 yield 这个disposer 再 announce,使抛错的创建监听者能回滚附件。
 
         prepare 与 enter 是跨包的公开原语,调用方可能在两者之间
         插入任意工作(或另一次 create),所以重复 id 必须重查:
