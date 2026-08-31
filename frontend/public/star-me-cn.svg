@@ -1,0 +1,53 @@
+<svg width="600" height="60" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景渐变 -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a1a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#2d1a1f;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1a1a;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- 星星闪烁效果 -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect width="600" height="60" rx="8" fill="url(#bgGradient)" />
+  
+  <!-- 边框 -->
+  <rect width="600" height="60" rx="8" fill="none" stroke="#dc2626" stroke-width="1.5" opacity="0.6"/>
+  
+  <!-- 左侧星星图标 -->
+  <g transform="translate(32, 30)">
+    <circle cx="0" cy="0" r="20" fill="#dc2626" opacity="0.15"/>
+    <path d="M 0,-12 L 2.8,-3.7 L 11.6,-3.7 L 4.6,2.2 L 7.4,10.5 L 0,4.5 L -7.4,10.5 L -4.6,2.2 L -11.6,-3.7 L -2.8,-3.7 Z" 
+          fill="#dc2626" filter="url(#glow)"/>
+  </g>
+  
+  <!-- 主文字 -->
+  <text x="62" y="28" font-family="'PingFang SC', 'Microsoft YaHei', Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">
+    ⭐ 如果喜欢，请给个 Star 吧！
+  </text>
+  
+  <!-- 副文字 -->
+  <text x="62" y="47" font-family="'PingFang SC', 'Microsoft YaHei', Arial, sans-serif" font-size="11" fill="#dc2626" font-weight="600">
+    无偿开源与维护，您的支持是我们持续改进 AutoCVE 的最大动力！
+  </text>
+  
+  <!-- 右侧装饰星星 -->
+  <g transform="translate(575, 20)">
+    <path d="M 0,-5 L 1.2,-1.5 L 5,-1.5 L 2,0.8 L 3.2,4 L 0,2 L -3.2,4 L -2,0.8 L -5,-1.5 L -1.2,-1.5 Z" 
+          fill="#dc2626" opacity="0.6"/>
+  </g>
+  
+  <g transform="translate(562, 45)">
+    <path d="M 0,-4 L 1,-1.2 L 4,-1.2 L 1.6,0.6 L 2.5,3.2 L 0,1.5 L -2.5,3.2 L -1.6,0.6 L -4,-1.2 L -1,-1.2 Z" 
+          fill="#dc2626" opacity="0.4"/>
+  </g>
+</svg>
