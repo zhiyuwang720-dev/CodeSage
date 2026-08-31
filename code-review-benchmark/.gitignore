@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+
+# Environment and database
+.env
+*.db
+
+# OS
+.DS_Store
+
+# Tools
+.claude/
+
+# Rust build artifacts
+target/
+
+# Output data
+output/
+results/
+analysis/*
+
+# Local scripts
+online/etl/scripts/
+
+# Generated exports
+*.xlsx
+
+# Test and coverage
+.pytest_cache/
+.coverage
+.hypothesis/
+htmlcov/
+
+# Linters
+.ruff_cache/
+
+# Logs
+*.log
+.syncignore
+
+.zed
