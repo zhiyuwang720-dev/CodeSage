@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pydantic import BaseModel
 
@@ -13,11 +13,11 @@ class PlanModeInput(BaseModel):
 
 class EnterPlanModeRuntimeTool(RuntimeTool):
     name = "EnterPlanMode"
-    description = "璁╁綋鍓嶄細璇濊繘鍏ュ叡浜鍒掓ā寮?
+    description = "让当前会话进入共享计划模式"
     input_model = PlanModeInput
     should_defer = True
     always_load = True
-    search_hint = "杩涘叆璁″垝妯″紡"
+    search_hint = "进入计划模式"
 
     def __init__(self, session_store):
         super().__init__()
@@ -33,7 +33,7 @@ class EnterPlanModeRuntimeTool(RuntimeTool):
         )
         self._session_store.replace_runtime_state(context.session_id, runtime_state)
         return ToolExecutionPayload(
-            content="璁″垝妯″紡宸插惎鐢?,
+            content="计划模式已启用",
             output_payload={"plan_mode": plan_state},
             metadata={"interaction": "plan_mode_enter"},
         )
@@ -41,11 +41,11 @@ class EnterPlanModeRuntimeTool(RuntimeTool):
 
 class ExitPlanModeRuntimeTool(RuntimeTool):
     name = "ExitPlanMode"
-    description = "璁╁綋鍓嶄細璇濋€€鍑哄叡浜鍒掓ā寮?
+    description = "让当前会话退出共享计划模式"
     input_model = PlanModeInput
     should_defer = True
     always_load = True
-    search_hint = "閫€鍑鸿鍒掓ā寮?
+    search_hint = "退出计划模式"
 
     def __init__(self, session_store):
         super().__init__()
@@ -61,7 +61,7 @@ class ExitPlanModeRuntimeTool(RuntimeTool):
         )
         self._session_store.replace_runtime_state(context.session_id, runtime_state)
         return ToolExecutionPayload(
-            content="璁″垝妯″紡宸插叧闂?,
+            content="计划模式已关闭",
             output_payload={"plan_mode": plan_state},
             metadata={"interaction": "plan_mode_exit"},
         )
