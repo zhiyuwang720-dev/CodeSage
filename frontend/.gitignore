@@ -1,0 +1,26 @@
+# 依赖与构建产物
+node_modules
+dist
+dist-ssr
+coverage
+*.local
+
+# 编辑器与系统
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Vite 缓存
+.vite
+
+# 日志
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
