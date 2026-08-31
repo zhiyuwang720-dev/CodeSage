@@ -523,10 +523,12 @@ class FindingRuntimeBridge:
         tools: dict[str, Any],
         user_id: str | None = None,
         session_factory=None,
+        agent_type: str = "finding",
     ):
         self._llm_service = llm_service
         self._tools = tools
         self._user_id = user_id
+        self._agent_type = agent_type
         self._session_store = AuditSessionStore(session_factory=session_factory or get_sync_session_factory())
 
     async def run(
@@ -540,8 +542,11 @@ class FindingRuntimeBridge:
         model_name: str = "finding-runtime",
         max_turns: int | None = None,
         event_sink: Callable[[dict[str, Any]], Any] | None = None,
+        finalizer_prompts: list[str] | None = None,
+        finalizer_tools: list[Any] | None = None,
+        terminal_action_nudge_message: str | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -553,6 +558,7 @@ class FindingRuntimeBridge:
             event_sink=event_sink,
             require_terminal_action=True,
             terminal_action_nudge_limit=2,
+            terminal_action_nudge_message=terminal_action_nudge_message,
         )
         adapter = FindingRuntimeAdapter(
             session_store=self._session_store,
@@ -575,8 +581,9 @@ class FindingRuntimeBridge:
             model_client=model_client,
             runner_result=result.get("runner_result"),
             payload_extractor=self.extract_final_payload,
-            finalizer_prompts=self._default_finalizer_prompts(),
+            finalizer_prompts=finalizer_prompts or self._default_finalizer_prompts(),
             fallback_payload_builder=self._default_fallback_payload,
+            finalizer_tools=finalizer_tools,
         )
         return {
             **result,
@@ -597,7 +604,7 @@ class FindingRuntimeBridge:
         max_turns: int = 8,
         on_session_created: Callable[[str], Any] | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -639,7 +646,7 @@ class FindingRuntimeBridge:
         on_session_created: Callable[[str], Any] | None = None,
         on_user_message_created: Callable[[str], Any] | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -690,7 +697,7 @@ class FindingRuntimeBridge:
         model_name: str = "finding-runtime",
         max_turns: int | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -755,7 +762,7 @@ class FindingRuntimeBridge:
         max_turns: int | None = None,
         event_sink: Callable[[dict[str, Any]], Any] | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -794,7 +801,7 @@ class FindingRuntimeBridge:
         finalizer_tools: list[Any] | None = None,
         terminal_action_nudge_message: str | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type="finding")
+        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = tool_registry or self._build_tool_registry()
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
@@ -911,11 +918,14 @@ class FindingRuntimeBridge:
         raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
     def _build_tool_registry(self) -> ToolRegistry:
+        # 阶段 02: agent_type 参数化(默认 finding 兼容); review:* 视角由
+        # build_runtime_tool_registry 内部挂 FinalizeReview 终点工具。
         return build_runtime_tool_registry(
             session_store=self._session_store,
             agent_tools=self._tools,
-            agent_type="finding",
+            agent_type=self._agent_type,
             user_id=self._user_id,
+            include_finding_finalizer=not str(self._agent_type or "").startswith("review:"),
         )
 
     def _build_report_generation_tool_registry(self) -> ToolRegistry:
