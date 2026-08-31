@@ -1,0 +1,78 @@
+# ============ Web Framework ============
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+sse-starlette>=1.8.2
+
+# ============ Database ============
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+psycopg[binary]>=3.2.1
+alembic>=1.13.0
+greenlet>=3.0.0
+redis>=5.0.0
+
+# ============ Data Validation ============
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+email-validator>=2.1.0
+
+# ============ Authentication ============
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+python-multipart>=0.0.6
+bcrypt>=4.0.0,<5.0.0
+
+# ============ HTTP Client ============
+httpx>=0.25.0
+
+# ============ LLM Integration ============
+litellm>=1.0.0
+tiktoken>=0.5.2
+
+# ============ Report Generation ============
+reportlab>=4.0.0
+weasyprint>=60.0
+jinja2>=3.1.6
+
+# ============ Utilities ============
+json-repair>=0.30.0
+aiofiles>=23.2.1
+
+# ============ LangChain & LangGraph ============
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-openai>=0.0.5
+langgraph>=0.0.40
+
+# ============ Vector Database ============
+chromadb>=0.4.22
+
+# ============ Code Parsing ============
+# tree-sitter-languages 1.10.x 与 tree-sitter 0.22+ 不兼容
+tree-sitter>=0.21.0,<0.22.0
+tree-sitter-languages>=1.10.0
+pygments>=2.17.0
+
+# ============ Docker Sandbox ============
+docker>=7.0.0
+
+# ============ Security Tools ============
+bandit>=1.7.0
+safety>=2.3.0
+pip-audit>=2.6.0
+
+# ============ Kunlun-M Dependencies (MIT License) ============
+# https://github.com/LoRexxar/Kunlun-M
+pyjsparser>=2.7.1
+phply>=1.2.6
+esprima>=4.0.1
+jsbeautifier>=1.14.0
+colorlog>=6.0.0
+portalocker>=2.0.0
+prettytable>=3.0.0
+rarfile>=4.0
+beautifulsoup4>=4.12.0
+django>=4.2.0
+
+# ============ Optional: MySQL support for Kunlun-M Web mode ============
+# mysqlclient>=2.2.0
