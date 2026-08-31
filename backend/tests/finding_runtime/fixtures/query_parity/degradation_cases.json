@@ -1,0 +1,78 @@
+[
+    {
+        "name":  "max_output_tokens_escalate",
+        "recoverable_error_kind":  "max_output_tokens",
+        "state":  {
+
+                  },
+        "expected_transition":  "max_output_tokens_escalate",
+        "expected_override":  64000,
+        "expected_recovery_count":  0
+    },
+    {
+        "name":  "max_output_tokens_recovery",
+        "recoverable_error_kind":  "max_output_tokens",
+        "state":  {
+                      "max_output_tokens_override":  64000,
+                      "max_output_tokens_recovery_count":  1
+                  },
+        "expected_transition":  "max_output_tokens_recovery",
+        "expected_override":  64000,
+        "expected_recovery_count":  2,
+        "expected_last_message_contains":  "Continue from where you left off"
+    },
+    {
+        "name":  "collapse_drain_retry",
+        "recoverable_error_kind":  "prompt_too_long",
+        "state":  {
+                      "auto_compact_tracking":  {
+                                                    "pending_collapse":  true
+                                                }
+                  },
+        "expected_transition":  "collapse_drain_retry",
+        "expected_compact_tracking":  {
+                                          "pending_collapse":  false,
+                                          "last_recovery_strategy":  "collapse_drain",
+                                          "last_recovery_status":  "deferred"
+                                      },
+        "expected_checkpoint_recovery":  {
+                                             "status":  "deferred",
+                                             "committed":  1,
+                                             "strategy":  "collapse_drain"
+                                         }
+    },
+    {
+        "name":  "reactive_compact_retry",
+        "recoverable_error_kind":  "prompt_too_long",
+        "state":  {
+
+                  },
+        "expected_transition":  "reactive_compact_retry",
+        "expected_has_attempted_reactive_compact":  true,
+        "expected_compact_tracking":  {
+                                          "last_recovery_strategy":  "reactive_compact",
+                                          "last_recovery_status":  "deferred",
+                                          "reactive_compact_attempted":  true
+                                      },
+        "expected_checkpoint_recovery":  {
+                                             "strategy":  "reactive_compact",
+                                             "status":  "deferred"
+                                         }
+    },
+    {
+        "name":  "prompt_too_long_terminal",
+        "recoverable_error_kind":  "prompt_too_long",
+        "state":  {
+                      "has_attempted_reactive_compact":  true
+                  },
+        "expected_stop_reason":  "prompt_too_long"
+    },
+    {
+        "name":  "image_error_terminal",
+        "recoverable_error_kind":  "image_error",
+        "state":  {
+                      "has_attempted_reactive_compact":  true
+                  },
+        "expected_stop_reason":  "image_error"
+    }
+]

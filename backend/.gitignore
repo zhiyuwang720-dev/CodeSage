@@ -1,0 +1,11 @@
+.venv/
+venv/
+
+# Uploaded files
+uploads/zip_files/*.zip
+uploads/zip_files/*.meta
+uploads/checkmarx/
+
+# spike 运行时产物
+spike_phase0.db
+verify_l2.db

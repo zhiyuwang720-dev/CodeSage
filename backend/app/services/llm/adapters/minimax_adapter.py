@@ -1,0 +1,104 @@
+"""
+MiniMax适配器
+"""
+
+from ..base_adapter import BaseLLMAdapter
+from ..types import LLMConfig, LLMRequest, LLMResponse, LLMError, LLMProvider, LLMUsage
+
+
+class MinimaxAdapter(BaseLLMAdapter):
+    """MiniMax API适配器"""
+    
+    def __init__(self, config: LLMConfig):
+        super().__init__(config)
+        self._base_url = config.base_url or "https://api.minimax.chat/v1"
+    
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        """执行实际的API调用"""
+        try:
+            await self.validate_config()
+            return await self.retry(lambda: self._send_request(request))
+        except Exception as error:
+            api_response = getattr(error, 'api_response', None)
+            self.handle_error(error, "MiniMax API调用失败", api_response=api_response)
+    
+    async def _send_request(self, request: LLMRequest) -> LLMResponse:
+        """发送请求"""
+        url = f"{self._base_url}/text/chatcompletion_v2"
+        
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        
+        payload = {
+            "model": self.config.model or "abab6.5-chat",
+            "messages": messages,
+            "max_tokens": request.max_tokens if request.max_tokens is not None else self.config.max_tokens,
+        }
+        temperature = request.temperature if request.temperature is not None else self.config.temperature
+        if temperature is not None:
+            payload["temperature"] = temperature
+        top_p = request.top_p if request.top_p is not None else self.config.top_p
+        if top_p is not None:
+            payload["top_p"] = top_p
+        
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+        }
+        
+        response = await self.client.post(
+            url,
+            headers=self.build_headers(headers),
+            json=payload
+        )
+        
+        if response.status_code != 200:
+            error_data = response.json() if response.text else {}
+            base_resp = error_data.get("base_resp", {})
+            error_msg = base_resp.get("status_msg", f"HTTP {response.status_code}")
+            error_code = base_resp.get("status_code", "")
+            api_response = f"[{error_code}] {error_msg}" if error_code else error_msg
+            err = LLMError(error_msg, self.config.provider, response.status_code, api_response=api_response)
+            raise err
+
+        data = response.json()
+
+        # MiniMax 特殊的错误处理
+        base_resp = data.get("base_resp", {})
+        if base_resp.get("status_code") != 0:
+            error_msg = base_resp.get("status_msg", "未知错误")
+            error_code = base_resp.get("status_code", "")
+            api_response = f"[{error_code}] {error_msg}"
+            err = LLMError(f"MiniMax API错误: {error_msg}", self.config.provider, api_response=api_response)
+            raise err
+        
+        choice = data.get("choices", [{}])[0]
+        
+        if not choice:
+            raise Exception("API响应格式异常: 缺少choices字段")
+        
+        usage = None
+        if "usage" in data:
+            usage = LLMUsage(
+                prompt_tokens=data["usage"].get("prompt_tokens", 0),
+                completion_tokens=data["usage"].get("completion_tokens", 0),
+                total_tokens=data["usage"].get("total_tokens", 0)
+            )
+        
+        return LLMResponse(
+            content=choice.get("message", {}).get("content", ""),
+            model=data.get("model"),
+            usage=usage,
+            finish_reason=choice.get("finish_reason")
+        )
+    
+    async def validate_config(self) -> bool:
+        """验证配置是否有效"""
+        await super().validate_config()
+        if not self.config.model:
+            raise LLMError("未指定MiniMax模型", provider=LLMProvider.MINIMAX)
+        return True
+
+
+
+
+
+

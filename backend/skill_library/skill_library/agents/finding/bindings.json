@@ -1,0 +1,21 @@
+{
+  "agent_type": "finding",
+  "skills": [
+    {
+      "slug": "code-audit-finding",
+      "enabled": true,
+      "always_include": true,
+      "sort_order": 0,
+      "match_keywords": [
+        "auth",
+        "authorization",
+        "business-logic",
+        "code-audit",
+        "idor",
+        "security",
+        "source-review"
+      ],
+      "match_config": {}
+    }
+  ]
+}
