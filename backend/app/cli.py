@@ -27,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="仓库名(repo 覆盖, plain-diff 模式)")
     p.add_argument("--pr-number", type=int, default=None, help="PR 号(plain-diff 模式)")
     p.add_argument("--command", default="review", help="review | describe | ask_line")
+    p.add_argument("--engine", choices=["rules", "runtime"], default="rules",
+                   help="rules=确定性规则引擎(全离线); runtime=三视角 LLM 编排(需配置 LLM)")
     p.add_argument("--output", choices=["json", "text"], default="json", help="输出格式")
     p.add_argument("--file-budget-bytes", type=int, default=None, help="相关文件字节预算")
     return parser
@@ -53,18 +55,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.context_file:
         user_context = open(args.context_file, encoding="utf-8", errors="replace").read()
 
-    options: dict = {"repo": args.repo, "pr_number": args.pr_number}
+    options: dict = {"repo": args.repo, "pr_number": args.pr_number, "engine": args.engine}
     if args.file_budget_bytes:
         options["file_budget_bytes"] = args.file_budget_bytes
 
     try:
-        result = run_review_pipeline(
-            pr_url=args.pr_url,
-            diff_text=diff_text,
-            user_context=user_context,
-            command=args.command,
-            options=options,
-        )
+        if args.engine == "runtime":
+            import asyncio
+
+            result = asyncio.run(
+                run_review_pipeline_async(
+                    pr_url=args.pr_url,
+                    diff_text=diff_text,
+                    user_context=user_context,
+                    command=args.command,
+                    options=options,
+                )
+            )
+        else:
+            result = run_review_pipeline(
+                pr_url=args.pr_url,
+                diff_text=diff_text,
+                user_context=user_context,
+                command=args.command,
+                options=options,
+            )
     except Exception as exc:  # CLI 友好退出; 不打印堆栈噪音
         print(f"审查失败: {exc}", file=sys.stderr)
         return 1

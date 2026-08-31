@@ -43,6 +43,10 @@ from app.services.review_runtime.query_messages import normalize_messages_for_mo
 from app.services.review_runtime.query_state import QueryLoopState
 from app.services.review_runtime.session_store import AuditSessionPersistenceError
 from app.services.runtime_core.tool_search_runtime import TOOL_SEARCH_TOOL_NAME
+
+# 终点工具名(阶段 02 §3.4.1 参数化): 各领域的终结工具在此登记,
+# 桥接层的 continue_session_until_payload(finalizer_tools=...) 走完全参数化路径。
+TERMINAL_TOOL_NAMES = {"FinalizeFinding", "FinalizeVulnerabilityReports", "FinalizeReview"}
 from app.services.review_runtime.query_stop_hooks import (
     build_stop_hook_artifact_messages,
     build_stop_hook_messages,
@@ -948,7 +952,7 @@ class QueryLoop:
             usage=dict(payload.get("usage") or {}),
             native_tool_call_count=len(list(payload.get("tool_calls") or [])),
             has_terminal_tool_call=any(
-                str((item or {}).get("name") or "").strip() in {"FinalizeFinding", "FinalizeVulnerabilityReports"}
+                str((item or {}).get("name") or "").strip() in TERMINAL_TOOL_NAMES
                 for item in list(payload.get("tool_calls") or [])
                 if isinstance(item, dict)
             ),

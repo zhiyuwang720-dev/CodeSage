@@ -12,6 +12,7 @@ from app.services.agent.tools.todo_runtime_tool import TodoWriteRuntimeTool
 from app.services.review_runtime.models import ToolExecutionPayload
 from app.services.review_runtime.skills import RuntimeSkillTool
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
+from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
 from app.services.review_runtime.tools.finalize_vulnerability_reports import FinalizeVulnerabilityReportsTool
 from app.services.triage_runtime.tools import (
     FinalizeTriageBatchTool,
@@ -591,6 +592,7 @@ def build_runtime_tool_registry(
     user_id: str | None = None,
     include_finding_finalizer: bool = True,
     include_report_finalizer: bool = False,
+    tool_allowlist: set[str] | None = None,
 ) -> ToolRegistry:
     tools: list[RuntimeTool] = []
 
@@ -649,6 +651,9 @@ def build_runtime_tool_registry(
         tools.append(FinalizeFindingTool())
     if str(agent_type or "").strip() == "finding" and include_report_finalizer:
         tools.append(FinalizeVulnerabilityReportsTool())
+    if str(agent_type or "").strip().startswith("review:"):
+        # 阶段 02: PR 审查三视角(review:security/architecture/quality)共用 FinalizeReview 终点
+        tools.append(FinalizeReviewTool())
     if str(agent_type or "").strip() == "triage":
         tools.extend(
             [
@@ -666,6 +671,10 @@ def build_runtime_tool_registry(
             ExitPlanModeRuntimeTool(session_store),
         ]
     )
+    if tool_allowlist is not None:
+        # 阶段 02 权限矩阵(§3.2.2): 视角只能调用矩阵内工具; 终点工具始终保留
+        allow = set(tool_allowlist) | {"FinalizeReview", "FinalizeFinding", "FinalizeVulnerabilityReports"}
+        tools = [tool for tool in tools if tool.name in allow]
 
     registry = ToolRegistry(tools)
     if registry.has_deferred_tools():
