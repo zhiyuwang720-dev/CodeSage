@@ -657,7 +657,7 @@ class BaseAgent(ABC):
         return metadata
 
     def _compose_runtime_memory_prompt(self) -> str:
-        from app.services.finding_runtime.models import RuntimeMemoryRecord
+        from app.services.review_runtime.models import RuntimeMemoryRecord
         from app.services.runtime_core.memory_runtime import build_runtime_memory_prompt
 
         memory_runtime = self._memory_runtime_metadata()

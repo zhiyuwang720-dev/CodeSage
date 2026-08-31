@@ -1,0 +1,27 @@
+{
+  "id": "report-template",
+  "slug": "report-template",
+  "name": "默认最终漏洞报告",
+  "description": "AutoCVE 默认最终漏洞报告模板。",
+  "report_type": "final_vulnerability_report",
+  "output_format": "markdown",
+  "variables": {
+    "summary": "执行摘要",
+    "findings": "漏洞清单",
+    "remediation": "修复建议"
+  },
+  "metadata": {
+    "seeded_by": "init_agent_assets",
+    "storage_path": "report_template_library/report-template",
+    "template_file": "report_template_library/report-template/template.md",
+    "workspace_relative_path": "report_template_library/report-template",
+    "workspace_file_path": "report_template_library/report-template/template.md",
+    "host_storage_path": "",
+    "host_template_file": "",
+    "display_root": "report_template_library"
+  },
+  "is_default": true,
+  "is_system": true,
+  "is_active": true,
+  "sort_order": 0
+}

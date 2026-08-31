@@ -11,6 +11,7 @@ from .user_config import UserConfig
 from .project import Project, ProjectMember
 from .prompt_template import PromptTemplate
 from .audit_rule import AuditRule, AuditRuleSet
+from .report_template import AgentTaskReport
 from .agent_task import (
     AgentEvent,
     AgentEventType,
@@ -47,6 +48,7 @@ __all__ = [
     "PromptTemplate",
     "AuditRule",
     "AuditRuleSet",
+    "AgentTaskReport",
     "AgentTask",
     "AgentEvent",
     "AgentFinding",
