@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "codesage-backend"
 version = "3.0.4"
 description = "AutoCVE Backend API - AI-Powered Code Security Audit Platform"

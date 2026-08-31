@@ -1,0 +1,25 @@
+{
+  "continue_reasons": [
+    "next_turn",
+    "terminal_action_nudge",
+    "legacy_tool_syntax_nudge",
+    "max_output_tokens_escalate",
+    "max_output_tokens_recovery",
+    "reactive_compact_retry",
+    "collapse_drain_retry",
+    "stop_hook_blocking",
+    "token_budget_continuation"
+  ],
+  "terminal_reasons": [
+    "completed",
+    "blocking_limit",
+    "prompt_too_long",
+    "image_error",
+    "model_error",
+    "aborted_streaming",
+    "aborted_tools",
+    "stop_hook_prevented",
+    "hook_stopped",
+    "max_turns"
+  ]
+}
