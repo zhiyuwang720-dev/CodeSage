@@ -1,0 +1,102 @@
+[project]
+name = "code-review-benchmark"
+version = "0.1.0"
+description = "AI Code Review Benchmark Replication"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "openai>=1.10.0",
+    "matplotlib>=3.8.0",
+    "requests>=2.32.5",
+    "tqdm>=4.66.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+fork-prs = "code_review_benchmark.step0_fork_prs:main"
+download-prs = "code_review_benchmark.step1_download_prs:main"
+extract-comments = "code_review_benchmark.step2_extract_comments:main"
+judge-comments = "code_review_benchmark.step3_judge_comments:main"
+export-by-tool = "code_review_benchmark.step4_export_by_tool:main"
+label-prs = "code_review_benchmark.step5_label_prs:main"
+summary-table = "code_review_benchmark.summary_table:main"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+indent-width = 4
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    ".env",
+    "analysis/benchmark_dashboard.py",  # Contains embedded HTML/JS with long lines
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "W",
+    "B",
+    "C4",
+    "UP",
+    "N",
+    "LOG",
+    "G",
+    "ARG",
+    "SIM",
+    # "TCH",
+    "TID",
+    "Q",
+    "RUF",
+]
+ignore = [
+    "D107",
+    "D203",
+    "D213",
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "code_review_benchmark",
+]
+force-single-line = true
+single-line-exclusions = ["typing", "collections.abc"]
+split-on-trailing-comma = false
+force-sort-within-sections = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

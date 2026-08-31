@@ -16,6 +16,19 @@ from app.services.review_runtime.final_review_contract import (
     ReviewFinding,
 )
 
+# 视角 source → 评论前缀标签(spec 03 §7 分视角归约约定)
+SOURCE_LABELS = {
+    "security": "Security",
+    "architecture": "Architecture",
+    "quality": "Quality",
+    "rules": "Rules",
+    "orchestrator": "Orchestrator",
+}
+
+
+def source_label(source: str) -> str:
+    return SOURCE_LABELS.get(str(source or "").lower(), str(source or "Unattributed").capitalize())
+
 
 @dataclass
 class SynthesisResult:
@@ -131,8 +144,12 @@ def synthesize(
 
 
 def finding_to_comment(finding: ReviewFinding) -> dict:
-    """ReviewFinding → benchmark 注入格式 {path, line, body, severity, category, source}。"""
-    body_lines = [f"**{finding.title}**", "", finding.description]
+    """ReviewFinding → benchmark 注入格式 {path, line, body, severity, category, source}。
+
+    spec 03 §7.105: body 以 "[Security]/[Architecture]/[Quality]/[Rules]" 前缀开头,
+    供评测管线做分视角归因(step3_5_snapshot / eval_gate.perspective_breakdown)。
+    """
+    body_lines = [f"[{source_label(finding.source)}] **{finding.title}**", "", finding.description]
     if finding.suggestion:
         body_lines += ["", f"建议: {finding.suggestion}"]
     if finding.code_snippet:
