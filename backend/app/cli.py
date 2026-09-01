@@ -7,6 +7,10 @@
 
 输出: [{path, line, body, severity, category}](阶段 01 占位审查器返回空数组, 合法)。
 全离线可用: plain-diff + --context-file 通道不触网(§7 CI 环境无网络)。
+runtime 引擎长任务默认静默, 交互终端自动开启三屏流式 TUI(--live):
+每个视角 Agent 一屏, 顶部显示项目与各视角 sessionID, 逐 token 流式输出(同时
+临时关闭 LLM_DISABLE_STREAMING, 真流式); 被管道捕获时保持静默, stdout 始终只
+含最终 JSON 数组。--progress 保留为单行进度模式(不回退真流式)。
 """
 from __future__ import annotations
 
@@ -34,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-severity", choices=["critical", "high", "medium", "low"], default=None,
                    help="综合层最低输出严重度(默认 high 低噪原则; benchmark 评测可用 medium)")
     p.add_argument("--max-turns", type=int, default=None, help="runtime 引擎每视角最大轮数(防跑飞)")
+    p.add_argument("--progress", action="store_true", default=None,
+                   help="runtime 引擎打印进度到 stderr(默认: 交互终端自动开启)")
+    p.add_argument("--no-progress", dest="progress", action="store_false",
+                   help="强制关闭进度输出(被管道/脚本捕获时默认即关闭)")
+    p.add_argument("--live", dest="live", action="store_true", default=None,
+                   help="runtime 引擎三屏流式 TUI, 每视角 Agent 一屏(默认: 交互终端自动开启)")
+    p.add_argument("--no-live", dest="live", action="store_false",
+                   help="强制关闭三屏 TUI(被管道/脚本捕获时默认即关闭)")
     return parser
 
 
@@ -66,6 +78,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_turns:
         options["max_turns"] = args.max_turns
 
+    # runtime 引擎长任务默认静默: 交互终端自动开启三屏 TUI(--live), 被管道捕获时静默。
+    # event_sink / streaming 都是运行时对象/开关, 不塞进 options 持久化字段——
+    # event_sink 作为 kwargs 传入; streaming 在 run_review_pipeline_async 开头从
+    # options 抽出(pop), 不会进 build_review_context 的持久化 options。
+    event_sink = None
+    if args.engine == "runtime":
+        tty = sys.stderr.isatty()
+        want_live = args.live
+        want_progress = args.progress
+        if want_live is None and want_progress is None:
+            want_live = tty
+            want_progress = False
+        elif want_live is True:
+            want_progress = False
+        elif want_progress is True:
+            want_live = False
+        if want_live:
+            from app.services.pr_review.live_sink import LiveReviewSink
+
+            if tty:
+                event_sink = LiveReviewSink(sys.stderr)
+            else:
+                print("警告: 输出被管道捕获, --live 回落为行进度", file=sys.stderr)
+                from app.services.pr_review.progress import RuntimeProgressSink
+
+                event_sink = RuntimeProgressSink(sys.stderr)
+            # 用户拍板: TUI 下默认真流式(临时关掉网关兼容开关)
+            options["streaming"] = True
+        elif want_progress:
+            from app.services.pr_review.progress import RuntimeProgressSink
+
+            event_sink = RuntimeProgressSink(sys.stderr)
+
     try:
         if args.engine == "runtime":
             import asyncio
@@ -79,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                     user_context=user_context,
                     command=args.command,
                     options=options,
+                    event_sink=event_sink,
                 )
             )
         else:
@@ -92,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # CLI 友好退出; 不打印堆栈噪音
         print(f"审查失败: {exc}", file=sys.stderr)
         return 1
+    finally:
+        # 收尾: 停渲染线程、恢复光标, 让 stdout 的 JSON 落在 TUI 下方
+        if event_sink is not None:
+            event_sink.close()
 
     if args.output == "json":
         print(json.dumps([c.model_dump() for c in result.comments], ensure_ascii=False, indent=2))

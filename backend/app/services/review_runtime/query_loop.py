@@ -1271,6 +1271,16 @@ class QueryLoop:
                         }
                     )
                 tool_requests.append(request)
+                await self._emit_event(
+                    {
+                        "type": "tool_call",
+                        "tool_call": {
+                            "id": request.id,
+                            "name": request.name,
+                            "input": dict(request.input or {}),
+                        },
+                    }
+                )
             elif event_type == "done":
                 stream_done = dict(event or {})
                 assistant_content = str(stream_done.get("content") or assistant_content)

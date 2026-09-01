@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import uuid
 from typing import Any
@@ -165,9 +166,22 @@ async def run_review_pipeline_async(
     command: str | None = "review",
     options: dict | None = None,
     provider=None,
+    event_sink=None,
 ) -> ReviewResult:
-    """异步入口: engine=runtime 走三视角星型编排; 其他引擎回落同步路径。"""
-    options = options or {}
+    """异步入口: engine=runtime 走三视角星型编排; 其他引擎回落同步路径。
+
+    event_sink 是运行时对象(事件回调), 必须独立传参而非塞进 options——
+    options 会被 build_review_context 原样持久化(model_dump_json), 非 JSON 类型会崩。
+    dispatcher / session_factory 同理, 会在本函数开头从 options 抽出后单独使用。
+    """
+    options = dict(options or {})
+    # options 会被 build_review_context 原样持久化(model_dump_json)并落盘,
+    # 运行时对象(dispatcher / session_factory / event_sink)不是 JSON 类型, 混入会崩。
+    # 这里把注入通道从 options 抽出为局部变量, 持久化的 options 保持纯净数据。
+    dispatcher = options.pop("dispatcher", None)
+    session_factory = options.pop("session_factory", None)
+    event_sink = event_sink if event_sink is not None else options.pop("event_sink", None)
+    streaming = bool(options.pop("streaming", False))
     engine = str(options.get("engine", "rules"))
     if engine != "runtime":
         return run_review_pipeline(
@@ -189,7 +203,22 @@ async def run_review_pipeline_async(
         provider=provider,
     )
 
-    dispatcher = options.get("dispatcher")
+    # 头部元信息: 项目/模型等已知数据先行, 供 TUI 启动即显示(不分视角, 走原始 sink)。
+    if event_sink is not None:
+        from app.core.config import settings as _cfg
+
+        meta_event = {
+            "type": "meta",
+            "project_id": ctx.pr_key or ctx.repo,
+            "repo": ctx.repo,
+            "pr_number": ctx.pr_number,
+            "engine": "runtime",
+            "model": getattr(_cfg, "LLM_MODEL", None),
+        }
+        maybe_awaitable = event_sink(meta_event)
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
     if dispatcher is None:
         from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
         from app.services.llm.service import LLMService
@@ -202,15 +231,30 @@ async def run_review_pipeline_async(
             tools=build_shared_agent_tool_catalog(project_root=project_root),
             project_id=ctx.pr_key or ctx.repo,
             task_id=options.get("task_id"),
-            session_factory=options.get("session_factory"),
+            session_factory=session_factory,
             max_turns=options.get("max_turns"),
+            event_sink=event_sink,
         )
     orchestrator = ReviewOrchestrator(
         dispatcher,
         min_severity=str(options.get("min_severity", "high")),
         max_comments=int(options.get("max_comments", 10)),
     )
-    review = await orchestrator.run(ctx)
+    # streaming=True: 用户拍板真流式 —— 临时关掉网关兼容开关(阻塞合成流→逐 token SSE)。
+    # bridge.stream_complete 每轮调用时读取该开关(bridge.py), 开跑前改、跑完 finally 还原。
+    _prev_disable_streaming = None
+    if streaming:
+        from app.core.config import settings as _cfg
+
+        _prev_disable_streaming = _cfg.LLM_DISABLE_STREAMING
+        _cfg.LLM_DISABLE_STREAMING = False
+    try:
+        review = await orchestrator.run(ctx)
+    finally:
+        if _prev_disable_streaming is not None:
+            from app.core.config import settings as _cfg
+
+            _cfg.LLM_DISABLE_STREAMING = _prev_disable_streaming
     comments = [ReviewComment(**c) for c in review.benchmark_comments]
     result = ReviewResult(
         review_id=f"{imported.pr_key}-{uuid.uuid4().hex[:8]}",
