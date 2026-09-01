@@ -118,7 +118,7 @@ def test_missing_rate_over_ten_percent_exit_two(tmp_path, monkeypatch):
     )
     order = [f"https://github.com/sentry/sentry/pull/{100 + i}" for i in range(1, 6)]
 
-    def run_cli_by_url(diff_text, *, backend_root, engine="rules", timeout=300, _order=order, _state={"i": -1}):
+    def run_cli_by_url(diff_text, *, backend_root, engine="rules", timeout=300, min_severity=None, max_turns=None, _order=order, _state={"i": -1}):
         _state["i"] += 1
         if _order[_state["i"]].endswith("103"):
             raise RuntimeError("模拟单 PR 崩溃")
