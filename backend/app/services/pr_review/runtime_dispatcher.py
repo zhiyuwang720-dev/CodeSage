@@ -5,6 +5,7 @@ FinalizeReview 终点工具并按权限矩阵裁剪工具集; TaskHandoff 为唯
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,27 @@ REVIEW_FINALIZER_PROMPTS = [
     "注意：评论必须落在 diff 新增行(head 行号)；没有可报告问题时提交空 findings 并在 summary 说明范围。\n"
     "当前为最终提交阶段：除 FinalizeReview 外，其他工具(Read/Bash/Skill 等)已全部关闭，请勿再调用。"
 ]
+
+
+def tag_event_sink(event_sink, perspective: str):
+    """把视角名打进事件 dict 后转发给内层 sink。
+
+    三视角在 asyncio.gather 下并发, 事件流互相交织; 外层 sink(如 CLI 进度输出)
+    靠 perspective 区分进度归属。内层可为同步或异步(event_sink 契约见
+    query_loop._emit_event: Callable[[dict], Any], 返回值可 await 也可同步)。
+    内层为 None 时返回 None(保持"未配置 sink"的既有空转行为)。
+    """
+    if event_sink is None:
+        return None
+
+    async def sink(event: dict[str, Any]) -> None:
+        tagged = dict(event)
+        tagged["perspective"] = perspective
+        result = event_sink(tagged)
+        if inspect.isawaitable(result):
+            await result
+
+    return sink
 
 
 @dataclass(frozen=True)
@@ -103,6 +125,16 @@ class RuntimePerspectiveDispatcher:
             user_message = build_followup_prompt(followup_findings)
         else:
             user_message = "请开始按你的视角审查本次 PR diff，完成后用 FinalizeReview 提交结构化评论集。"
+        sink = tag_event_sink(self._event_sink, perspective)
+        if sink is not None:
+            await sink({"type": "perspective_start"})
+
+        # session 在 adapter.run 里创建, 创建瞬间即上报, 供头部显示每个视角的 sessionID。
+        # 无 sink 时回调为空操作(保持"未配置 sink 的空转"既有行为)。
+        async def on_session_created(session_id: str) -> None:
+            if sink is not None:
+                await sink({"type": "session_start", "session_id": session_id})
+
         result = await bridge.run(
             project_id=self._project_id,
             task_id=self._task_id,
@@ -112,16 +144,25 @@ class RuntimePerspectiveDispatcher:
             model_name=spec.agent_type,
             max_turns=self._max_turns,
             tool_allowlist=spec.tool_allowlist,
-            event_sink=self._event_sink,
+            event_sink=sink,
             finalizer_prompts=REVIEW_FINALIZER_PROMPTS,
             finalizer_tools=[FinalizeReviewTool()],
             terminal_action_nudge_message=(
                 "审查尚未结构化终结：请调用 FinalizeReview 工具提交结构化评论集"
                 "（findings+summary），不要只用自然语言结束。"
             ),
+            on_session_created=on_session_created,
         )
         final_payload = result.get("final_payload") or {}
         findings = [dict(item) for item in (final_payload.get("findings") or [])]
+        if sink is not None:
+            await sink(
+                {
+                    "type": "perspective_done",
+                    "turn_count": result.get("turn_count"),
+                    "findings": len(findings),
+                }
+            )
         confidences = [float(f.get("confidence", 0.5)) for f in findings if isinstance(f, dict)]
         confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.8
         self._session_ids[perspective] = str(result.get("session_id") or "")

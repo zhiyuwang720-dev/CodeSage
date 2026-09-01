@@ -573,6 +573,7 @@ class FindingRuntimeBridge:
         finalizer_prompts: list[str] | None = None,
         finalizer_tools: list[Any] | None = None,
         terminal_action_nudge_message: str | None = None,
+        on_session_created: Callable[[str], Any] | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry(tool_allowlist=tool_allowlist)
@@ -601,6 +602,7 @@ class FindingRuntimeBridge:
             recon_payload=recon_payload,
             user_message=user_message,
             model_name=model_name,
+            on_session_created=on_session_created,
         )
         snapshot, final_payload = await self._ensure_payload(
             session_id=result["session_id"],
