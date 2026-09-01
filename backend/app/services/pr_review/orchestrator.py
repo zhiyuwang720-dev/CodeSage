@@ -41,8 +41,8 @@ PERSPECTIVE_PROMPTS: dict[str, str] = {
 TOOL_MATRICES: dict[str, set[str]] = {
     # Security: Read/Glob/Grep + Bash(受限, 扫描反馈)
     "security": {"Read", "Glob", "Grep", "Bash", "Skill"},
-    # Architecture: 仅 Read/Glob/Grep(重读跨文件引用)
-    "architecture": {"Read", "Glob", "Grep", "Skill"},
+    # Architecture: Read/Glob/Grep + Bash(重读跨文件引用、验证构建/依赖)
+    "architecture": {"Read", "Glob", "Grep", "Bash", "Skill"},
     # Quality: Read/Glob/Grep + Bash(跑单测, 可选)
     "quality": {"Read", "Glob", "Grep", "Bash", "Skill"},
 }

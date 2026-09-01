@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     diff_text: str | None = None
     if args.pr_url:
-        pass  # diff+上下文模式: diff 由 provider/importer 获取
+        pass  # TODO diff+上下文模式: diff 由 provider/importer 获取
     elif args.diff_file and args.diff_file != "-":
         diff_text = open(args.diff_file, encoding="utf-8", errors="replace").read()
     else:

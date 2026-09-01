@@ -568,13 +568,14 @@ class FindingRuntimeBridge:
         user_message: str,
         model_name: str = "finding-runtime",
         max_turns: int | None = None,
+        tool_allowlist: set[str] | None = None,
         event_sink: Callable[[dict[str, Any]], Any] | None = None,
         finalizer_prompts: list[str] | None = None,
         finalizer_tools: list[Any] | None = None,
         terminal_action_nudge_message: str | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
-        tool_registry = self._build_tool_registry()
+        tool_registry = self._build_tool_registry(tool_allowlist=tool_allowlist)
         tool_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=tool_registry)
         runner = FindingRuntimeRunner(
             session_store=self._session_store,
@@ -944,15 +945,18 @@ class FindingRuntimeBridge:
             return snapshot, fallback_payload_builder(snapshot)
         raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
-    def _build_tool_registry(self) -> ToolRegistry:
+    def _build_tool_registry(self, tool_allowlist: set[str] | None = None) -> ToolRegistry:
         # 阶段 02: agent_type 参数化(默认 finding 兼容); review:* 视角由
         # build_runtime_tool_registry 内部挂 FinalizeReview 终点工具。
+        # tool_allowlist 为空 → 全量工具(非 review 调用方不变); 非空 → 按 §3.1 权限矩阵裁剪,
+        # 终点工具(FinalizeReview/FinalizeFinding/FinalizeVulnerabilityReports)始终保留。
         return build_runtime_tool_registry(
             session_store=self._session_store,
             agent_tools=self._tools,
             agent_type=self._agent_type,
             user_id=self._user_id,
             include_finding_finalizer=not str(self._agent_type or "").startswith("review:"),
+            tool_allowlist=tool_allowlist,
         )
 
     def _build_report_generation_tool_registry(self) -> ToolRegistry:

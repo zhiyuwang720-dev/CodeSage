@@ -14,7 +14,8 @@ from app.services.pr_review.orchestrator import PERSPECTIVE_PROMPTS, TOOL_MATRIC
 REVIEW_FINALIZER_PROMPTS = [
     "如果审查已经充分完成：调用 FinalizeReview 提交结构化评论集(findings+summary)；"
     "或输出可解析的 {\"findings\": [...], \"summary\": \"...\"} JSON。\n"
-    "注意：评论必须落在 diff 新增行(head 行号)；没有可报告问题时提交空 findings 并在 summary 说明范围。"
+    "注意：评论必须落在 diff 新增行(head 行号)；没有可报告问题时提交空 findings 并在 summary 说明范围。\n"
+    "当前为最终提交阶段：除 FinalizeReview 外，其他工具(Read/Bash/Skill 等)已全部关闭，请勿再调用。"
 ]
 
 
@@ -110,6 +111,7 @@ class RuntimePerspectiveDispatcher:
             user_message=user_message,
             model_name=spec.agent_type,
             max_turns=self._max_turns,
+            tool_allowlist=spec.tool_allowlist,
             event_sink=self._event_sink,
             finalizer_prompts=REVIEW_FINALIZER_PROMPTS,
             finalizer_tools=[FinalizeReviewTool()],

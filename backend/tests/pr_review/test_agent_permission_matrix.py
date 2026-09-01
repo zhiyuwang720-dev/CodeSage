@@ -45,7 +45,7 @@ def test_finding_registry_unaffected(tmp_path):
 
 
 def test_allowlist_filters_tools(tmp_path):
-    """tool_allowlist 裁剪: 架构视角(只读矩阵)不应有 Bash/Write。"""
+    """tool_allowlist 裁剪: 架构视角按矩阵保留 Read/Glob/Grep/Bash/Skill, 但无 PowerShell/Write。"""
     factory = make_session_factory(tmp_path)
     session_store = factory()
     from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
@@ -59,12 +59,13 @@ def test_allowlist_filters_tools(tmp_path):
     )
     names = {t.name for t in registry.enabled_tools()}
     assert "FinalizeReview" in names, "终点工具始终保留"
-    assert "Bash" not in names and "PowerShell" not in names, "架构视角无 Shell"
+    assert "Bash" in names, "架构视角含 Bash(重读跨文件引用、验证构建/依赖)"
+    assert "PowerShell" not in names and "Write" not in names, "架构视角无 PowerShell/Write"
     assert "Read" in names or "Glob" in names, "只读工具保留"
 
 
 def test_matrices_are_view_scoped():
-    """架构最严格; Security 与 Quality 可用 Bash; 三视角互相不可见对方专属配置。"""
+    """Security/Quality/Architecture 均含只读三件套 + Bash(架构用于构建/依赖验证), 各自矩阵完整定义。"""
     assert TOOL_MATRICES["architecture"] <= TOOL_MATRICES["security"]
     assert "Bash" in TOOL_MATRICES["security"] and "Bash" in TOOL_MATRICES["quality"]
     for perspective, allowlist in TOOL_MATRICES.items():
