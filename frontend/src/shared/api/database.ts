@@ -186,7 +186,8 @@ export const api = {
 
   async getAuditTasks(projectId?: string): Promise<AuditTask[]> {
     const params = projectId ? { project_id: projectId } : {};
-    const res = await apiClient.get('/tasks/', { params });
+    // 适配裁剪后 legacy /tasks/ 已移除; 改指现代 /agent-tasks/(后端唯一的任务列表端点)
+    const res = await apiClient.get('/agent-tasks/', { params });
     return res.data;
   },
 

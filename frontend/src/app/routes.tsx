@@ -33,7 +33,7 @@ const routes: RouteConfig[] = [
   { name: '任务详情', labelKey: "routes.taskDetail", path: '/tasks/:id', element: <TaskDetail />, visible: false },
   { name: 'Skills管理', labelKey: "routes.skills", path: '/skills', element: <SkillsManager />, visible: true },
   { name: '报告模板', labelKey: "routes.reportTemplates", path: '/report-templates', element: <ReportTemplatesPage />, visible: false },
-  { name: '漏洞管理', labelKey: "routes.vulnerabilities", path: '/vulnerabilities', element: <VulnerabilityManagement />, visible: true },
+  { name: '漏洞管理', labelKey: "routes.vulnerabilities", path: '/vulnerabilities', element: <VulnerabilityManagement />, visible: false },
   { name: '系统设置', labelKey: "routes.settings", path: '/admin', element: <AdminDashboard />, visible: true },
   { name: '账号管理', labelKey: "routes.account", path: '/account', element: <Account />, visible: false },
 ];
