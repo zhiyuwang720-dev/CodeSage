@@ -184,7 +184,34 @@ class RuntimeLLMModelClient:
         tool_definitions: list[dict[str, Any]],
         max_output_tokens_override: int | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        del model_name
+        # 网关兼容开关: LLM_DISABLE_STREAMING=1 时退化为非流式完成, 再合成流事件
+        # (部分 OpenAI 兼容网关的 SSE 长流会被中断: TransferEncodingError)
+        from app.core.config import settings as _settings
+
+        if getattr(_settings, "LLM_DISABLE_STREAMING", False):
+            response = await self.complete(
+                system_prompt=system_prompt,
+                recon_payload=recon_payload,
+                transcript=transcript,
+                model_name=model_name,
+                tool_definitions=tool_definitions,
+                max_output_tokens_override=max_output_tokens_override,
+            )
+            accumulated = ""
+            if response.content:
+                accumulated = response.content
+                yield {"type": "content_delta", "content": response.content, "accumulated": accumulated}
+            for tool_call in response.tool_calls:
+                yield {"type": "tool_call", "tool_call": tool_call}
+            yield {
+                "type": "done",
+                "content": response.content,
+                "stop_reason": response.stop_reason,
+                "recoverable_error_kind": response.recoverable_error_kind,
+                "recoverable_error_message": response.recoverable_error_message,
+                "tool_calls": [],
+            }
+            return
         messages = self._build_messages(
             system_prompt=system_prompt,
             recon_payload=recon_payload,

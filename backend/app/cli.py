@@ -31,6 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rules=确定性规则引擎(全离线); runtime=三视角 LLM 编排(需配置 LLM)")
     p.add_argument("--output", choices=["json", "text"], default="json", help="输出格式")
     p.add_argument("--file-budget-bytes", type=int, default=None, help="相关文件字节预算")
+    p.add_argument("--min-severity", choices=["critical", "high", "medium", "low"], default=None,
+                   help="综合层最低输出严重度(默认 high 低噪原则; benchmark 评测可用 medium)")
+    p.add_argument("--max-turns", type=int, default=None, help="runtime 引擎每视角最大轮数(防跑飞)")
     return parser
 
 
@@ -58,10 +61,16 @@ def main(argv: list[str] | None = None) -> int:
     options: dict = {"repo": args.repo, "pr_number": args.pr_number, "engine": args.engine}
     if args.file_budget_bytes:
         options["file_budget_bytes"] = args.file_budget_bytes
+    if args.min_severity:
+        options["min_severity"] = args.min_severity
+    if args.max_turns:
+        options["max_turns"] = args.max_turns
 
     try:
         if args.engine == "runtime":
             import asyncio
+
+            from app.services.pr_review.command_router import run_review_pipeline_async
 
             result = asyncio.run(
                 run_review_pipeline_async(

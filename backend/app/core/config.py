@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     LLM_TOOL_MESSAGE_FORMAT: str = "auto"
     LLM_FIRST_TOKEN_TIMEOUT: int = 30
     LLM_STREAM_TIMEOUT: int = 60
+    # 网关兼容: 部分 OpenAI 兼容端点的 SSE 长流会被中断, 置 True 退化为非流式
+    LLM_DISABLE_STREAMING: bool = False
     SUB_AGENT_TIMEOUT_SECONDS: int = 600
     TOOL_TIMEOUT_SECONDS: int = 60
 
