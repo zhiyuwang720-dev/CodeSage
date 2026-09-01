@@ -112,7 +112,11 @@ def run_cli(
         Path(diff_path).unlink(missing_ok=True)
     if proc.returncode != 0:
         raise RuntimeError(f"CLI 失败(exit {proc.returncode}): {proc.stderr[-400:]}")
-    return json.loads(proc.stdout)
+    out = proc.stdout or ""
+    start = out.find("[")  # 容忍 stdout 前缀噪音(logging/进度行), 从评论数组开始解析
+    if start < 0:
+        raise RuntimeError(f"CLI 输出无 JSON 数组: {out[:200]!r}")
+    return json.loads(out[start:])
 
 
 def to_review_entry(
@@ -227,8 +231,11 @@ def main(argv: list[str] | None = None) -> int:
             comments = run_cli(diff_text, backend_root=Path(args.backend_root),
                                engine=args.engine, timeout=args.timeout,
                                min_severity=args.min_severity, max_turns=args.max_turns)
+            sidecar = cache_dir / ('cliout_' + pr_url.rsplit('/', 2)[-2] + '_' + pr_url.rsplit('/', 1)[-1] + '.json')
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(json.dumps(comments, ensure_ascii=False, indent=1), encoding='utf-8')
             with data_lock:
-                if inject(data, to_review_entry(pr_url, comments, tool=args.tool)):
+                if inject(data, to_review_entry(pr_url, comments, tool=args.tool), force=args.force):
                     nonlocal_written[0] += 1
                 counter["i"] += 1
                 idx = counter["i"]
