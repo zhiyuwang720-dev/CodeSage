@@ -193,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="综合层最低输出严重度(默认产品 low-noise=high; 评测基线建议 medium)")
     parser.add_argument("--max-turns", type=int, default=None, help="runtime 每视角最大轮数(默认引擎内置)")
     parser.add_argument("--concurrency", type=int, default=1, help="并发 PR 数(限 1-4, spec §4.2)")
+    parser.add_argument("--use-sidecar", action="store_true",
+                        help="命中 diffs_cache/cliout_*.json 的 PR 直接用缓存评论, 不再跑 LLM(断点续跑)")
     args = parser.parse_args(argv)
 
     data_path = Path(args.benchmark_data)
@@ -228,12 +230,16 @@ def main(argv: list[str] | None = None) -> int:
     def _process(pr_url: str) -> str:
         try:
             diff_text = cached_diff(cache_dir, pr_url)
-            comments = run_cli(diff_text, backend_root=Path(args.backend_root),
-                               engine=args.engine, timeout=args.timeout,
-                               min_severity=args.min_severity, max_turns=args.max_turns)
             sidecar = cache_dir / ('cliout_' + pr_url.rsplit('/', 2)[-2] + '_' + pr_url.rsplit('/', 1)[-1] + '.json')
-            sidecar.parent.mkdir(parents=True, exist_ok=True)
-            sidecar.write_text(json.dumps(comments, ensure_ascii=False, indent=1), encoding='utf-8')
+            if getattr(args, "use_sidecar", False) and sidecar.exists():
+                comments = json.loads(sidecar.read_text(encoding="utf-8"))
+                print(f"sidecar 命中 {pr_url}: {len(comments)} 条", flush=True)
+            else:
+                comments = run_cli(diff_text, backend_root=Path(args.backend_root),
+                                   engine=args.engine, timeout=args.timeout,
+                                   min_severity=args.min_severity, max_turns=args.max_turns)
+                sidecar.parent.mkdir(parents=True, exist_ok=True)
+                sidecar.write_text(json.dumps(comments, ensure_ascii=False, indent=1), encoding='utf-8')
             with data_lock:
                 if inject(data, to_review_entry(pr_url, comments, tool=args.tool), force=args.force):
                     nonlocal_written[0] += 1
