@@ -76,7 +76,15 @@ def cached_diff(cache_dir: Path, pr_url: str, *, fetch=None) -> str:
     return diff_text
 
 
-def run_cli(diff_text: str, *, backend_root: Path, engine: str = "rules", timeout: int = 300) -> list[dict]:
+def run_cli(
+    diff_text: str,
+    *,
+    backend_root: Path,
+    engine: str = "rules",
+    timeout: int = 300,
+    min_severity: str | None = None,
+    max_turns: int | None = None,
+) -> list[dict]:
     """调产品 CLI(阶段 01/02 契约): diff 进 → [{path, line, body, severity, category}] 出。"""
     import os
     import tempfile
@@ -89,9 +97,14 @@ def run_cli(diff_text: str, *, backend_root: Path, engine: str = "rules", timeou
         env = dict(os.environ)
         env["PYTHONPATH"] = str(backend_root) + os.pathsep + env.get("PYTHONPATH", "")
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        cmd = [sys.executable, "-m", "app.cli", "review", "--diff-file", diff_path,
+               "--output", "json", "--engine", engine]
+        if min_severity:
+            cmd += ["--min-severity", min_severity]
+        if max_turns:
+            cmd += ["--max-turns", str(max_turns)]
         proc = subprocess.run(
-            [sys.executable, "-m", "app.cli", "review", "--diff-file", diff_path,
-             "--output", "json", "--engine", engine],
+            cmd,
             capture_output=True, text=True, encoding="utf-8",
             cwd=str(backend_root), env=env, timeout=timeout,
         )
@@ -172,6 +185,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-dir", default="diffs_cache")
     parser.add_argument("--results-file", help="预计算模式: 注入已有 CLI 输出后退出")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--min-severity", default=None, choices=["critical", "high", "medium", "low"],
+                        help="综合层最低输出严重度(默认产品 low-noise=high; 评测基线建议 medium)")
+    parser.add_argument("--max-turns", type=int, default=None, help="runtime 每视角最大轮数(默认引擎内置)")
+    parser.add_argument("--concurrency", type=int, default=1, help="并发 PR 数(限 1-4, spec §4.2)")
     args = parser.parse_args(argv)
 
     data_path = Path(args.benchmark_data)
@@ -198,22 +215,51 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir = Path(args.cache_dir)
     errors: list[str] = []
     written = 0
-    for index, pr_url in enumerate(pending, 1):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    data_lock = threading.Lock()
+    counter = {"i": 0}
+
+    def _process(pr_url: str) -> str:
         try:
             diff_text = cached_diff(cache_dir, pr_url)
             comments = run_cli(diff_text, backend_root=Path(args.backend_root),
-                               engine=args.engine, timeout=args.timeout)
-            if inject(data, to_review_entry(pr_url, comments, tool=args.tool)):
-                written += 1
-            print(f"[{index}/{len(pending)}] OK {pr_url} → {len(comments)} 条评论")
+                               engine=args.engine, timeout=args.timeout,
+                               min_severity=args.min_severity, max_turns=args.max_turns)
+            with data_lock:
+                if inject(data, to_review_entry(pr_url, comments, tool=args.tool)):
+                    nonlocal_written[0] += 1
+                counter["i"] += 1
+                idx = counter["i"]
+            print(f"[{idx}/{len(pending)}] OK {pr_url} → {len(comments)} 条评论", flush=True)
+            return "ok"
         except Exception as exc:  # noqa: BLE001 — 单 PR 崩溃不阻断(spec §7)
-            errors.append(f"{pr_url}: {exc}")
-            print(f"[{index}/{len(pending)}] FAIL {pr_url}: {exc}")
-        if index % 5 == 0:
-            save_data(data_path, data)  # 周期性落盘, 防中途丢失
+            with data_lock:
+                counter["i"] += 1
+                idx = counter["i"]
+                errors.append(f"{pr_url}: {exc}")
+            print(f"[{idx}/{len(pending)}] FAIL {pr_url}: {exc}", flush=True)
+            return "fail"
 
-    save_data(data_path, data)
+    nonlocal_written = [0]
+    concurrency = max(1, min(args.concurrency, 4))
+    if concurrency == 1:
+        for pr_url in pending:
+            _process(pr_url)
+            if len(errors) + nonlocal_written[0] and (len(errors) + nonlocal_written[0]) % 5 == 0:
+                with data_lock:
+                    save_data(data_path, data)
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(_process, pr_url) for pr_url in pending]
+            for _ in as_completed(futures):
+                pass
+
+    with data_lock:
+        save_data(data_path, data)
     missing_rate = len(errors) / len(pending) if pending else 0.0
+    written = nonlocal_written[0]
     print(f"完成: 写入 {written}/{len(pending)}, 失败 {len(errors)}(缺失率 {missing_rate:.0%})")
     if errors:
         print("\n".join(f"  - {e}" for e in errors))
