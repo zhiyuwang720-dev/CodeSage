@@ -1,0 +1,25 @@
+[project]
+name = "codesage"
+version = "0.1.0"
+description = "A Python harness framework, like Claude Code / Kode-CLI"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "httpx>=0.27",
+    "prompt_toolkit>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# 各模块测试目录含同名文件(test_types.py 等),importlib 模式避免 sys.path 前缀冲突
+addopts = "--import-mode=importlib"
+
+[project.scripts]
+codesage = "codesage.cli:main"
