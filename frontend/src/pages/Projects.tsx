@@ -39,9 +39,13 @@ import {
   HardDrive
 } from "lucide-react";
 import { api } from "@/shared/config/database";
-import { BranchSelector } from "@/components/ui/branch-selector";
 import { validateZipFile } from "@/features/projects/services";
 import type { Project, CreateProjectForm } from "@/shared/types";
+import {
+  createAgentTask,
+  getAgentTasks,
+  type AgentTask,
+} from "@/shared/api/agentTasks";
 import {
   deleteProjectSourceArtifacts,
   formatFileSize,
@@ -50,7 +54,7 @@ import {
   uploadZipFile,
   waitForZipImport,
 } from "@/shared/utils/zipStorage";
-import { isLocalDirectoryProject, isRepositoryProject, isZipProject, getSourceTypeBadge } from "@/shared/utils/projectUtils";
+import { isLocalDirectoryProject, isRepositoryProject, isZipProject, isPrReviewProject, getSourceTypeBadge } from "@/shared/utils/projectUtils";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import CreateTaskDialog from "@/components/audit/CreateTaskDialog";
@@ -87,12 +91,14 @@ export default function Projects() {
   const [createForm, setCreateForm] = useState<CreateProjectForm>({
     name: "",
     description: "",
-    source_type: "repository",
+    source_type: "pr_review",
     repository_url: "",
     repository_type: "github",
     default_branch: "main",
     programming_languages: []
   });
+  // pr_review 项目自动创建的待运行任务(项目管理卡片显示其状态)
+  const [projectTasks, setProjectTasks] = useState<Record<string, AgentTask | undefined>>({});
   const [createBranches, setCreateBranches] = useState<string[]>([]);
   const [loadingCreateBranches, setLoadingCreateBranches] = useState(false);
   const [createBranchError, setCreateBranchError] = useState<string | null>(null);
@@ -188,6 +194,21 @@ export default function Projects() {
       setLoading(true);
       const data = await api.getProjects();
       setProjects(data);
+
+      // 为 pr_review 项目拉取自动创建的待运行任务(项目管理卡片展示其状态)
+      const prProjects = data.filter((p) => isPrReviewProject(p));
+      const tasksMap: Record<string, AgentTask | undefined> = {};
+      await Promise.all(
+        prProjects.map(async (p) => {
+          try {
+            const tasks = await getAgentTasks({ project_id: p.id, limit: 1 });
+            tasksMap[p.id] = tasks[0];
+          } catch (e) {
+            console.error(`[Projects] 加载项目 ${p.id} 的 PR 审查任务失败:`, e);
+          }
+        }),
+      );
+      setProjectTasks(tasksMap);
     } catch (error) {
       console.error('Failed to load projects:', error);
       toast.error("加载项目失败");
@@ -207,31 +228,48 @@ export default function Projects() {
       return;
     }
 
-    if (createForm.source_type === "local_directory" && !createForm.local_path?.trim()) {
-      toast.error("请选择一个受管本地目录");
+    const prUrl = createForm.repository_url?.trim();
+    if (!prUrl) {
+      toast.error("请输入 PR 链接");
       return;
     }
 
     try {
       setCreatingProject(true);
-      setProjectImportMessage(
-        createForm.source_type === "local_directory"
-          ? "正在导入本地项目目录..."
-          : `正在从 ${createForm.repository_type === "github" ? "GitHub" : "远程"} 仓库导入源码...`
-      );
-      await api.createProject({
+      setProjectImportMessage("正在保存 PR 项目并创建待运行的审查任务...");
+      const project = await api.createProject({
         ...createForm,
+        source_type: "pr_review",
+        repository_url: prUrl,
+        repository_type: createForm.repository_type || "github",
       } as any);
 
+      // 执行创建 = 保存任务(不自动运行); 点审计 -> 智能审计 -> 启动
+      await createAgentTask({
+        project_id: project.id,
+        name: `PR Review - ${createForm.name}`,
+        version_label: "pr-review",
+        finding_runtime_stack: "runtime",
+        audit_scope: {
+          pr_review: {
+            pr_url: prUrl,
+          },
+        },
+      });
+
       import('@/shared/utils/logger').then(({ logger }) => {
-        logger.logUserAction('创建项目', {
+        logger.logUserAction('创建 PR 审查项目', {
           projectName: createForm.name,
+          prUrl,
           repositoryType: createForm.repository_type,
           languages: createForm.programming_languages,
         });
       });
 
-      toast.success("项目创建成功");
+      toast.success("项目创建成功", {
+        description: "已创建待运行的 PR 审查任务，点击「审计」→「智能审计」后启动",
+        duration: 5000
+      });
       setShowCreateDialog(false);
       resetCreateForm();
       loadProjects();
@@ -252,7 +290,7 @@ export default function Projects() {
     setCreateForm({
       name: "",
       description: "",
-      source_type: "repository",
+      source_type: "pr_review",
       repository_url: "",
       repository_type: "github",
       local_path: "",
@@ -270,13 +308,28 @@ export default function Projects() {
     }
   };
 
+  // 校验上传的 diff 文件(.diff/.patch/.txt, ≤50MB)
+  const validateDiffFile = (file: File): { valid: boolean; error?: string } => {
+    const lower = file.name.toLowerCase();
+    const isDiff = lower.endsWith('.diff') || lower.endsWith('.patch') || lower.endsWith('.txt');
+    if (!isDiff) {
+      return { valid: false, error: '仅支持 .diff / .patch / .txt 格式的补丁文件' };
+    }
+    const maxSize = 50 * 1024 * 1024;
+    if (file.size > maxSize) {
+      return { valid: false, error: 'diff 文件不能超过 50MB' };
+    }
+    return { valid: true };
+  };
+
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const validation = validateZipFile(file);
+    const validation = validateDiffFile(file);
     if (!validation.valid) {
       toast.error(validation.error);
+      event.target.value = '';
       return;
     }
 
@@ -286,7 +339,7 @@ export default function Projects() {
 
   const handleUploadAndCreate = async () => {
     if (!selectedFile) {
-      toast.error("请先选择ZIP文件");
+      toast.error("请先选择 diff 文件");
       return;
     }
 
@@ -297,43 +350,44 @@ export default function Projects() {
 
     try {
       setUploading(true);
-      setProjectImportMessage("正在创建 ZIP 项目记录...");
-      setUploadProgress(0);
+      setProjectImportMessage("正在创建 PR 项目记录...");
+      setUploadProgress(10);
 
       const project = await api.createProject({
         ...createForm,
-        source_type: "zip",
+        source_type: "pr_review",
         repository_type: "other",
         repository_url: undefined
       } as any);
 
       try {
-        setProjectImportMessage("正在上传 ZIP 源码...");
-        const uploadResult = await uploadZipFile(project.id, selectedFile, {
-          keepArchive: false,
-          onUploadProgress: progress => setUploadProgress(Math.min(80, Math.round(progress * 0.8))),
-        });
-        if (!uploadResult.success) {
-          throw new Error(uploadResult.message || "ZIP upload failed");
-        }
-        setUploadProgress(85);
-        setProjectImportMessage("上传完成，正在导入源码目录...");
-        await waitForZipImport(project.id, {
-          onStatus: info => {
-            if (info.import_status === "processing") {
-              setUploadProgress(prev => Math.max(prev, Math.min(95, prev + 2)));
-            }
+        setProjectImportMessage("正在上传 diff 源码...");
+        setUploadProgress(40);
+        const uploadResult = await api.uploadProjectDiff(project.id, selectedFile);
+        setUploadProgress(80);
+
+        // 执行创建 = 保存任务(不自动运行); 点审计 -> 智能审计 -> 启动
+        setProjectImportMessage("正在创建待运行的审查任务...");
+        await createAgentTask({
+          project_id: project.id,
+          name: `PR Review - ${createForm.name}`,
+          version_label: "pr-review",
+          finding_runtime_stack: "runtime",
+          audit_scope: {
+            pr_review: {
+              diff_file_path: uploadResult.diff_file_path,
+            },
           },
         });
       } catch (error) {
-        console.error('保存ZIP文件失败:', error);
+        console.error('保存 diff 文件失败:', error);
         throw error;
       }
 
       setUploadProgress(100);
 
       import('@/shared/utils/logger').then(({ logger }) => {
-        logger.logUserAction('上传ZIP文件创建项目', {
+        logger.logUserAction('上传 diff 创建项目', {
           projectName: project.name,
           fileName: selectedFile.name,
           fileSize: selectedFile.size,
@@ -345,14 +399,14 @@ export default function Projects() {
       loadProjects();
 
       toast.success(`项目 "${project.name}" 已创建`, {
-        description: 'ZIP文件已保存，您可以启动代码审计',
-        duration: 4000
+        description: 'diff 已保存，已创建待运行的 PR 审查任务，点击「审计」→「智能审计」后启动',
+        duration: 5000
       });
 
     } catch (error: any) {
       console.error('Upload failed:', error);
       import('@/shared/utils/errorHandler').then(({ handleError }) => {
-        handleError(error, '上传ZIP文件失败');
+        handleError(error, '上传 diff 文件失败');
       });
       const errorMessage = error?.message || '未知错误';
       toast.error(`上传失败: ${errorMessage}`);
@@ -570,6 +624,19 @@ export default function Projects() {
     });
   };
 
+  // pr_review 自动任务的状态徽标(项目管理卡片展示)
+  const renderPrTaskStatus = (task: AgentTask) => {
+    const map: Record<string, { label: string; className: string }> = {
+      pending: { label: '待运行', className: 'cyber-badge-muted' },
+      running: { label: '运行中', className: 'cyber-badge-success' },
+      completed: { label: '已完成', className: 'cyber-badge-info' },
+      failed: { label: '失败', className: 'cyber-badge-warning' },
+      cancelled: { label: '已取消', className: 'cyber-badge-muted' },
+    };
+    const item = map[task.status] || { label: task.status, className: 'cyber-badge-muted' };
+    return <Badge className={`cyber-badge ${item.className}`}>{item.label}</Badge>;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -606,37 +673,33 @@ export default function Projects() {
 
           <div className="flex-1 overflow-y-auto bg-slate-50/70 p-6">
             <Tabs
-              defaultValue="repository"
+              defaultValue="pr_url"
               className="w-full space-y-5"
               onValueChange={(value) => {
-                if (value === "repository") {
-                  setCreateForm((previous) => ({ ...previous, source_type: "repository" }));
-                  return;
-                }
-                if (value === "upload") {
-                  setCreateForm((previous) => ({ ...previous, source_type: "zip" }));
-                  return;
+                // 两个 tab 都产出 pr_review 项目; 差异在输入通道(PR URL / 上传 diff)
+                if (value === "pr_url" || value === "diff") {
+                  setCreateForm((previous) => ({ ...previous, source_type: "pr_review" }));
                 }
               }}
             >
               <TabsList className="grid h-auto w-full grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm">
                 <TabsTrigger
-                  value="repository"
+                  value="pr_url"
                   className="h-11 rounded-xl text-sm font-bold text-slate-500 transition-all data-[state=active]:bg-emerald-700 data-[state=active]:text-white data-[state=active]:shadow-[0_12px_24px_rgba(5,150,105,0.22)]"
                 >
                   <GitBranch className="w-4 h-4 mr-2" />
-                  Git 仓库
+                  PR URL
                 </TabsTrigger>
                 <TabsTrigger
-                  value="upload"
+                  value="diff"
                   className="h-11 rounded-xl text-sm font-bold text-slate-500 transition-all data-[state=active]:bg-emerald-700 data-[state=active]:text-white data-[state=active]:shadow-[0_12px_24px_rgba(5,150,105,0.22)]"
                 >
                   <Upload className="w-4 h-4 mr-2" />
-                  上传源码
+                  上传 diff
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="repository" className="m-0 space-y-5 rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm data-[state=inactive]:hidden">
+              <TabsContent value="pr_url" className="m-0 space-y-5 rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm data-[state=inactive]:hidden">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="name" className="text-xs font-bold text-slate-600">项目名称 *</Label>
@@ -680,66 +743,18 @@ export default function Projects() {
                   />
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="repository_url" className="text-xs font-bold text-slate-600">仓库地址</Label>
-                    <Input
-                      id="repository_url"
-                      value={createForm.repository_url}
-                      onChange={(e) => setCreateForm({ ...createForm, repository_url: e.target.value })}
-                      placeholder={
-                        createForm.repository_type === 'other'
-                          ? "git@github.com:user/repo.git"
-                          : "https://github.com/user/repo"
-                      }
-                      className="h-11 rounded-2xl border-slate-200 bg-slate-50/80 shadow-inner focus-visible:ring-emerald-600"
-                    />
-                    {createForm.repository_type === 'other' && (
-                      <p className="text-xs text-slate-500">
-                        SSH Key 认证请使用 git@ 格式的 SSH URL
-                      </p>
-                    )}
-                    {createForm.repository_type !== 'other' && (
-                      <p className="text-xs text-slate-500">
-                        Token 认证请使用 https:// 格式的 URL
-                      </p>
-                    )}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="default_branch" className="text-xs font-bold text-slate-600">默认分支</Label>
-                    {loadingCreateBranches ? (
-                      <div className="flex h-11 items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 px-3 text-sm text-slate-500 shadow-inner">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading remote branches...
-                      </div>
-                    ) : createBranches.length > 0 ? (
-                      <BranchSelector
-                        value={createForm.default_branch || ""}
-                        onChange={(value) => setCreateForm({ ...createForm, default_branch: value })}
-                        branches={createBranches}
-                        placeholder="Select default branch"
-                        className="h-11 rounded-2xl"
-                      />
-                    ) : (
-                      <Input
-                        id="default_branch"
-                        value={createForm.default_branch}
-                        onChange={(e) => setCreateForm({ ...createForm, default_branch: e.target.value })}
-                        placeholder="main"
-                        className="h-11 rounded-2xl border-slate-200 bg-slate-50/80 shadow-inner focus-visible:ring-emerald-600"
-                      />
-                    )}
-                    {createBranches.length > 0 && (
-                      <p className="text-xs text-slate-500">
-                        Loaded {createBranches.length} branches; using the remote default_branch.
-                      </p>
-                    )}
-                    {createBranchError && (
-                      <p className="text-xs text-amber-600">
-                        Could not load remote branches. You can enter one manually: {createBranchError}
-                      </p>
-                    )}
-                  </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="repository_url" className="text-xs font-bold text-slate-600">PR 链接 *</Label>
+                  <Input
+                    id="repository_url"
+                    value={createForm.repository_url}
+                    onChange={(e) => setCreateForm({ ...createForm, repository_url: e.target.value })}
+                    placeholder="https://github.com/user/repo/pull/123"
+                    className="h-11 rounded-2xl border-slate-200 bg-slate-50/80 shadow-inner focus-visible:ring-emerald-600"
+                  />
+                  <p className="text-xs text-slate-500">
+                    填入待审查的 PR 页面地址，PR 3-Agent 会克隆该 PR 分支并分析 diff
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -791,7 +806,7 @@ export default function Projects() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="upload" className="m-0 space-y-5 rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm data-[state=inactive]:hidden">
+              <TabsContent value="diff" className="m-0 space-y-5 rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm data-[state=inactive]:hidden">
                 <div className="flex flex-col gap-4">
                   <div className="space-y-1.5">
                     <Label htmlFor="upload-name" className="text-xs font-bold text-slate-600">项目名称 *</Label>
@@ -860,14 +875,14 @@ export default function Projects() {
                       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-200 bg-white text-emerald-700 shadow-sm">
                         <Upload className="h-6 w-6" />
                       </div>
-                      <h3 className="mb-1 text-base font-black text-slate-950">上传 ZIP 归档</h3>
+                      <h3 className="mb-1 text-base font-black text-slate-950">上传 diff 文件</h3>
                       <p className="mb-4 text-xs font-medium text-slate-500">
-                        最大 500MB / 格式 .ZIP
+                        最大 50MB / 格式 .diff .patch
                       </p>
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".zip"
+                        accept=".diff,.patch,.txt"
                         onChange={handleFileSelect}
                         className="hidden"
                         disabled={uploading}
@@ -926,19 +941,19 @@ export default function Projects() {
                         <AlertCircle className="h-4 w-4" />
                       </span>
                       <div className="text-xs leading-6 text-slate-600">
-                        <p className="mb-2 font-bold text-slate-800">上传说明</p>
+                        <p className="mb-2 font-bold text-slate-800">diff 审查说明</p>
                         <ul className="space-y-2">
                           <li className="flex gap-2">
                             <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                            <span>上传后会先生成持久源码目录，供 Agent 直审默认直接使用</span>
+                            <span>上传 Git 导出的 diff / patch 文件（git diff 或 PR 的 .diff 下载）</span>
                           </li>
                           <li className="flex gap-2">
                             <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
-                            <span>工作流审计会从持久源码目录复制临时工作副本后再执行</span>
+                            <span>PR 3-Agent 将直接基于 diff 内容做安全/架构/质量三视角审查</span>
                           </li>
                           <li className="flex gap-2">
                             <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
-                            <span>原始 ZIP 归档不会保留，仅保存解压后的持久源码目录</span>
+                            <span>审查评论会写入该任务的 findings，可在任务详情查看</span>
                           </li>
                         </ul>
                       </div>
@@ -1103,6 +1118,16 @@ export default function Projects() {
                     <div className="flex items-center text-xs font-mono text-muted-foreground bg-muted p-2 border border-border rounded">
                       <HardDrive className="w-3 h-3 mr-2 flex-shrink-0 text-violet-500" />
                       <span className="truncate">{project.local_path}</span>
+                    </div>
+                  )}
+
+                  {isPrReviewProject(project) && projectTasks[project.id] && (
+                    <div className="flex items-center justify-between text-xs font-mono bg-muted p-2 border border-border rounded">
+                      <span className="flex items-center text-muted-foreground">
+                        <Shield className="w-3 h-3 mr-2 flex-shrink-0 text-emerald-500" />
+                        PR审查任务
+                      </span>
+                      {renderPrTaskStatus(projectTasks[project.id]!)}
                     </div>
                   )}
 

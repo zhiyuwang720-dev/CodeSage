@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.api import deps
 from app.api.v1.endpoints.config import _normalize_workflow_config, WORKFLOW_AGENT_TYPES, WORKFLOW_LOCKED_AGENTS
-from app.db.session import get_db, async_session_factory
+from app.db.session import get_db, async_session_factory, get_pr_review_sync_session_factory
 from app.models.agent_task import (
     AgentTask, AgentEvent, AgentFinding, AgentTreeNode,
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
@@ -151,7 +151,7 @@ class AgentTaskCreate(BaseModel):
         description="Verification mode: analysis_only, sandbox, or generate_poc",
     )
 
-    version_label: str = Field(..., description="Human-entered version label")
+    version_label: Optional[str] = Field(None, description="Human-entered version label")
     version_tag: Optional[str] = Field(None, description="Optional repository tag")
     branch_name: Optional[str] = Field(None, description="Repository branch name")
     exclude_patterns: Optional[List[str]] = Field(
@@ -1157,8 +1157,219 @@ def _disabled_managed_report_stats(findings: Optional[List[AgentFinding]] = None
 
 
 
+def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
+    """PR review 运行时事件 → AgentEvent 流。
+
+    复用 EventManager.add_event: 统一落库 agent_events + 内存队列实时(/stream) + Redis。
+    review 事件契约见 review_runtime/query_loop.py 与 pr_review/runtime_dispatcher.tag_event_sink
+    (事件 dict 带 perspective 字段; tool_call 的 dict 在 event["tool_call"], 名称取 name)。
+    """
+    sequence = 0
+
+    def _perspective(event: dict) -> Optional[str]:
+        value = event.get("perspective")
+        return str(value) if value is not None else None
+
+    def _message(event: dict, default: str) -> str:
+        raw = event.get("message") or event.get("message_text") or event.get("content")
+        return str(raw or default or "").strip()
+
+    async def sink(event: dict) -> None:
+        nonlocal sequence
+        ev_type = str(event.get("type") or "message")
+        perspective = _perspective(event)
+        metadata = {"review_type": "pr_review", "perspective": perspective, "agent_name": perspective}
+        sequence += 1
+
+        if ev_type == "meta":
+            repo = event.get("repo") or event.get("project_id") or ""
+            pr_number = event.get("pr_number")
+            suffix = f" #{pr_number}" if pr_number is not None else ""
+            await event_manager.add_event(
+                task_id, "review_meta", sequence=sequence, phase=None,
+                message=f"PR 审查启动: {repo}{suffix}", metadata=metadata,
+            )
+        elif ev_type == "perspective_start":
+            await event_manager.add_event(
+                task_id, "review_perspective_start", sequence=sequence, phase=perspective,
+                message=f"开始 {perspective} 视角审查", metadata=metadata,
+            )
+        elif ev_type == "assistant_start":
+            await event_manager.add_event(
+                task_id, "assistant_start", sequence=sequence, phase=perspective,
+                message=_message(event, f"{perspective} 视角: 模型开始作答"), metadata=metadata,
+            )
+        elif ev_type in ("token", "reasoning_delta"):
+            content = event.get("content")
+            if not content:
+                return
+            await event_manager.add_event(
+                task_id, "thinking_token", sequence=sequence, phase=perspective,
+                message=str(content), metadata=metadata,
+            )
+        elif ev_type == "tool_call":
+            tool = event.get("tool_call") or {}
+            tool_name = str(tool.get("name") or event.get("tool_name") or "?")
+            tool_input = tool.get("input") or tool.get("arguments") or event.get("tool_input")
+            await event_manager.add_event(
+                task_id, "tool_call", sequence=sequence, phase=perspective,
+                message=f"调用工具 {tool_name}", tool_name=tool_name,
+                tool_input=tool_input if isinstance(tool_input, dict) else None,
+                metadata=metadata,
+            )
+        elif ev_type == "done":
+            await event_manager.add_event(
+                task_id, "assistant_done", sequence=sequence, phase=perspective,
+                message=_message(event, f"{perspective} 视角: 本轮完成"), metadata=metadata,
+            )
+        elif ev_type == "perspective_done":
+            findings = int(event.get("findings") or 0)
+            turns = event.get("turn_count")
+            tail = f"({turns} 轮" if turns is not None else "("
+            tail += f", {findings} 发现)" if findings else ")"
+            await event_manager.add_event(
+                task_id, "review_perspective_done", sequence=sequence, phase=perspective,
+                message=f"完成 {perspective} 视角审查 {tail}", metadata=metadata,
+            )
+        elif ev_type == "llm_retry":
+            attempt = event.get("attempt")
+            max_attempts = event.get("max_attempts")
+            label = f"LLM 重试 {attempt}/{max_attempts}" if attempt is not None else "LLM 请求重试"
+            await event_manager.add_event(
+                task_id, "llm_retry", sequence=sequence, phase=perspective,
+                message=label, metadata=metadata,
+            )
+        elif ev_type == "error":
+            await event_manager.add_event(
+                task_id, "task_error", sequence=sequence, phase=perspective,
+                message=_message(event, str(event.get("error") or "审查出错")), metadata=metadata,
+            )
+        elif ev_type == "assistant_tombstone":
+            await event_manager.add_event(
+                task_id, "assistant_tombstone", sequence=sequence, phase=perspective,
+                message=_message(event, "模型输出中断"), metadata=metadata,
+            )
+        elif ev_type == "message":
+            await event_manager.add_event(
+                task_id, "message", sequence=sequence, phase=perspective,
+                message=_message(event, ""), metadata=metadata,
+            )
+        # session_start 等低信息量事件跳过
+
+    return sink
+
+
+async def _execute_pr_review_task_impl(
+    db: AsyncSession,
+    task: AgentTask,
+    project: Project,
+    event_manager: EventManager,
+) -> None:
+    """PR 3-Agent review 任务执行: 三视角运行时 + 事件流 + findings 落库。"""
+    from pathlib import Path
+
+    from app.services.pr_review.command_router import run_review_pipeline_async
+
+    scope = (task.audit_scope or {}).get("pr_review") or {}
+    pr_url = scope.get("pr_url") or project.repository_url
+    diff_file_path = scope.get("diff_file_path")
+    diff_text = None
+    if diff_file_path and os.path.exists(diff_file_path):
+        try:
+            diff_text = await asyncio.to_thread(
+                Path(diff_file_path).read_text, encoding="utf-8", errors="replace"
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to read diff file {diff_file_path}: {exc}")
+    if not pr_url and not diff_text:
+        raise ValueError("pr_review task has neither pr_url nor diff content")
+
+    sink = _build_pr_review_event_sink(task.id, event_manager)
+    await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
+
+    result = await run_review_pipeline_async(
+        pr_url=pr_url,
+        diff_text=diff_text,
+        user_context=scope.get("user_context"),
+        options={
+            "engine": "runtime",
+            "task_id": task.id,
+            # SEVERITY_RANK 只有 critical/high/medium/low: "info" 不在键里,
+            # get 会回落成 3(high)把全部 medium/low 评论滤掉 → 必须用 "low"(全量输出)。
+            "min_severity": "low",
+            "max_comments": int(scope.get("max_comments") or 10),
+            "max_turns": int(task.max_iterations or 50),
+            # 三视角运行时审计会话用独立 SQLite 文件: sync 写(运行时)与 async 写
+            # (EventManager agent_events)同库并发会在 WAL 下形成写锁循环挂死服务。
+            "session_factory": get_pr_review_sync_session_factory(),
+        },
+        event_sink=sink,
+    )
+
+    comments = result.comments or []
+    findings = [
+        {
+            "vulnerability_type": c.category or "code_review",
+            "severity": c.severity or "medium",
+            "title": f"{c.category or 'review'} in {c.path}:{c.line}",
+            "description": c.body,
+            "file_path": c.path,
+            "line_start": c.line,
+            "line_end": c.line,
+        }
+        for c in comments
+        if c and getattr(c, "path", None)
+    ]
+    saved = await _save_findings(db, task.id, findings, project_root=None)
+
+    task.status = AgentTaskStatus.COMPLETED
+    task.current_phase = AgentTaskPhase.REPORTING
+    task.completed_at = datetime.now(timezone.utc)
+    task.findings_count = len(findings)
+    task.error_message = None
+    await db.commit()
+    await sink({"type": "done", "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
+    logger.info(f"pr_review task {task.id} completed with {saved} findings")
+
+
 async def _execute_agent_task_impl(task_id: str):
     """Execute an agent audit task in the background."""
+    # PR review 任务不依赖 legacy agent 编排, 提前分派: 三视角 review 运行时。
+    # 放在 legacy 导入之前, 避免 trimmed 后的 agents 模块缺失阻塞 PR 流程。
+    async with async_session_factory() as probe_db:
+        probe_task = await probe_db.get(
+            AgentTask, task_id, options=[selectinload(AgentTask.project)]
+        )
+        if probe_task and (
+            probe_task.task_type == "pr_review"
+            or (probe_task.audit_scope or {}).get("pr_review")
+        ):
+            if probe_task.status == AgentTaskStatus.CANCELLED or is_task_cancelled(task_id):
+                logger.warning(f"pr_review task {task_id} cancelled before execution")
+                return
+            # 释放本次读取的 SQLite 事务(SHARED 锁): 否则整个 review 期间
+            # 运行时的 audit_sessions/agent_events 写入会被阻塞, 报 database is locked。
+            await probe_db.commit()
+            from app.services.agent.event_manager import EventManager
+            event_stream = create_agent_event_stream() if event_stream_enabled() else None
+            pr_event_manager = EventManager(
+                db_session_factory=async_session_factory,
+                event_stream=event_stream,
+            )
+            pr_event_manager.create_queue(task_id)
+            _running_event_managers[task_id] = pr_event_manager
+            try:
+                await _execute_pr_review_task_impl(
+                    probe_db, probe_task, probe_task.project, pr_event_manager
+                )
+            finally:
+                _running_event_managers.pop(task_id, None)
+                try:
+                    await pr_event_manager.close()
+                except Exception:
+                    logger.debug("PR event manager cleanup skipped", exc_info=True)
+            return
+
     import time
     from app.core.config import settings
     from app.services.agent.agents import (
@@ -2554,15 +2765,31 @@ async def create_agent_task(
     if project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    is_pr_review = bool((request.audit_scope or {}).get("pr_review"))
+    runtime_stack = coerce_finding_runtime_stack(
+        request.finding_runtime_stack
+        or (
+            "runtime"
+            if is_pr_review
+            else getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", FindingRuntimeStack.LEGACY.value)
+        )
+    ).value
+    task_name = request.name or (
+        f"PR Review - {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if is_pr_review
+        else f"Agent Audit - {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+
     task = AgentTask(
         id=str(uuid4()),
         project_id=project.id,
-        name=request.name or f"Agent Audit - {datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        task_type="pr_review" if is_pr_review else "agent_audit",
+        name=task_name,
         description=request.description,
         status=AgentTaskStatus.PENDING,
         current_phase=AgentTaskPhase.PLANNING,
         target_vulnerabilities=request.target_vulnerabilities,
-        version_label=request.version_label,
+        version_label=request.version_label or ("pr-review" if is_pr_review else task_name),
         version_tag=request.version_tag,
         verification_level=request.verification_level or "sandbox",
         branch_name=request.branch_name,
@@ -2571,7 +2798,7 @@ async def create_agent_task(
         target_files=request.target_files,
         max_iterations=request.max_iterations or 50,
         timeout_seconds=request.timeout_seconds or 1800,
-        agent_config={"finding_runtime_stack": coerce_finding_runtime_stack(request.finding_runtime_stack or getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", FindingRuntimeStack.LEGACY.value)).value},
+        agent_config={"finding_runtime_stack": runtime_stack},
         created_by=current_user.id,
         audit_scope=request.audit_scope,
     )
@@ -2579,8 +2806,41 @@ async def create_agent_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    if is_pr_review:
+        # PR review 任务不自动调度; 前端点「启动」后经 POST /agent-tasks/{id}/start 运行
+        logger.info(f"Created pr_review task {task.id} for project {project.name} (pending; start via POST /agent-tasks/{task.id}/start)")
+    else:
+        await _schedule_agent_task(background_tasks, task.id)
+        logger.info(f"Created agent task {task.id} for project {project.name}")
+    return task
+
+
+@router.post("/{task_id}/start", response_model=AgentTaskResponse)
+async def start_agent_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Start a pending pr_review task: kicks off the PR 3-Agent review in the background."""
+    task = await db.get(AgentTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    project = await db.get(Project, task.project_id)
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if task.task_type != "pr_review" and not (task.audit_scope or {}).get("pr_review"):
+        raise HTTPException(status_code=400, detail="Only pr_review tasks can be started")
+    if task.status != AgentTaskStatus.PENDING:
+        raise HTTPException(status_code=409, detail=f"Task already started (status={task.status})")
+
+    task.status = AgentTaskStatus.RUNNING
+    task.started_at = datetime.now(timezone.utc)
+    task.current_phase = AgentTaskPhase.PLANNING
+    await db.commit()
+    await db.refresh(task)
     await _schedule_agent_task(background_tasks, task.id)
-    logger.info(f"Created agent task {task.id} for project {project.name}")
+    logger.info(f"Started pr_review task {task.id}")
     return task
 
 

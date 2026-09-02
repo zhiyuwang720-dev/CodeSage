@@ -122,6 +122,15 @@ export const api = {
     return res.data;
   },
 
+  async uploadProjectDiff(id: string, file: File): Promise<{ message: string; original_filename: string; file_size: number; diff_file_path: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await apiClient.post(`/projects/${id}/diff`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return res.data;
+  },
+
   async createProject(project: CreateProjectForm & { owner_id?: string }): Promise<Project> {
     const res = await apiClient.post('/projects/', {
       name: project.name,

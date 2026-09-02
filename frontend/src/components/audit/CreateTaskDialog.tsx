@@ -41,8 +41,8 @@ import {
 	getAuditModeLabel,
 } from "@/components/agent/auditModeConfig";
 import { api } from "@/shared/config/database";
-import { createAgentTask } from "@/shared/api/agentTasks";
-import { isRepositoryProject, isZipProject } from "@/shared/utils/projectUtils";
+import { createAgentTask, getAgentTasks, startAgentTask } from "@/shared/api/agentTasks";
+import { isRepositoryProject, isZipProject, isPrReviewProject } from "@/shared/utils/projectUtils";
 import type { Project } from "@/shared/types";
 
 import FileSelectionDialog from "./FileSelectionDialog";
@@ -192,6 +192,10 @@ export default function CreateTaskDialog({
 			return false;
 		}
 
+		if (isPrReviewProject(selectedProject)) {
+			return true;
+		}
+
 		if (isZipProject(selectedProject)) {
 			return zipHasUsableSource;
 		}
@@ -207,6 +211,62 @@ export default function CreateTaskDialog({
 
 		if (isZipProject(selectedProject) && !zipHasUsableSource) {
 			toast.error("项目源码不可用，请先在项目中上传或同步源码");
+			return;
+		}
+
+		// PR 审查项目: 找到待运行的 pr_review 任务则直接启动, 否则创建后启动
+		if (isPrReviewProject(selectedProject)) {
+			try {
+				setCreating(true);
+				const tasks = await getAgentTasks({ project_id: selectedProject.id });
+				const prTask = tasks.find(
+					(t) =>
+						t.task_type === "pr_review" ||
+						Boolean((t.audit_scope as any)?.pr_review),
+				);
+
+				let taskId: string;
+				if (prTask && prTask.status === "pending") {
+					taskId = prTask.id;
+					await startAgentTask(taskId);
+				} else {
+					// 复用已有 pr_review 配置(pr_url / diff_file_path), 重复审计也保留同一输入
+					const prevScope =
+						(prTask?.audit_scope as any)?.pr_review || {};
+					const newTask = await createAgentTask({
+						project_id: selectedProject.id,
+						name: `PR Review - ${selectedProject.name}`,
+						version_label: "pr-review",
+						finding_runtime_stack: "runtime",
+						audit_scope: {
+							pr_review: { ...prevScope },
+						},
+					});
+					taskId = newTask.id;
+					await startAgentTask(taskId);
+				}
+
+				onOpenChange(false);
+				onTaskCreated();
+				toast.success("PR 审查已启动", {
+					description: "正在运行安全 / 架构 / 质量三视角审查，可查看实时活动日志",
+					duration: 5000,
+				});
+				navigate(`/agent-audit/${taskId}`);
+
+				setSelectedProjectId("");
+				setVersionLabel("");
+				setVersionError(false);
+				setSelectedFiles(undefined);
+				setExcludePatterns(DEFAULT_EXCLUDES);
+				setAuditMode("intelligent_audit");
+				setDynamicVerificationEnabled(false);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "未知错误";
+				toast.error(`启动失败: ${message}`);
+			} finally {
+				setCreating(false);
+			}
 			return;
 		}
 
@@ -339,6 +399,7 @@ export default function CreateTaskDialog({
 									</div>
 								) : (
 									<>
+										{!isPrReviewProject(selectedProject) && (
 										<div className="rounded-2xl border border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.88),rgba(255,255,255,0.96))] p-4 shadow-[0_16px_42px_-36px_rgba(16,185,129,0.6)]">
 											<div className="flex items-center justify-between gap-3">
 												<div className="flex items-center gap-2">
@@ -378,6 +439,7 @@ export default function CreateTaskDialog({
 												</p>
 											)}
 										</div>
+										)}
 
 										<AgentModeSelector
 											value={auditMode}

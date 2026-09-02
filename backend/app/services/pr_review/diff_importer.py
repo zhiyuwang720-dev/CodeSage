@@ -37,7 +37,8 @@ def import_github_pr(
     info = parse_github_pr_url(pr_url)
     pr_key = pr_key_for(f"{info.owner}/{info.repo}", info.number)
     dest = repo_dir(pr_key)
-    source = clone_source or pr_url
+    # clone 源应为仓库基址, 而非 PR 页面 URL(页面地址不是 git remote)
+    source = clone_source or f"https://github.com/{info.owner}/{info.repo}"
     if not (dest / ".git").exists():
         clone_repo(source, dest)
     if head_ref:

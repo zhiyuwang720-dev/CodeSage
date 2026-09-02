@@ -21,7 +21,7 @@ export interface Profile {
 }
 
 // 项目来源类型
-export type ProjectSourceType = 'repository' | 'zip' | 'local_directory';
+export type ProjectSourceType = 'repository' | 'zip' | 'local_directory' | 'pr_review';
 
 // 仓库平台类型
 export type RepositoryPlatform = 'github' | 'gitlab' | 'gitea' | 'other';

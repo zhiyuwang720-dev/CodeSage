@@ -240,6 +240,12 @@ async def _prepare_project_workspace(
         workspace_root.mkdir(parents=True, exist_ok=True)
         return str(workspace_root)
 
+    # pr_review: PR/diff 输入, 不在此克隆; 审查运行时自行拉取 PR 或读 diff 文件
+    if project.source_type == "pr_review":
+        workspace_root = Path(settings.MANAGED_PROJECTS_ROOT).resolve() / ".auditai_workspaces" / "projects" / str(project.id)
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        return str(workspace_root)
+
     from app.api.v1.endpoints.agent_tasks import _get_project_root
 
     tokens = await _get_repository_tokens(db, user_id)
@@ -478,12 +484,12 @@ async def create_project(
             default_branch = branch_payload["default_branch"]
         except Exception:
             default_branch = project_in.default_branch or "main"
-    
+
     project = Project(
         name=project_in.name,
         source_type=source_type,
-        repository_url=project_in.repository_url if source_type == "repository" else None,
-        repository_type=project_in.repository_type or "other" if source_type == "repository" else "other",
+        repository_url=project_in.repository_url if source_type in {"repository", "pr_review"} else None,
+        repository_type=project_in.repository_type or "other" if source_type in {"repository", "pr_review"} else "other",
         local_path=normalized_local_path if source_type in {"local_directory", "zip"} else None,
         workspace_mode=project_in.workspace_mode or (
             "in_place" if source_type == "local_directory" else "persistent_source" if source_type == "zip" else None
@@ -1296,6 +1302,51 @@ async def upload_project_zip(
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+
+@router.post("/{id}/diff")
+async def upload_project_diff(
+    id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Upload a .diff/.patch file as the PR review input for a pr_review project."""
+    project = await db.get(Project, id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    if project.source_type != "pr_review":
+        raise HTTPException(status_code=400, detail="Only PR review projects can upload diff files")
+
+    filename = str(file.filename or "").lower()
+    if not (filename.endswith('.diff') or filename.endswith('.patch') or filename.endswith('.txt')):
+        raise HTTPException(status_code=400, detail="Please upload a .diff or .patch file")
+
+    workspace_root = Path(settings.MANAGED_PROJECTS_ROOT).resolve() / ".auditai_workspaces" / "projects" / str(project.id)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    diff_path = workspace_root / "review.diff"
+
+    temp_file_handle = tempfile.NamedTemporaryFile(delete=False, suffix='.diff')
+    temp_file_path = temp_file_handle.name
+    temp_file_handle.close()
+    try:
+        await asyncio.to_thread(_copy_uploaded_file_to_path, file, temp_file_path)
+        file_size = os.path.getsize(temp_file_path)
+        if file_size > 50 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Diff file size cannot exceed 50MB")
+        await asyncio.to_thread(shutil.copyfile, temp_file_path, str(diff_path))
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+    return {
+        'message': 'Diff file uploaded successfully',
+        'original_filename': str(file.filename or 'review.diff'),
+        'file_size': file_size,
+        'diff_file_path': str(diff_path),
+    }
 
 
 @router.delete("/{id}/zip")

@@ -525,6 +525,7 @@ function AgentAuditPageContent() {
             break;
 
           case 'tool_result':
+          case 'tool_call_output':
             dispatch({
               type: 'ADD_LOG',
               payload: {
@@ -539,6 +540,25 @@ function AgentAuditPageContent() {
                   status: 'completed' as const,
                 },
                 agentName,
+              }
+            });
+            processedCount++;
+            break;
+
+          // PR 审查阶段事件(带视角标签)
+          case 'review_meta':
+          case 'review_perspective_start':
+          case 'review_perspective_done':
+          case 'assistant_start':
+          case 'assistant_done':
+          case 'llm_retry':
+            dispatch({
+              type: 'ADD_LOG',
+              payload: {
+                type: 'info',
+                title: event.message || `Event: ${event.event_type}`,
+                content: event.message || '',
+                agentName: (event.metadata?.perspective as string) || agentName,
               }
             });
             processedCount++;
@@ -791,6 +811,7 @@ function AgentAuditPageContent() {
             });
             break;
           case 'tool_result':
+          case 'tool_call_output':
             pushLog({
               type: 'tool',
               title: `Completed: ${event.tool_name || 'unknown'}`,
@@ -803,6 +824,19 @@ function AgentAuditPageContent() {
                 status: 'completed',
               },
               agentName,
+            });
+            break;
+          case 'review_meta':
+          case 'review_perspective_start':
+          case 'review_perspective_done':
+          case 'assistant_start':
+          case 'assistant_done':
+          case 'llm_retry':
+            pushLog({
+              type: 'info',
+              title: message || `Event: ${eventType}`,
+              content: message,
+              agentName: (metadata.perspective as string) || agentName,
             });
             break;
           case 'finding':
@@ -969,6 +1003,7 @@ function AgentAuditPageContent() {
             });
             break;
           case 'tool_result':
+          case 'tool_call_output':
             pushLog({
               type: 'tool',
               title: `Completed: ${event.tool_name || 'unknown'}`,
@@ -981,6 +1016,19 @@ function AgentAuditPageContent() {
                 status: 'completed',
               },
               agentName,
+            });
+            break;
+          case 'review_meta':
+          case 'review_perspective_start':
+          case 'review_perspective_done':
+          case 'assistant_start':
+          case 'assistant_done':
+          case 'llm_retry':
+            pushLog({
+              type: 'info',
+              title: message || `Event: ${eventType}`,
+              content: message,
+              agentName: (metadata.perspective as string) || agentName,
             });
             break;
           case 'finding':

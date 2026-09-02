@@ -13,11 +13,16 @@ export function isLocalDirectoryProject(project: Project): boolean {
   return project.source_type === 'local_directory';
 }
 
+export function isPrReviewProject(project: Project): boolean {
+  return project.source_type === 'pr_review';
+}
+
 export function getSourceTypeLabel(sourceType: ProjectSourceType): string {
   const labels: Record<ProjectSourceType, string> = {
     repository: '远程仓库',
     zip: 'ZIP上传',
     local_directory: '本地目录',
+    pr_review: 'PR审查',
   };
   return labels[sourceType] || '未知';
 }
@@ -27,6 +32,7 @@ export function getSourceTypeBadge(sourceType: ProjectSourceType): string {
     repository: 'REPO',
     zip: 'ZIP',
     local_directory: 'LOCAL',
+    pr_review: 'PR',
   };
   return badges[sourceType] || 'UNKNOWN';
 }
