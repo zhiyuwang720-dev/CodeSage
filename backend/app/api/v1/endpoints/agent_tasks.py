@@ -1157,14 +1157,47 @@ def _disabled_managed_report_stats(findings: Optional[List[AgentFinding]] = None
 
 
 
-def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
+def _count_diff_changed_files(diff_text: str) -> int:
+    """diff 中变更文件数(`+++ b/<path>` 行去重); 用于 progress_percentage 的 total_files。"""
+    if not diff_text:
+        return 0
+    files: set[str] = set()
+    for line in diff_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("+++ b/"):
+            path = stripped[6:].strip()
+            if path and path != "/dev/null":
+                files.add(path)
+    return len(files)
+
+
+def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progress_cb=None):
     """PR review 运行时事件 → AgentEvent 流。
 
     复用 EventManager.add_event: 统一落库 agent_events + 内存队列实时(/stream) + Redis。
     review 事件契约见 review_runtime/query_loop.py 与 pr_review/runtime_dispatcher.tag_event_sink
     (事件 dict 带 perspective 字段; tool_call 的 dict 在 event["tool_call"], 名称取 name)。
+
+    事件映射对齐 AutoCVE 契约(base.py:480-490): thinking_start/thinking_token/thinking_end
+    生命周期 + token 放 metadata; done → task_complete(触发前端 onComplete 与 /stream 终止);
+    message/assistant_* 的 dict 只取 content, 不整 dump。
     """
     sequence = 0
+    # per-perspective 思考生命周期跟踪
+    _thinking_open: set[str] = set()
+    _accumulated: dict[str, list[str]] = {}
+
+    def _extract_text(value) -> str:
+        """事件 message 可能是 dict(query_loop.py:1026-1047 把整条消息 dict 放进来):
+        取 content/文本字段, 不 str(dict) 整 dump(修复 5)。"""
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            for key in ("content", "text", "message"):
+                if isinstance(value.get(key), str) and value[key].strip():
+                    return value[key].strip()
+            return ""
+        return str(value).strip()
 
     def _perspective(event: dict) -> Optional[str]:
         value = event.get("perspective")
@@ -1172,13 +1205,32 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
 
     def _message(event: dict, default: str) -> str:
         raw = event.get("message") or event.get("message_text") or event.get("content")
-        return str(raw or default or "").strip()
+        return _extract_text(raw) or default
+
+    async def _emit_thinking_start(perspective: str, seq: int) -> None:
+        await event_manager.add_event(
+            task_id, "thinking_start", sequence=seq, phase=perspective,
+            message="模型开始推理", metadata=metadata_of(perspective),
+        )
+
+    def metadata_of(perspective: Optional[str]) -> dict:
+        return {"review_type": "pr_review", "perspective": perspective, "agent_name": perspective}
+
+    async def _close_thinking(perspective: str) -> None:
+        """per-perspective 思考收尾: thinking_end(accumulated 进 metadata, 供前端落盘标题)。"""
+        if perspective in _thinking_open:
+            _thinking_open.discard(perspective)
+            accumulated = "".join(_accumulated.pop(perspective, []))
+            await event_manager.add_event(
+                task_id, "thinking_end", sequence=sequence, phase=perspective,
+                message="模型推理完成", metadata={"accumulated": accumulated, **metadata_of(perspective)},
+            )
 
     async def sink(event: dict) -> None:
         nonlocal sequence
         ev_type = str(event.get("type") or "message")
         perspective = _perspective(event)
-        metadata = {"review_type": "pr_review", "perspective": perspective, "agent_name": perspective}
+        metadata = metadata_of(perspective)
         sequence += 1
 
         if ev_type == "meta":
@@ -1200,12 +1252,21 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
                 message=_message(event, f"{perspective} 视角: 模型开始作答"), metadata=metadata,
             )
         elif ev_type in ("token", "reasoning_delta"):
-            content = event.get("content")
+            content = _extract_text(event.get("content"))
             if not content:
                 return
+            # thinking 生命周期对齐 AutoCVE: 首个 token 前 thinking_start, token 放 metadata
+            if perspective not in _thinking_open:
+                _thinking_open.add(perspective)
+                _accumulated.setdefault(perspective, [])
+                await _emit_thinking_start(perspective, sequence)
+            _accumulated[perspective].append(content)
             await event_manager.add_event(
                 task_id, "thinking_token", sequence=sequence, phase=perspective,
-                message=str(content), metadata=metadata,
+                message=content[:200], metadata={
+                    "token": content, "accumulated": "".join(_accumulated[perspective]),
+                    **metadata_of(perspective),
+                },
             )
         elif ev_type == "tool_call":
             tool = event.get("tool_call") or {}
@@ -1218,10 +1279,19 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
                 metadata=metadata,
             )
         elif ev_type == "done":
-            await event_manager.add_event(
-                task_id, "assistant_done", sequence=sequence, phase=perspective,
-                message=_message(event, f"{perspective} 视角: 本轮完成"), metadata=metadata,
-            )
+            await _close_thinking(perspective)
+            if event.get("task_complete"):
+                # 审查结束: 触发前端 onComplete 与 /stream 内存路径终止
+                await event_manager.add_event(
+                    task_id, "task_complete", sequence=sequence, phase=perspective,
+                    message=_message(event, "PR 审查完成"), metadata=metadata,
+                )
+            else:
+                # 每轮工具用尽的中转标记(带视角徽标); 非最终 done
+                await event_manager.add_event(
+                    task_id, "assistant_done", sequence=sequence, phase=perspective,
+                    message=_message(event, f"{perspective} 视角: 本轮完成"), metadata=metadata,
+                )
         elif ev_type == "perspective_done":
             findings = int(event.get("findings") or 0)
             turns = event.get("turn_count")
@@ -1231,6 +1301,11 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
                 task_id, "review_perspective_done", sequence=sequence, phase=perspective,
                 message=f"完成 {perspective} 视角审查 {tail}", metadata=metadata,
             )
+            if progress_cb is not None and perspective:
+                try:
+                    await progress_cb(perspective)
+                except Exception:
+                    logger.debug("pr_review progress callback failed", exc_info=True)
         elif ev_type == "llm_retry":
             attempt = event.get("attempt")
             max_attempts = event.get("max_attempts")
@@ -1245,15 +1320,18 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager):
                 message=_message(event, str(event.get("error") or "审查出错")), metadata=metadata,
             )
         elif ev_type == "assistant_tombstone":
+            await _close_thinking(perspective)
             await event_manager.add_event(
                 task_id, "assistant_tombstone", sequence=sequence, phase=perspective,
                 message=_message(event, "模型输出中断"), metadata=metadata,
             )
         elif ev_type == "message":
-            await event_manager.add_event(
-                task_id, "message", sequence=sequence, phase=perspective,
-                message=_message(event, ""), metadata=metadata,
-            )
+            text = _message(event, "")
+            if text:
+                await event_manager.add_event(
+                    task_id, "message", sequence=sequence, phase=perspective,
+                    message=text, metadata=metadata,
+                )
         # session_start 等低信息量事件跳过
 
     return sink
@@ -1284,7 +1362,44 @@ async def _execute_pr_review_task_impl(
     if not pr_url and not diff_text:
         raise ValueError("pr_review task has neither pr_url nor diff content")
 
-    sink = _build_pr_review_event_sink(task.id, event_manager)
+    # 纯 diff 审查: 尝试从 PR URL 推导仓库并克隆源码, 让三视角能读/搜被改文件。
+    # clone_source 只填 https 仓库基址(非 PR 页面地址), 克隆失败由 importer 降级 diff-only。
+    clone_source = None
+    if diff_text and pr_url:
+        source = pr_url or ""
+        if "github.com/" in source:
+            parts = source.split("github.com/", 1)[1].split("/")
+            if len(parts) >= 2:
+                clone_source = f"https://github.com/{parts[0]}/{parts[1]}"
+    workspace_root = str(
+        Path(settings.MANAGED_PROJECTS_ROOT).resolve()
+        / ".auditai_workspaces" / "projects" / str(project.id)
+    )
+
+    # 进度推进: diff 变更文件数 → total_files(progress_percentage 计算依据)
+    changed_files = _count_diff_changed_files(diff_text or "")
+    if changed_files:
+        task.total_files = changed_files
+    task.current_phase = AgentTaskPhase.ANALYSIS
+    task.status = AgentTaskStatus.RUNNING
+    await db.commit()
+
+    async def _progress_done(perspective: str) -> None:
+        """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
+        task.analyzed_files = (task.analyzed_files or 0) + 1
+        await db.commit()
+        await event_manager.add_event(
+            task.id, "progress", sequence=0, phase=perspective,
+            message=f"{perspective} 视角完成",
+            metadata={
+                "review_type": "pr_review", "perspective": perspective,
+                "agent_name": perspective,
+                "current": task.analyzed_files or 0,
+                "total": task.total_files or 0,
+            },
+        )
+
+    sink = _build_pr_review_event_sink(task.id, event_manager, progress_cb=_progress_done)
     await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
 
     result = await run_review_pipeline_async(
@@ -1302,6 +1417,9 @@ async def _execute_pr_review_task_impl(
             # 三视角运行时审计会话用独立 SQLite 文件: sync 写(运行时)与 async 写
             # (EventManager agent_events)同库并发会在 WAL 下形成写锁循环挂死服务。
             "session_factory": get_pr_review_sync_session_factory(),
+            # 工具 root: 克隆源码(source_dir)优先, 否则回退项目工作区(含 review.diff)。
+            "workspace_root": workspace_root,
+            "clone_source": clone_source,
         },
         event_sink=sink,
     )
@@ -1328,7 +1446,7 @@ async def _execute_pr_review_task_impl(
     task.findings_count = len(findings)
     task.error_message = None
     await db.commit()
-    await sink({"type": "done", "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
+    await sink({"type": "done", "task_complete": True, "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
     logger.info(f"pr_review task {task.id} completed with {saved} findings")
 
 

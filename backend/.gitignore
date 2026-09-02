@@ -11,6 +11,9 @@ spike_phase0.db
 verify_l2.db
 .auditai/
 .auditai-cli-test/
-eval_runtime.db
+eval_runtime.db*
+audit_runtime.db*
 verify_0*.db
 *.db-journal
+*.db-wal
+*.db-shm

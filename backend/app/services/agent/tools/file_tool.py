@@ -505,6 +505,58 @@ class FileSearchTool(AgentTool):
                 success=False,
                 error="Security error: search is limited to the audit project and approved shared roots.",
             )
+        # WinError 267 兜底: search_dir 必须是已存在目录(LLM 可能传文件路径)
+        if not os.path.isdir(search_dir):
+            if directory and self.project_root and os.path.isdir(self.project_root):
+                search_dir = self.project_root
+            else:
+                # 回退纯 Python 兜底(对缺失路径优雅返回"无匹配", 不裸抛 OSError)
+                results, timed_out, truncated = await self._grep_python_fallback(
+                    search_dir,
+                    normalized_keyword,
+                    max_results=max_results,
+                    timeout_seconds=timeout_seconds,
+                    case_sensitive=case_sensitive,
+                    is_regex=is_regex,
+                    file_pattern=file_pattern,
+                )
+                files_searched = len({item["file"] for item in results})
+                if not results:
+                    return ToolResult(
+                        success=True,
+                        data=f"未找到 '{normalized_keyword}' 的匹配结果。\n已搜索 {files_searched} 个文件。",
+                        metadata={
+                            "files_searched": files_searched,
+                            "matches": 0,
+                            "keyword": normalized_keyword,
+                            "timed_out": timed_out,
+                            "timeout_seconds": timeout_seconds,
+                        },
+                    )
+                output_parts = [
+                    f"'{normalized_keyword}' 的搜索结果\n",
+                    f"在 {files_searched} 个文件中找到 {len(results)} 处匹配。\n",
+                ]
+                for result in results:
+                    output_parts.append(f"\nFile {result['file']}:{result['line']}")
+                    output_parts.append(f"```\n{result['context']}\n```")
+                if truncated:
+                    output_parts.append(f"\n... results truncated (max {max_results})")
+                if timed_out:
+                    output_parts.append(f"\n... search stopped after {timeout_seconds}s; complete matches collected so far are shown")
+                return ToolResult(
+                    success=True,
+                    data="\n".join(output_parts),
+                    metadata={
+                        "keyword": normalized_keyword,
+                        "files_searched": files_searched,
+                        "matches": len(results),
+                        "results": results[:10],
+                        "truncated": truncated,
+                        "timed_out": timed_out,
+                        "timeout_seconds": timeout_seconds,
+                    },
+                )
 
         rg = shutil.which("rg")
         max_results = max(1, int(max_results))

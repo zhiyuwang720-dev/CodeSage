@@ -96,7 +96,12 @@ def _import_and_collect(
         )
     elif diff_text is not None:
         provider = provider or provider_for_input(diff_text=diff_text)
-        imported = import_plain_diff(diff_text, repo=options.get("repo"), pr_number=options.get("pr_number"))
+        imported = import_plain_diff(
+            diff_text,
+            repo=options.get("repo"),
+            pr_number=options.get("pr_number"),
+            clone_source=options.get("clone_source"),
+        )
     else:
         raise ValueError("需要 pr_url 或 diff_text 之一")
 
@@ -180,6 +185,7 @@ async def run_review_pipeline_async(
     # 这里把注入通道从 options 抽出为局部变量, 持久化的 options 保持纯净数据。
     dispatcher = options.pop("dispatcher", None)
     session_factory = options.pop("session_factory", None)
+    workspace_root = options.pop("workspace_root", None)
     event_sink = event_sink if event_sink is not None else options.pop("event_sink", None)
     streaming = bool(options.pop("streaming", False))
     engine = str(options.get("engine", "rules"))
@@ -225,7 +231,7 @@ async def run_review_pipeline_async(
 
         from .runtime_dispatcher import RuntimePerspectiveDispatcher
 
-        project_root = ctx.source_dir or "."
+        project_root = ctx.source_dir or workspace_root or "."
         dispatcher = RuntimePerspectiveDispatcher(
             llm_service=LLMService(),
             tools=build_shared_agent_tool_catalog(project_root=project_root),

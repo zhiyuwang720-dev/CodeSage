@@ -259,9 +259,10 @@ function AgentAuditPageContent() {
   const {
     task, findings, agentTree, logs, selectedAgentId, showAllLogs,
     isLoading, connectionStatus, expandedLogIds,
-    treeNodes, filteredLogs, isRunning, isComplete,
+    treeNodes, filteredLogs, isRunning, isComplete, isAutoScroll,
     setTask, setFindings, setAgentTree, addLog, updateLog, removeLog,
     selectAgent, setLoading, setConnectionStatus, toggleLogExpanded,
+    setAutoScroll,
     setCurrentAgentName, getCurrentAgentName, setCurrentThinkingId, getCurrentThinkingId,
     dispatch, reset,
   } = useAgentAuditState();
@@ -279,6 +280,7 @@ function AgentAuditPageContent() {
   const lastAgentTreeRefreshTime = useRef<number>(0);
   const previousTaskIdRef = useRef<string | undefined>(undefined);
   const disconnectStreamRef = useRef<(() => void) | null>(null);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
   const lastEventSequenceRef = useRef<number>(0);
   const hasConnectedRef = useRef<boolean>(false); // 馃敟 杩借釜鏄惁宸茶繛鎺?SSE
   const hasLoadedHistoricalEventsRef = useRef<boolean>(false); // 馃敟 杩借釜鏄惁宸插姞杞藉巻鍙蹭簨浠?
@@ -1111,9 +1113,12 @@ function AgentAuditPageContent() {
     includeToolCalls: true,
     // 馃敟 浣跨敤 state 鍙橀噺锛岀‘淇濆湪鍘嗗彶浜嬩欢鍔犺浇鍚庤兘鑾峰彇鏈€鏂板€?
     afterSequence: afterSequence,
-    onEvent: (event: { type: string; message?: string; metadata?: { agent_name?: string; agent?: string } }) => {
+    onEvent: (event: { type: string; message?: string; metadata?: { agent_name?: string; agent?: string; perspective?: string } }) => {
+      const perspectiveName = event.metadata?.perspective;
       if (event.metadata?.agent_name) {
         setCurrentAgentName(event.metadata.agent_name);
+      } else if (perspectiveName) {
+        setCurrentAgentName(perspectiveName);
       }
 
       const dispatchEvents = ['dispatch', 'dispatch_complete', 'node_start', 'phase_start', 'phase_complete'];
@@ -1128,6 +1133,21 @@ function AgentAuditPageContent() {
           }
         });
         debouncedLoadAgentTree();
+        return;
+      }
+
+      // PR 审查阶段事件(带视角徽标): 渲染为 INFO
+      const reviewEvents = ['review_meta', 'review_perspective_start', 'review_perspective_done', 'assistant_start', 'assistant_done', 'llm_retry'];
+      if (reviewEvents.includes(event.type)) {
+        dispatch({
+          type: 'ADD_LOG',
+          payload: {
+            type: 'info',
+            title: event.message || `Event: ${event.type}`,
+            content: event.message || '',
+            agentName: perspectiveName || getCurrentAgentName() || undefined,
+          }
+        });
         return;
       }
 
@@ -1389,6 +1409,28 @@ function AgentAuditPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, task?.status, historicalEventsLoaded, connectStream, disconnectStream, dispatch]);
 
+  // 馃敟 自动滚动: 新日志到达且 isAutoScroll 为真时滚到底
+  useEffect(() => {
+    if (!isAutoScroll) return;
+    const el = logScrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [filteredLogs.length, isAutoScroll, activeDetailView]);
+
+  // 馃敟 完成态补全: 曾连过流的任务在结束时重置标志并重载历史快照,
+  // 补回流终止后未展示的持久化事件(thinking_token 等高频事件不落库, 仅存于流)。
+  useEffect(() => {
+    if (!taskId || !isComplete) return;
+    if (!hasConnectedRef.current) return; // 进页即已完成: 快照已覆盖, 无需重载
+    if (!hasLoadedHistoricalEventsRef.current) return;
+    hasConnectedRef.current = false;
+    loadHistoricalEventsSnapshot(task?.runtime_session_id ?? null).then(() => {
+      setHistoricalEventsLoaded(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, isComplete]);
+
   useEffect(() => {
     if (!taskId || task?.status !== 'running' || !task?.runtime_session_id) return;
     void mergeRuntimeSessionLogs(task.runtime_session_id);
@@ -1569,7 +1611,19 @@ function AgentAuditPageContent() {
           {/* Detail content */}
           <div className="flex-1 overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.56),rgba(245,238,229,0.72))]">
             {activeDetailView === 'activity' ? (
-              <div className="h-full overflow-y-auto p-5 custom-scrollbar">
+              <div
+                ref={logScrollRef}
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+                  if (isAutoScroll && !nearBottom) {
+                    setAutoScroll(false);
+                  } else if (!isAutoScroll && nearBottom) {
+                    setAutoScroll(true);
+                  }
+                }}
+                className="h-full overflow-y-auto p-5 custom-scrollbar"
+              >
                 {/* Filter indicator */}
                 {selectedAgentId && !showAllLogs && (
                   <div className="mb-4 px-4 py-2.5 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
