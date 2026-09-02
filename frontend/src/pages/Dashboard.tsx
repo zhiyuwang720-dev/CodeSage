@@ -26,7 +26,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getAgentTasks, type AgentTask } from "@/shared/api/agentTasks";
-import { listVulnerabilities, type ManagedVulnerability } from "@/shared/api/vulnerabilities";
 import { api, isDemoMode } from "@/shared/config/database";
 import type { AuditTask, Project, ProjectStats, UnifiedTask } from "@/shared/types";
 
@@ -46,7 +45,7 @@ const dashboardText: Record<string, string> = {
   "dashboard.loadFailed": "数据加载失败",
   "dashboard.loading": "加载数据中...",
   "dashboard.title": "工作台",
-  "dashboard.subtitle": "统一查看项目、审计任务与漏洞发现。",
+  "dashboard.subtitle": "统一查看项目、审计任务与 PR评论。",
   "dashboard.coreEntry": "核心审计入口",
   "dashboard.auditTrend": "审计运行态势",
   "dashboard.totalProjects": "总项目数",
@@ -70,14 +69,13 @@ const dashboardText: Record<string, string> = {
   "dashboard.unknownProject": "未知项目",
   "dashboard.qualityScore": "质量分: {{score}}",
   "dashboard.noTasks": "暂无任务",
-  "dashboard.riskOverview": "漏洞风险概览",
-  "dashboard.highRiskFocus": "高风险待关注",
+  "dashboard.riskOverview": "PR 问题概览",
+  "dashboard.highRiskFocus": "高风险问题",
   "dashboard.riskTotal": "共 {{count}} 项",
   "dashboard.quickActions": "快速操作",
   "dashboard.createProject": "创建新项目",
   "dashboard.installSkill": "安装Skill",
   "dashboard.viewAuditTasks": "查看审计任务",
-  "dashboard.viewVulnerabilities": "查看已发现漏洞",
   "dashboard.latestActivity": "最新活动",
   "dashboard.agentCompleted": "Agent任务完成",
   "dashboard.agentRunning": "Agent任务运行中",
@@ -115,7 +113,6 @@ export default function Dashboard() {
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
   const [recentTasks, setRecentTasks] = useState<UnifiedTask[]>([]);
-  const [vulnerabilities, setVulnerabilities] = useState<ManagedVulnerability[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -133,7 +130,6 @@ export default function Dashboard() {
         api.getProjects(),
         api.getAuditTasks(),
         getAgentTasks({ limit: 10 }),
-        listVulnerabilities({ skip: 0, limit: 500 }),
       ]);
 
       if (results[0].status === "fulfilled") {
@@ -147,6 +143,11 @@ export default function Dashboard() {
           total_issues: 0,
           resolved_issues: 0,
           avg_quality_score: 0,
+          pr_issues_total: 0,
+          pr_issues_critical: 0,
+          pr_issues_high: 0,
+          pr_issues_medium: 0,
+          pr_issues_low: 0,
         });
       }
 
@@ -167,10 +168,6 @@ export default function Dashboard() {
       ];
       unified.sort((a, b) => new Date(b.task.created_at).getTime() - new Date(a.task.created_at).getTime());
       setRecentTasks(unified.slice(0, 10));
-
-      setVulnerabilities(
-        results[4].status === "fulfilled" && Array.isArray(results[4].value) ? results[4].value : []
-      );
     } catch (error) {
       console.error("Dashboard data load failed:", error);
       toast.error(t("dashboard.loadFailed"));
@@ -207,9 +204,17 @@ export default function Dashboard() {
   const completedTaskCount = stats?.completed_tasks || 0;
   const failedTaskCount = recentTasks.filter((item) => item.task.status === "failed").length;
   const queuedTaskCount = Math.max((stats?.total_tasks || 0) - completedTaskCount - runningTaskCount - failedTaskCount, 0);
-  const riskCounts = buildRiskCounts(vulnerabilities);
+  // PR 问题严重度分布来自后端 /projects/stats(仅统计 pr_review 任务发现)
+  const riskCounts = stats
+    ? {
+        critical: stats.pr_issues_critical,
+        high: stats.pr_issues_high,
+        medium: stats.pr_issues_medium,
+        low: stats.pr_issues_low,
+      }
+    : { critical: 0, high: 0, medium: 0, low: 0 };
   const highRiskTotal = riskCounts.critical + riskCounts.high;
-  const totalRisk = vulnerabilities.length || stats?.total_issues || 0;
+  const totalRisk = stats?.pr_issues_total || 0;
   const unclassifiedRisk = Math.max(
     totalRisk - riskCounts.critical - riskCounts.high - riskCounts.medium - riskCounts.low,
     0
@@ -451,7 +456,7 @@ export default function Dashboard() {
 
           <aside className="space-y-5">
             <div className="rounded-[28px] border border-[#dbe7df] bg-white p-5 shadow-[0_18px_48px_rgba(84,110,93,0.08)]">
-              <SectionHeader icon={<ShieldAlert className="h-5 w-5 text-rose-600" />} title={t("dashboard.riskOverview")} to="/vulnerabilities" t={t} />
+              <SectionHeader icon={<ShieldAlert className="h-5 w-5 text-rose-600" />} title={t("dashboard.riskOverview")} t={t} />
               <div className="rounded-[24px] border border-[#ead5d5] bg-[linear-gradient(180deg,#fffafa,#fff)] p-4">
                 <div className="flex items-end justify-between">
                   <div>
@@ -467,7 +472,9 @@ export default function Dashboard() {
                   <RiskBar label="High" value={riskCounts.high} total={totalRisk} barClassName="bg-orange-500" />
                   <RiskBar label="Medium" value={riskCounts.medium} total={totalRisk} barClassName="bg-amber-400" />
                   <RiskBar label="Low" value={riskCounts.low} total={totalRisk} barClassName="bg-emerald-500" />
-                  <RiskBar label="Unclassified" value={unclassifiedRisk} total={totalRisk} barClassName="bg-slate-400" />
+                  {unclassifiedRisk > 0 && (
+                    <RiskBar label="Unclassified" value={unclassifiedRisk} total={totalRisk} barClassName="bg-slate-400" />
+                  )}
                 </div>
               </div>
             </div>
@@ -481,7 +488,6 @@ export default function Dashboard() {
                 <QuickAction to="/projects" icon={<GitBranch className="mr-2 h-4 w-4" />} label={t("dashboard.createProject")} />
                 <QuickAction to="/skills" icon={<Wrench className="mr-2 h-4 w-4" />} label={t("dashboard.installSkill")} />
                 <QuickAction to="/audit-tasks" icon={<Shield className="mr-2 h-4 w-4" />} label={t("dashboard.viewAuditTasks")} />
-                <QuickAction to="/vulnerabilities" icon={<ShieldAlert className="mr-2 h-4 w-4" />} label={t("dashboard.viewVulnerabilities")} />
               </div>
             </div>
 
@@ -551,18 +557,20 @@ function SectionHeader({
 }: {
   icon: ReactNode;
   title: string;
-  to: string;
+  to?: string;
   t: Translate;
 }) {
   return (
     <div className="section-header">
       {icon}
       <h3 className="section-title">{title}</h3>
-      <Link to={to} className="ml-auto">
-        <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground hover:text-foreground">
-          {t("dashboard.viewAll")} <ArrowUpRight className="ml-1 h-3 w-3" />
-        </Button>
-      </Link>
+      {to && (
+        <Link to={to} className="ml-auto">
+          <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground hover:text-foreground">
+            {t("dashboard.viewAll")} <ArrowUpRight className="ml-1 h-3 w-3" />
+          </Button>
+        </Link>
+      )}
     </div>
   );
 }
@@ -617,21 +625,6 @@ function RiskBar({
         <div className={`h-full rounded-full ${barClassName}`} style={{ width: `${percent}%` }} />
       </div>
     </div>
-  );
-}
-
-function buildRiskCounts(vulnerabilities: ManagedVulnerability[]) {
-  return vulnerabilities.reduce(
-    (acc, item) => {
-      const severity = item.severity.toLowerCase();
-      if (severity.includes("critical")) acc.critical += 1;
-      else if (severity.includes("high")) acc.high += 1;
-      else if (severity.includes("medium")) acc.medium += 1;
-      else if (severity.includes("low")) acc.low += 1;
-      else acc.other += 1;
-      return acc;
-    },
-    { critical: 0, high: 0, medium: 0, low: 0, other: 0 }
   );
 }
 

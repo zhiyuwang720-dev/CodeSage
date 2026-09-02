@@ -74,7 +74,7 @@ export default function Sidebar({ collapsed, setCollapsed }: SidebarProps) {
 
           <div className={`relative flex h-20 flex-shrink-0 items-center ${collapsed ? 'justify-center px-3' : 'justify-between px-5'} border-b border-slate-200/70`}>
             <Link
-              to="/"
+              to="/dashboard"
               className={`group flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}
               onClick={() => setMobileOpen(false)}
             >

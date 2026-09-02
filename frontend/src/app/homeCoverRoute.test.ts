@@ -5,21 +5,31 @@ import test from "node:test";
 
 const sourceRoot = resolve(import.meta.dirname, "..");
 
-test("home route renders the cover page instead of the agent audit entry", () => {
+test("/ redirects to the dashboard and no longer mounts the home cover page", () => {
   const routesSource = readFileSync(resolve(sourceRoot, "app/routes.tsx"), "utf8");
 
-  assert.match(routesSource, /import HomeCover from ['"]@\/pages\/HomeCover['"]/);
-  assert.match(routesSource, /path: '\/', element: <HomeCover \/>/);
-  assert.doesNotMatch(routesSource, /path: '\/', element: <AgentAudit \/>/);
+  assert.match(routesSource, /import \{ Navigate \} from ['"]react-router-dom['"]/);
+  assert.match(routesSource, /path: '\/', element: <Navigate to="\/dashboard" replace \/>/);
+  assert.doesNotMatch(routesSource, /import HomeCover /);
+  assert.doesNotMatch(routesSource, /element: <HomeCover \/>/);
 });
 
-test("home cover CTA 进入 PR 审查, 不再指向已删除的一键 CVE", () => {
-  const homeSource = readFileSync(resolve(sourceRoot, "pages/HomeCover.tsx"), "utf8");
+test("home entry is hidden from the sidebar so users land on the dashboard", () => {
+  const routesSource = readFileSync(resolve(sourceRoot, "app/routes.tsx"), "utf8");
 
-  assert.match(homeSource, /\/Homepage\.png/);
-  assert.match(homeSource, /to="\/projects"/);
-  assert.match(homeSource, /aria-label="进入 PR 审查"/);
-  assert.doesNotMatch(homeSource, /one-click-cve/);
+  // '/' 只作为内部重定向, 不进侧栏(visible: false)
+  assert.match(routesSource, /path: '\/', element: <Navigate to="\/dashboard" replace \/>, visible: false/);
+  assert.doesNotMatch(routesSource, /path: '\/', element: <HomeCover \/>/);
+});
+
+test("home cover page source was removed with its route", () => {
+  assert.equal(existsSync(resolve(sourceRoot, "pages/HomeCover.tsx")), false);
+});
+
+test("sidebar brand points at the dashboard instead of the removed home cover", () => {
+  const sidebarSource = readFileSync(resolve(sourceRoot, "components/layout/Sidebar.tsx"), "utf8");
+
+  assert.match(sidebarSource, /to="\/dashboard"/);
 });
 
 test("routes no longer expose the one-click cve page", () => {

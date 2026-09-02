@@ -307,6 +307,11 @@ export const api = {
     total_issues: number;
     resolved_issues: number;
     avg_quality_score: number;
+    pr_issues_total: number;
+    pr_issues_critical: number;
+    pr_issues_high: number;
+    pr_issues_medium: number;
+    pr_issues_low: number;
   }> {
     try {
       const res = await apiClient.get('/projects/stats');
@@ -319,7 +324,12 @@ export const api = {
         completed_tasks: 0,
         total_issues: 0,
         resolved_issues: 0,
-        avg_quality_score: 0
+        avg_quality_score: 0,
+        pr_issues_total: 0,
+        pr_issues_critical: 0,
+        pr_issues_high: 0,
+        pr_issues_medium: 0,
+        pr_issues_low: 0
       };
     }
   },

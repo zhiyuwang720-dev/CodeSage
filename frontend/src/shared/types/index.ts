@@ -208,6 +208,12 @@ export interface ProjectStats {
   total_issues: number;
   resolved_issues: number;
   avg_quality_score: number;
+  // PR 审查发现(PR 问题)严重度分布: 仅统计 task_type=pr_review 任务的 AgentFinding
+  pr_issues_total: number;
+  pr_issues_critical: number;
+  pr_issues_high: number;
+  pr_issues_medium: number;
+  pr_issues_low: number;
 }
 
 export interface IssueStats {

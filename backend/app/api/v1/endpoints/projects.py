@@ -116,6 +116,13 @@ class StatsResponse(BaseModel):
     total_issues: int
     resolved_issues: int
     avg_quality_score: float = 0.0
+    # PR 审查发现(PR 问题)的严重度分布, 供仪表盘"PR 问题概览"卡使用。
+    # 只统计 task_type=pr_review 任务的 AgentFinding; total 之外的未分级剩余由前端按 total-四档推算。
+    pr_issues_total: int = 0
+    pr_issues_critical: int = 0
+    pr_issues_high: int = 0
+    pr_issues_medium: int = 0
+    pr_issues_low: int = 0
 
 
 class ManagedLocalDirectoryResponse(BaseModel):
@@ -589,6 +596,25 @@ async def get_stats(
     total_issues = len(agent_findings)
     resolved_issues = len([f for f in agent_findings if f.status in ("fixed", "wont_fix", "false_positive")])
 
+    # PR 问题严重度分布: 仅统计 PR 审查任务的发现。AgentFinding.severity 为 String(20),
+    # 归一化后按 critical/high/medium/low 归桶(含枚举全名/大小写兼容), info/None/其他不计入四档。
+    pr_task_ids = {t.id for t in agent_tasks if str(t.task_type or "").lower() == "pr_review"}
+    pr_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    pr_issues_total = 0
+    for f in agent_findings:
+        if f.task_id not in pr_task_ids:
+            continue
+        pr_issues_total += 1
+        severity = str(f.severity or "").lower()
+        if "critical" in severity:
+            pr_severity["critical"] += 1
+        elif "high" in severity:
+            pr_severity["high"] += 1
+        elif "medium" in severity:
+            pr_severity["medium"] += 1
+        elif "low" in severity:
+            pr_severity["low"] += 1
+
     # 计算平均质量分（只统计已完成且有质量分的任务）
     quality_scores = [
         t.quality_score for t in agent_tasks
@@ -604,6 +630,11 @@ async def get_stats(
         "total_issues": total_issues,
         "resolved_issues": resolved_issues,
         "avg_quality_score": avg_quality_score,
+        "pr_issues_total": pr_issues_total,
+        "pr_issues_critical": pr_severity["critical"],
+        "pr_issues_high": pr_severity["high"],
+        "pr_issues_medium": pr_severity["medium"],
+        "pr_issues_low": pr_severity["low"],
     }
 
 

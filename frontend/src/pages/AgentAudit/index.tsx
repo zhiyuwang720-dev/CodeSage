@@ -1113,12 +1113,46 @@ function AgentAuditPageContent() {
     includeToolCalls: true,
     // 馃敟 浣跨敤 state 鍙橀噺锛岀‘淇濆湪鍘嗗彶浜嬩欢鍔犺浇鍚庤兘鑾峰彇鏈€鏂板€?
     afterSequence: afterSequence,
-    onEvent: (event: { type: string; message?: string; metadata?: { agent_name?: string; agent?: string; perspective?: string } }) => {
+    onEvent: (event: { type: string; message?: string; metadata?: { agent_name?: string; agent?: string; perspective?: string; thought?: string } }) => {
       const perspectiveName = event.metadata?.perspective;
       if (event.metadata?.agent_name) {
         setCurrentAgentName(event.metadata.agent_name);
       } else if (perspectiveName) {
         setCurrentAgentName(perspectiveName);
+      }
+
+      // LLM 生命周期事件(live 与历史快照渲染保持一致, 见 loadHistoricalEventsSnapshot):
+      // llm_thought 等 → THINK, llm_decision/complete/usage → INFO。此前这些事件在此被静默丢弃,
+      // 导致停留在活动日志页时记录不流动(退出重进重拉快照才显示)。
+      const llmThinkingEvents = ['thinking', 'llm_thought', 'llm_start', 'react_thought'];
+      if (llmThinkingEvents.includes(event.type)) {
+        const msg = event.message || '';
+        const thought = event.metadata?.thought || '';
+        dispatch({
+          type: 'ADD_LOG',
+          payload: {
+            type: 'thinking',
+            title: (msg.slice(0, 100) + (msg.length > 100 ? '...' : '')) || 'Thinking...',
+            content: cleanThinkingContent(msg || thought),
+            agentName: perspectiveName || getCurrentAgentName() || undefined,
+          }
+        });
+        return;
+      }
+
+      const llmInfoEvents = ['llm_decision', 'llm_complete', 'llm_usage'];
+      if (llmInfoEvents.includes(event.type)) {
+        if (!event.message) return; // 与快照 default 分支一致: 无 message 的事件不落日志
+        dispatch({
+          type: 'ADD_LOG',
+          payload: {
+            type: 'info',
+            title: event.message.slice(0, 100) + (event.message.length > 100 ? '...' : ''),
+            content: event.message,
+            agentName: perspectiveName || getCurrentAgentName() || undefined,
+          }
+        });
+        return;
       }
 
       const dispatchEvents = ['dispatch', 'dispatch_complete', 'node_start', 'phase_start', 'phase_complete'];
@@ -1198,6 +1232,27 @@ function AgentAuditPageContent() {
           });
         }
         return;
+      }
+
+      // message 等携带叙事的未知事件 → INFO(与历史快照 default 分支渲染一致)。
+      // 已由 agentStream 分流的 tool/thinking/任务终止事件在此显式忽略,避免重复日志。
+      const handledByDedicatedCallbacks = [
+        'tool_call', 'tool_result', 'tool_call_output',
+        'thinking_start', 'thinking_end', 'thinking_token',
+        'llm_action', 'llm_observation', 'react_action', 'react_observation',
+        'model_response_raw',
+        'task_complete', 'task_end', 'task_error',
+      ];
+      if (!handledByDedicatedCallbacks.includes(event.type) && event.message) {
+        dispatch({
+          type: 'ADD_LOG',
+          payload: {
+            type: 'info',
+            title: event.message.slice(0, 100) + (event.message.length > 100 ? '...' : ''),
+            content: event.message,
+            agentName: perspectiveName || getCurrentAgentName() || undefined,
+          }
+        });
       }
     },
     onThinkingStart: () => {
@@ -1401,6 +1456,10 @@ function AgentAuditPageContent() {
 
     return () => {
       console.log('[AgentAudit] Cleanup: disconnecting stream');
+      // StrictMode(dev) 会在挂载时执行 setup → cleanup → setup: 若 cleanup 不重置
+      // hasConnectedRef,第二次 setup 会被上方门控直接跳过 → 首次连接被中断后永不重连,
+      // 表现为停留页面时活动日志不流动(退出重进重拉快照才更新)。重置以允许重连。
+      hasConnectedRef.current = false;
       disconnectStream();
     };
     // 馃敟 CRITICAL FIX: 绉婚櫎 afterSequence 渚濊禆锛?
