@@ -237,7 +237,10 @@ async def run_review_pipeline_async(
         )
     orchestrator = ReviewOrchestrator(
         dispatcher,
-        min_severity=str(options.get("min_severity", "high")),
+        # runtime 引擎默认 low(全量输出): agents 在缺源码的 plain-diff 工作区里产出的
+        # 多是 medium/low 置信度 findings, 默认 high 会把它们全滤掉 → 空评论像"没干活"。
+        # 显式 --min-severity 仍可覆盖(低噪原则下压回到 high/critical)。
+        min_severity=str(options.get("min_severity", "low")),
         max_comments=int(options.get("max_comments", 10)),
     )
     # streaming=True: 用户拍板真流式 —— 临时关掉网关兼容开关(阻塞合成流→逐 token SSE)。

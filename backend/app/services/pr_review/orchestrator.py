@@ -38,13 +38,15 @@ PERSPECTIVE_PROMPTS: dict[str, str] = {
 }
 
 # 工具权限矩阵(§3.1): 键为 build_runtime_tool_registry 产出的工具名
+# PowerShell: Windows 上 is_powershell_runtime_tool_enabled() 默认开启, 注册表已注册;
+#           本机 bash 检测可能命中 WSL 启动器(System32\bash.exe), PowerShell 是可靠兜底 shell。
 TOOL_MATRICES: dict[str, set[str]] = {
-    # Security: Read/Glob/Grep + Bash(受限, 扫描反馈)
-    "security": {"Read", "Glob", "Grep", "Bash", "Skill"},
-    # Architecture: Read/Glob/Grep + Bash(重读跨文件引用、验证构建/依赖)
-    "architecture": {"Read", "Glob", "Grep", "Bash", "Skill"},
-    # Quality: Read/Glob/Grep + Bash(跑单测, 可选)
-    "quality": {"Read", "Glob", "Grep", "Bash", "Skill"},
+    # Security: Read/Glob/Grep + Bash/PowerShell(受限, 扫描反馈)
+    "security": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
+    # Architecture: Read/Glob/Grep + Bash/PowerShell(重读跨文件引用、验证构建/依赖)
+    "architecture": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
+    # Quality: Read/Glob/Grep + Bash/PowerShell(跑单测, 可选)
+    "quality": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
 }
 # 追问轮次上限(§3.2.2: 每视角 ≤2)
 MAX_FOLLOWUPS_PER_PERSPECTIVE = 2
@@ -107,15 +109,31 @@ class ReviewOrchestrator:
         # 规则层先兜底(确定性, 模型不可用时可独立出审)
         rule_findings: list[ReviewFinding] = run_rules(ctx.diff_text) if self._enable_rules else []
 
-        # 三视角并行分发(黑盒, asyncio.gather)
-        handoffs = await asyncio.gather(
-            *(self._dispatch(perspective, ctx, None) for perspective in self._perspectives)
+        # 三视角并行分发(黑盒, asyncio.gather)。return_exceptions=True: 单视角硬异常
+        # 记为该视角失败(0 findings + 备注), 不冒泡炸掉整个 run —— 其余视角成果照常进综合层。
+        results = await asyncio.gather(
+            *(self._dispatch(perspective, ctx, None) for perspective in self._perspectives),
+            return_exceptions=True,
         )
-        handoff_map: dict[str, dict] = {handoff["from_agent"]: handoff for handoff in handoffs}
+        handoff_map: dict[str, dict] = {}
+        for perspective, result in zip(self._perspectives, results):
+            if isinstance(result, BaseException):
+                error_note = f"{type(result).__name__}: {result}"
+                handoff_map[perspective] = {
+                    "from_agent": perspective,
+                    "to_agent": "orchestrator",
+                    "summary": f"(视角失败: {error_note})",
+                    "key_findings": [],
+                    "priority_areas": [],
+                    "context_data": {"failed": True, "error": error_note},
+                    "confidence": 0.0,
+                }
+            else:
+                handoff_map[perspective] = result
 
         findings = [f.model_dump() for f in rule_findings]
         findings += [
-            dict(item) for handoff in handoffs for item in (handoff.get("key_findings") or [])
+            dict(item) for handoff in handoff_map.values() for item in (handoff.get("key_findings") or [])
         ]
         synthesis = synthesize(
             findings,
@@ -151,6 +169,12 @@ class ReviewOrchestrator:
                     )
                     pending = self._high_severity_dropped(retry, synthesis)
 
+        empty_reason = None
+        if not synthesis.comments and synthesis.severity_dropped > 0:
+            # 空评论不是因为没找到问题, 而是候选全部被 min_severity 过滤 —— 必须自解释,
+            # 否则 CLI 静默输出 0 条, 看起来像 agents 没干活。
+            empty_reason = "all_filtered_by_severity"
+
         return OrchestratedReview(
             comments=synthesis.comments,
             benchmark_comments=[finding_to_comment(f) for f in synthesis.comments],
@@ -158,6 +182,7 @@ class ReviewOrchestrator:
             synthesis=synthesis,
             followup_rounds=followup_rounds,
             rule_hits=len(rule_findings),
+            empty_reason=empty_reason,
         )
 
     async def _dispatch(self, perspective: str, ctx: Any, followup_findings: list[dict] | None) -> dict:
@@ -207,7 +232,12 @@ class ReviewOrchestrator:
             parts.append(f"去重剔除 {synthesis.deduped_away} 条")
         if synthesis.rejected_off_diff:
             parts.append(f"非新增行拒绝 {synthesis.rejected_off_diff} 条")
+        if synthesis.severity_dropped:
+            parts.append(f"严重度过滤 {synthesis.severity_dropped} 条")
         if followup_rounds:
             parts.append("追问: " + ", ".join(f"{p}×{n}" for p, n in followup_rounds.items()))
+        failed = [p for p, h in handoff_map.items() if (h.get("context_data") or {}).get("failed")]
+        if failed:
+            parts.append("视角失败: " + ", ".join(failed))
         parts.append("视角: " + ", ".join(sorted(handoff_map)))
         return "; ".join(parts)

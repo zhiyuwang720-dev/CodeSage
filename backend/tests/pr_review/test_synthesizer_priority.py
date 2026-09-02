@@ -53,6 +53,31 @@ def test_synthesize_end_to_end_with_off_diff_rejection():
     assert len(result.comments) == 1
 
 
+def test_severity_dropped_counts_filtered():
+    """min_severity=high 时 medium/low 计入 severity_dropped(空结果自解释的依据)。"""
+    findings = [
+        _finding("security", "critical", line=3),
+        _finding("architecture", "high", line=5),
+        _finding("quality", "medium", line=7),
+        _finding("rules", "low", line=9),
+    ]
+    result = synthesize(findings, min_severity="high")
+    assert result.severity_dropped == 2, "medium/low 各 1 条被严重度过滤"
+    assert {f.severity for f in result.comments} == {"critical", "high"}
+
+
+def test_severity_dropped_zero_when_low():
+    """min_severity=low(全量输出)时无严重度过滤。"""
+    findings = [
+        _finding("security", "critical", line=3),
+        _finding("quality", "medium", line=7),
+        _finding("rules", "low", line=9),
+    ]
+    result = synthesize(findings, min_severity="low")
+    assert result.severity_dropped == 0
+    assert len(result.comments) == 3
+
+
 def test_finding_to_comment_benchmark_shape():
     comment = finding_to_comment(_model(_finding("security", "high")))
     assert set(comment) >= {"path", "line", "body", "severity", "category"}

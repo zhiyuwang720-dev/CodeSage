@@ -203,10 +203,22 @@ class PowerShellToolInput(BaseModel):
 
 
 def detect_bash_executable() -> str | None:
+    """在 PATH 里找一个可用的 bash 解释器。
+
+    Windows 上必须跳过 `C:\\Windows\\System32\\bash.exe`(WSL 启动器): 命中它时子进程
+    输出的是 UTF-16 的 "wsl: ..." 错误(乱码), 而非可用 shell。找不到非 WSL 的 bash
+    时返回 None, 让 PowerShell 工具顶上(is_powershell_runtime_tool_enabled 在 nt 为 True)。
+    """
     for candidate in ("bash", "bash.exe", "sh", "sh.exe"):
         resolved = shutil.which(candidate)
-        if resolved:
-            return resolved
+        if not resolved:
+            continue
+        resolved = os.path.realpath(resolved)
+        if os.name == "nt":
+            lower = resolved.lower()
+            if lower.endswith(("bash.exe", "sh.exe")) and "\\system32\\" in lower:
+                continue  # WSL 启动器, 不是真 bash
+        return resolved
     return None
 
 

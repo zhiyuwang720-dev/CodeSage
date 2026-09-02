@@ -93,3 +93,41 @@ def test_cross_perspective_distinct_comments_kept():
     ctx = type("C", (), {"diff_text": DIFF, "repo": "r", "pr_number": 1})()
     review = asyncio.run(ReviewOrchestrator(dispatcher, enable_rules=False).run(ctx))
     assert len(review.comments) == 3
+
+
+def test_single_perspective_exception_keeps_others():
+    """单视角抛异常不再炸掉整场(gather return_exceptions): 失败视角 0 findings 被标注,
+    其余视角成果正常进综合层。"""
+    details = {"architecture": (2, "bug"), "quality": (4, "api")}
+
+    async def dispatcher(perspective, ctx, followup_findings=None):
+        if perspective == "security":
+            raise RuntimeError("LLM 流中断(paratera SSE 被掐)")
+        line, category = details[perspective]
+        return {"from_agent": perspective, "to_agent": "orchestrator", "summary": f"{perspective} ok",
+                "key_findings": [_finding(perspective, severity="high", line=line, category=category)],
+                "priority_areas": [], "context_data": {}, "confidence": 0.8}
+
+    ctx = type("C", (), {"diff_text": DIFF, "repo": "r", "pr_number": 1})()
+    review = asyncio.run(ReviewOrchestrator(dispatcher, enable_rules=False).run(ctx))
+    assert len(review.comments) == 2, "architecture/quality 成果保留"
+    assert "视角失败: security" in review.summary, "失败视角在摘要中自解释"
+
+
+def test_empty_reason_when_all_filtered_by_severity():
+    """全部候选 medium 且 min_severity=high → comments 空, 但 empty_reason 自解释
+    而非看起来像 agents 没干活。"""
+    lines = {"security": 2, "architecture": 3, "quality": 4}
+    cats = {"security": "security", "architecture": "bug", "quality": "api"}
+
+    async def dispatcher(perspective, ctx, followup_findings=None):
+        return {"from_agent": perspective, "to_agent": "orchestrator", "summary": f"{perspective} ok",
+                "key_findings": [_finding(perspective, severity="medium", line=lines[perspective], category=cats[perspective])],
+                "priority_areas": [], "context_data": {}, "confidence": 0.8}
+
+    ctx = type("C", (), {"diff_text": DIFF, "repo": "r", "pr_number": 1})()
+    review = asyncio.run(ReviewOrchestrator(dispatcher, enable_rules=False, min_severity="high").run(ctx))
+    assert review.comments == []
+    assert review.empty_reason == "all_filtered_by_severity"
+    assert review.synthesis.severity_dropped == 3
+    assert "严重度过滤 3 条" in review.summary

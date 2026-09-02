@@ -45,7 +45,7 @@ def test_finding_registry_unaffected(tmp_path):
 
 
 def test_allowlist_filters_tools(tmp_path):
-    """tool_allowlist 裁剪: 架构视角按矩阵保留 Read/Glob/Grep/Bash/Skill, 但无 PowerShell/Write。"""
+    """tool_allowlist 裁剪: 架构视角按矩阵保留 Read/Glob/Grep/Bash/PowerShell/Skill, 但无 Write。"""
     factory = make_session_factory(tmp_path)
     session_store = factory()
     from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
@@ -60,7 +60,8 @@ def test_allowlist_filters_tools(tmp_path):
     names = {t.name for t in registry.enabled_tools()}
     assert "FinalizeReview" in names, "终点工具始终保留"
     assert "Bash" in names, "架构视角含 Bash(重读跨文件引用、验证构建/依赖)"
-    assert "PowerShell" not in names and "Write" not in names, "架构视角无 PowerShell/Write"
+    assert "PowerShell" in names, "Windows 上 PowerShell 是 Bash(WSL 启动器)的可靠兜底 shell, 已放行"
+    assert "Write" not in names, "架构视角无 Write"
     assert "Read" in names or "Glob" in names, "只读工具保留"
 
 

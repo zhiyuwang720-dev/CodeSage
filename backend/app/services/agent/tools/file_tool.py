@@ -8,7 +8,9 @@ import asyncio
 import fnmatch
 import json
 import os
+import re
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -505,67 +507,77 @@ class FileSearchTool(AgentTool):
             )
 
         rg = shutil.which("rg")
-        if not rg:
-            return ToolResult(success=False, error="Grep unavailable: ripgrep (rg) is not installed in the runtime.")
         max_results = max(1, int(max_results))
         timeout_seconds = min(120, max(1, int(timeout_seconds)))
         results: List[Dict[str, Any]] = []
-        args = [rg, "--json", "--no-messages", "--line-number", "--with-filename"]
-        if not case_sensitive:
-            args.append("--ignore-case")
-        if not is_regex:
-            args.append("--fixed-strings")
-        if file_pattern:
-            args.extend(["--glob", file_pattern])
-        args.extend(_rg_exclude_args(self.exclude_dirs, self.exclude_patterns))
-        args.extend(["--", normalized_keyword, "."])
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=search_dir,
-        )
         timed_out = False
         truncated = False
-        try:
-            assert process.stdout is not None
-            async with asyncio.timeout(timeout_seconds):
-                while raw_line := await process.stdout.readline():
-                    try:
-                        event = json.loads(raw_line)
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        continue
-                    if event.get("type") != "match":
-                        continue
-                    data = event.get("data") or {}
-                    raw_path = str((data.get("path") or {}).get("text") or "")
-                    if raw_path and not os.path.isabs(raw_path):
-                        raw_path = os.path.join(search_dir, raw_path)
-                    display_path = _best_display_path(raw_path, self.project_root, self.allowed_roots, raw_path)
-                    if self.target_files and display_path not in self.target_files and not display_path.startswith("skill_library/"):
-                        continue
-                    text = str((data.get("lines") or {}).get("text") or "").rstrip("\r\n").replace("\x00", "\\x00")
-                    line_number = int(data.get("line_number") or 0)
-                    results.append(
-                        {
-                            "file": display_path,
-                            "line": line_number,
-                            "match": text[:200],
-                            "context": f"> {line_number:4d}| {text}",
-                        }
-                    )
-                    if len(results) >= max_results:
-                        truncated = True
-                        await _terminate_process(process)
-                        break
+        if not rg:
+            # rg 未安装时纯 Python 兜底(os.walk + 逐行匹配), 避免工具硬失败。
+            results, timed_out, truncated = await self._grep_python_fallback(
+                search_dir,
+                normalized_keyword,
+                max_results=max_results,
+                timeout_seconds=timeout_seconds,
+                case_sensitive=case_sensitive,
+                is_regex=is_regex,
+                file_pattern=file_pattern,
+            )
+        else:
+            args = [rg, "--json", "--no-messages", "--line-number", "--with-filename"]
+            if not case_sensitive:
+                args.append("--ignore-case")
+            if not is_regex:
+                args.append("--fixed-strings")
+            if file_pattern:
+                args.extend(["--glob", file_pattern])
+            args.extend(_rg_exclude_args(self.exclude_dirs, self.exclude_patterns))
+            args.extend(["--", normalized_keyword, "."])
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=search_dir,
+            )
+            try:
+                assert process.stdout is not None
+                async with asyncio.timeout(timeout_seconds):
+                    while raw_line := await process.stdout.readline():
+                        try:
+                            event = json.loads(raw_line)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        if event.get("type") != "match":
+                            continue
+                        data = event.get("data") or {}
+                        raw_path = str((data.get("path") or {}).get("text") or "")
+                        if raw_path and not os.path.isabs(raw_path):
+                            raw_path = os.path.join(search_dir, raw_path)
+                        display_path = _best_display_path(raw_path, self.project_root, self.allowed_roots, raw_path)
+                        if self.target_files and display_path not in self.target_files and not display_path.startswith("skill_library/"):
+                            continue
+                        text = str((data.get("lines") or {}).get("text") or "").rstrip("\r\n").replace("\x00", "\\x00")
+                        line_number = int(data.get("line_number") or 0)
+                        results.append(
+                            {
+                                "file": display_path,
+                                "line": line_number,
+                                "match": text[:200],
+                                "context": f"> {line_number:4d}| {text}",
+                            }
+                        )
+                        if len(results) >= max_results:
+                            truncated = True
+                            await _terminate_process(process)
+                            break
                 if process.returncode is None:
                     await process.wait()
-        except TimeoutError:
-            timed_out = True
-            await _terminate_process(process)
-        finally:
-            if process.returncode is None:
+            except TimeoutError:
+                timed_out = True
                 await _terminate_process(process)
+            finally:
+                if process.returncode is None:
+                    await _terminate_process(process)
 
         files_searched = len({item["file"] for item in results})
 
@@ -607,6 +619,78 @@ class FileSearchTool(AgentTool):
                 "timeout_seconds": timeout_seconds,
             },
         )
+
+    async def _grep_python_fallback(
+        self,
+        search_dir: str,
+        keyword: str,
+        *,
+        max_results: int,
+        timeout_seconds: int,
+        case_sensitive: bool,
+        is_regex: bool,
+        file_pattern: Optional[str],
+    ) -> tuple[List[Dict[str, Any]], bool, bool]:
+        """rg 缺失时的纯 Python 兜底: os.walk + 逐行匹配。
+
+        结果结构与 rg 分支完全一致(file/line/match/context), 调用方无需区分来源;
+        is_regex=False 时按固定串子串匹配(等价 rg --fixed-strings)。
+        """
+
+        def scan() -> tuple[List[Dict[str, Any]], bool, bool]:
+            flags = 0 if case_sensitive else re.IGNORECASE
+            try:
+                matcher = re.compile(keyword if is_regex else re.escape(keyword), flags).search
+            except re.error:
+                matcher = re.compile(re.escape(keyword), flags).search
+            deadline = time.monotonic() + timeout_seconds
+            found: List[Dict[str, Any]] = []
+            timed_out = False
+            truncated = False
+            for root, dirnames, filenames in os.walk(search_dir):
+                dirnames[:] = [d for d in dirnames if d not in self.exclude_dirs]
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    break
+                for name in sorted(filenames):
+                    if time.monotonic() > deadline:
+                        timed_out = True
+                        break
+                    full = os.path.join(root, name)
+                    display = _best_display_path(full, self.project_root, self.allowed_roots, full)
+                    if self.target_files and display not in self.target_files and not display.startswith("skill_library/"):
+                        continue
+                    if any(fnmatch.fnmatch(display, p) or fnmatch.fnmatch(name, p) for p in self.exclude_patterns):
+                        continue
+                    if file_pattern and not (fnmatch.fnmatch(name, file_pattern) or fnmatch.fnmatch(display, file_pattern)):
+                        continue
+                    try:
+                        with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                            for lineno, raw in enumerate(fh, 1):
+                                text = raw.rstrip("\r\n").replace("\x00", "\\x00")
+                                if matcher(text):
+                                    found.append(
+                                        {
+                                            "file": display,
+                                            "line": lineno,
+                                            "match": text[:200],
+                                            "context": f"> {lineno:4d}| {text}",
+                                        }
+                                    )
+                                    if len(found) >= max_results:
+                                        truncated = True
+                                        return found, timed_out, truncated
+                    except (OSError, UnicodeError):
+                        continue
+                if truncated or timed_out:
+                    break
+            return found, timed_out, truncated
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await asyncio.to_thread(scan)
+        except TimeoutError:
+            return [], True, False
 
 class ListFilesTool(AgentTool):
     DEFAULT_EXCLUDE_DIRS = {
@@ -698,9 +782,6 @@ class ListFilesTool(AgentTool):
         if not os.path.isdir(target_dir):
             return ToolResult(success=False, error=f"不是目录: {directory}")
 
-        rg = shutil.which("rg")
-        if not rg:
-            return ToolResult(success=False, error="Glob unavailable: ripgrep (rg) is not installed in the runtime.")
         max_files = max(1, int(max_files))
         timeout_seconds = min(120, max(1, int(timeout_seconds)))
         files: List[str] = []
@@ -717,42 +798,53 @@ class ListFilesTool(AgentTool):
 
         timed_out = False
         truncated = False
-        args = [rg, "--files", "--no-messages"]
-        if not recursive:
-            args.extend(["--max-depth", "1"])
-        if pattern:
-            args.extend(["--glob", pattern])
-        args.extend(_rg_exclude_args(self.exclude_dirs, self.exclude_patterns))
-        args.extend(["--", "."])
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=target_dir,
-        )
-        try:
-            assert process.stdout is not None
-            async with asyncio.timeout(timeout_seconds):
-                while raw_line := await process.stdout.readline():
-                    full_path = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if full_path and not os.path.isabs(full_path):
-                        full_path = os.path.join(target_dir, full_path)
-                    display_path = _best_display_path(full_path, self.project_root, self.allowed_roots, full_path)
-                    if not include_file(display_path, os.path.basename(full_path)):
-                        continue
-                    files.append(display_path)
-                    if len(files) >= max_files:
-                        truncated = True
-                        await _terminate_process(process)
-                        break
+        rg = shutil.which("rg")
+        if not rg:
+            # rg 未安装时纯 Python 兜底(os.walk + fnmatch), 避免工具硬失败。
+            files, timed_out, truncated = await self._glob_python_fallback(
+                target_dir,
+                include_file=include_file,
+                recursive=recursive,
+                max_files=max_files,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            args = [rg, "--files", "--no-messages"]
+            if not recursive:
+                args.extend(["--max-depth", "1"])
+            if pattern:
+                args.extend(["--glob", pattern])
+            args.extend(_rg_exclude_args(self.exclude_dirs, self.exclude_patterns))
+            args.extend(["--", "."])
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=target_dir,
+            )
+            try:
+                assert process.stdout is not None
+                async with asyncio.timeout(timeout_seconds):
+                    while raw_line := await process.stdout.readline():
+                        full_path = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                        if full_path and not os.path.isabs(full_path):
+                            full_path = os.path.join(target_dir, full_path)
+                        display_path = _best_display_path(full_path, self.project_root, self.allowed_roots, full_path)
+                        if not include_file(display_path, os.path.basename(full_path)):
+                            continue
+                        files.append(display_path)
+                        if len(files) >= max_files:
+                            truncated = True
+                            await _terminate_process(process)
+                            break
                 if process.returncode is None:
                     await process.wait()
-        except TimeoutError:
-            timed_out = True
-            await _terminate_process(process)
-        finally:
-            if process.returncode is None:
+            except TimeoutError:
+                timed_out = True
                 await _terminate_process(process)
+            finally:
+                if process.returncode is None:
+                    await _terminate_process(process)
 
         output_parts = [f"目录: {directory}\n"]
         if dirs:
@@ -788,3 +880,68 @@ class ListFilesTool(AgentTool):
                 "timeout_seconds": timeout_seconds,
             },
         )
+
+    async def _glob_python_fallback(
+        self,
+        target_dir: str,
+        *,
+        include_file,
+        recursive: bool,
+        max_files: int,
+        timeout_seconds: int,
+    ) -> tuple[List[str], bool, bool]:
+        """rg 缺失时的纯 Python 兜底: os.walk/os.scandir + fnmatch 收集文件。
+
+        结果结构与 rg --files 分支一致(仅文件, 目录留给输出里 `dirs` 空列表); 过滤复用
+        _execute 里 include_file 闭包(pattern/target_files/exclude_patterns 语义一致)。
+        """
+
+        def scan() -> tuple[List[str], bool, bool]:
+            deadline = time.monotonic() + timeout_seconds
+            found: List[str] = []
+            timed_out = False
+            truncated = False
+            if recursive:
+                for root, dirnames, filenames in os.walk(target_dir):
+                    dirnames[:] = [d for d in dirnames if d not in self.exclude_dirs]
+                    if time.monotonic() > deadline:
+                        timed_out = True
+                        break
+                    for name in sorted(filenames):
+                        if time.monotonic() > deadline:
+                            timed_out = True
+                            break
+                        full = os.path.join(root, name)
+                        display = _best_display_path(full, self.project_root, self.allowed_roots, full)
+                        if include_file(display, name):
+                            found.append(display)
+                        if len(found) >= max_files:
+                            truncated = True
+                            break
+                    if truncated or timed_out:
+                        break
+            else:
+                # 非递归(等价 rg --max-depth 1): 只列一层文件, 不进子目录
+                try:
+                    with os.scandir(target_dir) as it:
+                        for entry in it:
+                            if time.monotonic() > deadline:
+                                timed_out = True
+                                break
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                            display = _best_display_path(entry.path, self.project_root, self.allowed_roots, entry.path)
+                            if include_file(display, entry.name):
+                                found.append(display)
+                            if len(found) >= max_files:
+                                truncated = True
+                                break
+                except OSError:
+                    pass
+            return found, timed_out, truncated
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await asyncio.to_thread(scan)
+        except TimeoutError:
+            return [], True, False

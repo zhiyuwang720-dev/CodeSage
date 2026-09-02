@@ -35,6 +35,7 @@ class SynthesisResult:
     comments: list[ReviewFinding] = field(default_factory=list)
     deduped_away: int = 0
     rejected_off_diff: int = 0
+    severity_dropped: int = 0  # 经去重/落行校验后仍被 min_severity 过滤的条数(空结果自解释)
     needs_verification: bool = False
 
 
@@ -136,6 +137,10 @@ def synthesize(
         merged, rejected = enforce_added_lines(merged, diff_text)
         result.rejected_off_diff = rejected
 
+    floor = SEVERITY_RANK.get(min_severity, 3)
+    result.severity_dropped = sum(
+        1 for f in merged if SEVERITY_RANK[f.severity] < floor
+    )
     result.comments = rank_and_limit(
         merged, max_comments=max_comments, min_severity=min_severity
     )
