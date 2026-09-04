@@ -1,7 +1,7 @@
 """spec §6 test_comment_on_added_lines: 评论 line 必须落在 diff 新增行, 违规被拒。"""
 from app.services.pr_review.diff_lines import added_line_index, parse_added_lines
 from app.services.pr_review.synthesizer import enforce_added_lines, synthesize
-from app.services.review_runtime.final_review_contract import ReviewFinding
+from app.services.contracts.final_review_contract import ReviewFinding
 
 DIFF = """diff --git a/app.py b/app.py
 --- a/app.py

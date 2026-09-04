@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from app.services.review_runtime.compaction.compact import partial_compact_conversation
 from app.services.review_runtime.compaction.post_compact import build_post_compact_messages
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeContinueReason,
     RuntimeMessageRole,
     RuntimeModelResponse,
@@ -13,7 +13,7 @@ from app.services.review_runtime.models import (
     TranscriptItem,
 )
 from app.services.review_runtime.query_context import recover_context_collapse_from_overflow
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.query_state import QueryLoopState
 
 ESCALATED_MAX_OUTPUT_TOKENS = 64000
 MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3

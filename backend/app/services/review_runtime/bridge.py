@@ -10,7 +10,7 @@ from app.db.session import get_sync_session_factory
 from app.services.agent.json_parser import AgentJsonParser
 from app.services.review_runtime.adapters.finding import FindingRuntimeAdapter
 from app.services.review_runtime.memory import RuntimeMemoryManager
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeCompletionMode,
     RuntimeMessageRole,
     RuntimeModelResponse,

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
-from app.services.review_runtime.models import RuntimeMemoryRecord
+from app.services.contracts.models import RuntimeMemoryRecord
 from app.services.runtime_core.memory_runtime import (
     RUNTIME_MEMORY_HEADER,
     RuntimeMemoryManager,

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from app.services.pr_review.diff_lines import parse_added_lines
-from app.services.review_runtime.final_review_contract import ReviewFinding
+from app.services.contracts.final_review_contract import ReviewFinding
 
 # evoagent LocalRuleReviewer 原始 6 条 + 扩充; (正则, 严重度, 类别, 标题, 描述, 建议, 测试提示)
 _RULE_TUPLE = tuple[

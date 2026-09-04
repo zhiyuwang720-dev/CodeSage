@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 from app.services.runtime_core.tool_message_codec import (
     ToolMessageFormat,
     build_runtime_model_messages,

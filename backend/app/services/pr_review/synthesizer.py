@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 
 from app.services.pr_review.diff_lines import added_line_index
-from app.services.review_runtime.final_review_contract import (
+from app.services.contracts.final_review_contract import (
     SEVERITY_RANK,
     ReviewFinding,
 )

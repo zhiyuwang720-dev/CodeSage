@@ -1,7 +1,7 @@
 """spec §6 test_terminal_nudge: 自然结束未调 FinalizeReview → nudge ×2 → incomplete 标记。"""
 import asyncio
 
-from app.services.review_runtime.models import RuntimeCompletionMode, RuntimeTerminalAction
+from app.services.contracts.models import RuntimeCompletionMode, RuntimeTerminalAction
 from tests.pr_review.fake_runtime import (
     ScriptedLLMService,
     ScriptedModelClient,

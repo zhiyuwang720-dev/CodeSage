@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from app.models.audit_session import AuditCheckpointType
 from app.services.agent.json_parser import AgentJsonParser
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeCompletionMode,
     RuntimeContinueReason,
     RuntimeMessageRole,
@@ -40,7 +40,7 @@ from app.services.review_runtime.query_context import (
 )
 from app.services.review_runtime.query_degradation import handle_recoverable_response
 from app.services.review_runtime.query_messages import normalize_messages_for_model
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.query_state import QueryLoopState
 from app.services.review_runtime.session_store import AuditSessionPersistenceError
 from app.services.runtime_core.tool_search_runtime import TOOL_SEARCH_TOOL_NAME
 

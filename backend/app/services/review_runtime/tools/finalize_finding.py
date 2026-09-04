@@ -8,7 +8,7 @@ from app.services.review_runtime.final_finding_contract import (
     FinalizedFindingPayload,
     format_validation_errors,
 )
-from app.services.review_runtime.models import ToolExecutionPayload
+from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext
 
 

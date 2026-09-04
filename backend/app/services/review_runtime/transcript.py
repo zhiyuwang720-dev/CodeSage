@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from app.models.audit_session import AuditSessionMessage
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 
 
 def to_transcript_item(message: AuditSessionMessage) -> TranscriptItem:

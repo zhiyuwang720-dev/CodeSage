@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.agent.tools.base import AgentTool
-from app.services.review_runtime.models import ToolExecutionPayload
+from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.permission_runtime import ToolPermissionDecision
 from app.services.runtime_core.runtime_guardrails import (
     APPROVAL_SCOPE_SINGLE_USE,

@@ -3,8 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 
 
 def build_between_turn_attachments(*, state: QueryLoopState, records: list[Any], session_snapshot: Any) -> list[TranscriptItem]:

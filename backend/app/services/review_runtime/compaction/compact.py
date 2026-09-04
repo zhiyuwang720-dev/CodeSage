@@ -8,8 +8,8 @@ from typing import Any, Iterable, Literal
 from app.services.review_runtime.compaction.models import AutoCompactTrackingState, CompactionResult
 from app.services.review_runtime.compaction.post_compact import rebuild_post_compact_artifacts
 from app.services.review_runtime.compaction.prompts import build_compaction_prompt, get_compact_user_summary_message
-from app.services.review_runtime.models import RuntimeMessageRole, RuntimeModelResponse, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeMessageRole, RuntimeModelResponse, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 
 MAX_PTL_RETRIES = 3
 PTL_RETRY_MARKER = "[earlier conversation truncated for compaction retry]"

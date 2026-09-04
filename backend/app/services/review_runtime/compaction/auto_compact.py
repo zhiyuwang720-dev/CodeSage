@@ -7,8 +7,8 @@ from typing import Any, Callable
 
 from app.services.review_runtime.compaction.compact import compact_conversation
 from app.services.review_runtime.compaction.models import AutoCompactTrackingState
-from app.services.review_runtime.models import TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 
 MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
 AUTOCOMPACT_BUFFER_TOKENS = 13_000

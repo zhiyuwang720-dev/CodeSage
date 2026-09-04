@@ -5,7 +5,7 @@ from typing import Any
 
 from app.services.agent.skill_service import SkillService
 from app.services.runtime_core.memory_runtime import RuntimeMemoryManager, build_runtime_memory_prompt
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 from app.services.review_runtime.query_transitions import hydrate_query_loop_state
 from app.services.review_runtime.skills import RuntimeSkillCatalog
 from app.services.runtime_core.explicit_skill_loader import load_explicit_skill_injections

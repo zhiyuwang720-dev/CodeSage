@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 from app.services.runtime_core.tool_runtime import match_runtime_event_hooks
 
 

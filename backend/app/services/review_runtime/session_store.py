@@ -19,8 +19,8 @@ from app.models.audit_session import (
     AuditSkillInvocation,
     AuditToolCall,
 )
-from app.services.review_runtime.models import RuntimeMemoryRecord, RuntimeSessionSnapshot, RuntimeSessionState, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeMemoryRecord, RuntimeSessionSnapshot, RuntimeSessionState, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 from app.services.runtime_core.session_state import SessionRuntimeState as SharedSessionRuntimeState
 
 

@@ -1,7 +1,7 @@
 """Finding runtime package for the ongoing migration."""
 
 from .config import FindingRuntimeStack, coerce_finding_runtime_stack
-from .models import RuntimeMessageRole, RuntimeSessionState, RuntimeStopReason, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, RuntimeSessionState, RuntimeStopReason, TranscriptItem
 
 __all__ = [
     "FindingRuntimeBridge",

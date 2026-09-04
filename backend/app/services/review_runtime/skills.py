@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.services.agent.agents.finding_skill_router import build_finding_skill_route_message
 from app.services.agent.skill_service import SkillService
-from app.services.review_runtime.models import RuntimeSkillCatalogSnapshot, ToolExecutionPayload
+from app.services.contracts.models import RuntimeSkillCatalogSnapshot, ToolExecutionPayload
 from app.services.review_runtime.tooling import RuntimeTool, ToolExecutionContext
 from app.services.runtime_core.skill_runtime import SkillInvocationRuntime
 

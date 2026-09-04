@@ -2,8 +2,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 from app.services.review_runtime.compaction.models import CompactionResult
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000
 POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
 SKILL_TRUNCATION_MARKER = "\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]"

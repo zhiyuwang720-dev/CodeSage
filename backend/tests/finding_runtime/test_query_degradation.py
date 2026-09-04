@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from app.services.review_runtime.models import RuntimeContinueReason, RuntimeMessageRole, RuntimeModelResponse, RuntimeStopReason, TranscriptItem
+from app.services.contracts.models import RuntimeContinueReason, RuntimeMessageRole, RuntimeModelResponse, RuntimeStopReason, TranscriptItem
 from app.services.review_runtime.query_degradation import handle_recoverable_response
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.query_state import QueryLoopState
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "query_parity" / "degradation_cases.json"
 CASES = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))

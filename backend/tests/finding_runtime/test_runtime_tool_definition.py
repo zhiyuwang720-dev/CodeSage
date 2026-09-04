@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel
 
-from app.services.review_runtime.models import ToolExecutionPayload
+from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext, ToolRegistry, build_runtime_tool
 
 

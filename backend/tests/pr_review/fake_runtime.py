@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeMessageRole,
     RuntimeModelResponse,
     TranscriptItem,

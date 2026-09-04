@@ -12,7 +12,7 @@ from app.services.review_runtime.bridge import (
     NATIVE_TOOL_CALLING_REMINDER,
     RuntimeLLMModelClient,
 )
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeCompletionMode,
     RuntimeMemoryBundle,
     RuntimeMessageRole,

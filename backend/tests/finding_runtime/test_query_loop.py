@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditSkillInvocationStatus, AuditToolCallStatus
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeCompletionMode,
     RuntimeContinueReason,
     RuntimeMessageRole,
@@ -20,7 +20,7 @@ from app.services.review_runtime.models import (
 )
 from app.services.review_runtime.query_loop import QueryLoop
 from app.services.runtime_core.tool_search_runtime import ToolSearchRuntimeTool
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.query_state import QueryLoopState
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.review_runtime.skills import RuntimeSkillTool

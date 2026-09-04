@@ -10,8 +10,8 @@ from app.services.review_runtime.compaction.auto_compact import (
     get_effective_context_window_size,
 )
 from app.services.review_runtime.compaction.models import AutoCompactTrackingState
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 
 
 class _DummyCompactor:

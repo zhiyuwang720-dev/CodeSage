@@ -1,5 +1,5 @@
 from app.services.review_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeContinueReason,
     RuntimeMessageRole,
     RuntimeSessionState,

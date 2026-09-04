@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from app.services.review_runtime.models import RuntimeContinueReason, TranscriptItem
-from app.services.review_runtime.query_state import QueryLoopState
+from app.services.contracts.models import RuntimeContinueReason, TranscriptItem
+from app.services.contracts.query_state import QueryLoopState
 
 
 def hydrate_query_loop_state(state: QueryLoopState, *, messages: list[TranscriptItem]) -> QueryLoopState:

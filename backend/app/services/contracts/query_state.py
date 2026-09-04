@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.review_runtime.models import RuntimeContinueReason, RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeContinueReason, RuntimeMessageRole, TranscriptItem
 
 
 @dataclass(slots=True)

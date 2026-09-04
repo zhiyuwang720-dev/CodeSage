@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
 from app.services.runtime_core.permission_runtime import RuntimePermissionRuntime, ToolPermissionDecision
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     ToolCallRequest,
     ToolExecutionPayload,
     ToolExecutionRecord,
@@ -22,27 +22,9 @@ RUNTIME_SEARCH_TOOL_MAX_TIMEOUT_SECONDS = 120
 RUNTIME_TOOL_TIMEOUT_HINT = "工具执行超时：请缩小 path/glob/pattern 后重试。"
 
 
-@dataclass(slots=True)
-class ToolExecutionContext:
-    session_id: str
-    turn_id: str
-    tool_use_id: str
-    tool_call_id: str
-    agent_type: str = "runtime"
-    session: Any = None
-    recon_payload: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    on_progress: Callable[[dict[str, Any]], None] | None = None
-
-    def report_progress(self, *, event: str, message: str | None = None, data: dict[str, Any] | None = None) -> None:
-        if self.on_progress is None:
-            return
-        payload = {"event": str(event)}
-        if message:
-            payload["message"] = str(message)
-        if data:
-            payload.update(dict(data))
-        self.on_progress(payload)
+# 06-P2: RuntimeTool ABC 与 ToolExecutionContext 迁往契约层; 引擎仍经本模块再导出,
+# 既有 `from ...runtime_core.tool_runtime import RuntimeTool` 引用点不受影响。
+from app.services.contracts.tools import RuntimeTool, ToolExecutionContext
 
 
 def match_runtime_event_hooks(hook_config: dict[str, Any], *, event_name: str, tool_name: str) -> list[dict[str, Any]]:
@@ -53,90 +35,6 @@ def match_runtime_event_hooks(hook_config: dict[str, Any], *, event_name: str, t
             continue
         matched.append(dict(entry))
     return matched
-
-
-class RuntimeTool:
-    name: str = ""
-    description: str = ""
-    input_model: type[BaseModel] | None = None
-    aliases: list[str] = []
-    search_hint: str | None = None
-    should_defer: bool = False
-    always_load: bool = False
-
-    def validate_input(self, raw_input: dict[str, Any]) -> Any:
-        if self.input_model is None:
-            return raw_input
-        return self.input_model.model_validate(raw_input or {})
-
-    def is_enabled(self) -> bool:
-        return True
-
-    def is_concurrency_safe(self, parsed_input: Any = None) -> bool:
-        return False
-
-    def concurrency_key(self, parsed_input: Any = None) -> str | None:
-        return None
-
-    def is_read_only(self, parsed_input: Any = None) -> bool:
-        return False
-
-    def is_destructive(self, parsed_input: Any = None) -> bool:
-        return False
-
-    def interrupt_behavior(self) -> InterruptBehavior:
-        return "block"
-
-    def requires_user_interaction(self) -> bool:
-        return False
-
-    def execution_timeout_seconds(self, parsed_input: Any = None, context: "ToolExecutionContext | None" = None) -> float | None:
-        del parsed_input, context
-        return None
-
-    async def check_permission(
-        self,
-        parsed_input: Any,
-        context: ToolExecutionContext,
-    ) -> ToolPermissionDecision:
-        return ToolPermissionDecision(allowed=True)
-
-    async def execute(self, parsed_input: Any, context: ToolExecutionContext) -> ToolExecutionPayload:
-        raise NotImplementedError
-
-    def user_facing_name(self, raw_input: Any | None = None) -> str:
-        del raw_input
-        return self.name
-
-    def describe(self) -> dict[str, Any]:
-        schema = self.input_model.model_json_schema() if self.input_model is not None else {"type": "object"}
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": schema,
-            "aliases": list(self.aliases or []),
-            "search_hint": self.search_hint,
-            "read_only": self._safe_metadata_bool(lambda: self.is_read_only(None), default=False),
-            "destructive": self._safe_metadata_bool(lambda: self.is_destructive(None), default=False),
-            "interrupt_behavior": self._safe_interrupt_behavior(),
-            "requires_user_interaction": self._safe_metadata_bool(self.requires_user_interaction, default=False),
-            "should_defer": bool(self.should_defer),
-            "always_load": bool(self.always_load),
-        }
-
-    @staticmethod
-    def _safe_metadata_bool(callback: Callable[[], bool], *, default: bool) -> bool:
-        try:
-            return bool(callback())
-        except Exception:
-            return default
-
-    def _safe_interrupt_behavior(self) -> InterruptBehavior:
-        try:
-            behavior = self.interrupt_behavior()
-        except Exception:
-            behavior = "block"
-        return "cancel" if behavior == "cancel" else "block"
 
 
 class _ConfiguredRuntimeTool(RuntimeTool):

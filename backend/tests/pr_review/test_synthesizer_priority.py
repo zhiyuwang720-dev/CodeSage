@@ -1,6 +1,6 @@
 """spec §6 test_synthesizer_priority: 严重度合并取最高; 初始只出 critical/high; 条数上限生效。"""
 from app.services.pr_review.synthesizer import finding_to_comment, merge_dedup, rank_and_limit, synthesize
-from app.services.review_runtime.final_review_contract import ReviewFinding
+from app.services.contracts.final_review_contract import ReviewFinding
 
 
 def _finding(source: str, severity: str, line: int = 3, confidence: float = 0.8, category: str = "security") -> dict:

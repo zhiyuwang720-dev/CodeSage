@@ -2,7 +2,7 @@
 import asyncio
 import json
 
-from app.services.review_runtime.models import RuntimeCompletionMode, RuntimeTerminalAction
+from app.services.contracts.models import RuntimeCompletionMode, RuntimeTerminalAction
 from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
 from tests.pr_review.fake_runtime import (
     ScriptedLLMService,

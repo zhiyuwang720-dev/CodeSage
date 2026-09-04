@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.review_runtime.models import (
+from app.services.contracts.models import (
     RuntimeCompletionMode,
     RuntimeSessionState,
     RuntimeStopReason,

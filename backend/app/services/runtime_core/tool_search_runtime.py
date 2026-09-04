@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
-from app.services.review_runtime.models import ToolExecutionPayload
+from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext, ToolRegistry
 
 

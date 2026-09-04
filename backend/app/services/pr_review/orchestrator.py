@@ -24,7 +24,7 @@ from app.services.pr_review.synthesizer import (
     finding_to_comment,
     synthesize,
 )
-from app.services.review_runtime.final_review_contract import (
+from app.services.contracts.final_review_contract import (
     SEVERITY_RANK,
     ReviewFinding,
 )

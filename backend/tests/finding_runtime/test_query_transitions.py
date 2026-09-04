@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.services.review_runtime.models import RuntimeContinueReason, RuntimeStopReason
+from app.services.contracts.models import RuntimeContinueReason, RuntimeStopReason
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "query_parity" / "reason_matrix.json"
 REASON_MATRIX = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))

@@ -4,7 +4,7 @@ import json
 from enum import StrEnum
 from typing import Any
 
-from app.services.review_runtime.models import RuntimeMessageRole, TranscriptItem
+from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 
 
 class ToolMessageFormat(StrEnum):
