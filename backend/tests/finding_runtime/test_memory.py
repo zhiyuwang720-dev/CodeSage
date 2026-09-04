@@ -11,7 +11,10 @@ from app.models.audit_session import AuditMemoryKind
 from app.services.review_runtime.memory import RuntimeMemoryManager, build_memory_message
 
 
-WORKTREE_ROOT = Path(__file__).resolve().parents[3]
+# 技能真内容位于 backend/skill_library/skill_library/{code-audit-finding,...}(嵌套包布局);
+# AUDITAI_ASSET_ROOT 须指向 backend/skill_library,使 SkillFileService.library_root()
+# 解析到含 code-audit-finding 的 skill_library/skill_library 一层。
+WORKTREE_ROOT = Path(__file__).resolve().parents[2] / "skill_library"
 
 
 def build_session_factory():
@@ -25,7 +28,7 @@ def test_memory_manager_loads_instruction_and_recalled_memories(monkeypatch):
     session_factory = build_session_factory()
     with session_factory() as db:
         rule_set = AuditRuleSet(
-            name="System Baseline",
+            name="OWASP Top 10",
             description="Base security rules for finding agent.",
             language="python",
             rule_type="security",

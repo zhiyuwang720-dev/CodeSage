@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -21,6 +22,23 @@ from app.services.review_runtime.models import (
     TurnExecutionResult,
 )
 from app.services.agent.tools.base import AgentTool, ToolResult
+
+
+@pytest.fixture(autouse=True)
+def _force_streaming_path():
+    """本仓 FakeLLMService 把 responses 条目按流事件列表组织,非流式 chat_completion 会拿到 list 而崩溃。
+
+    .env 在本机置 LLM_DISABLE_STREAMING=true,会让 bridge 走退化的非流式 complete;
+    这些单元测试全部针对真实流式事件语义,故强制回流式路径(与源码默认一致)。
+    """
+    from app.core.config import settings as _cfg
+
+    original = _cfg.LLM_DISABLE_STREAMING
+    _cfg.LLM_DISABLE_STREAMING = False
+    try:
+        yield
+    finally:
+        _cfg.LLM_DISABLE_STREAMING = original
 
 
 class FakeAgentTool(AgentTool):
@@ -99,7 +117,7 @@ def test_runtime_model_client_uses_anthropic_blocks_for_anthropic_endpoint():
 
 
 def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
-    async def fake_adapter_run(self, *, project_id, task_id, system_prompt, recon_payload, user_message, model_name):
+    async def fake_adapter_run(self, *, project_id, task_id, system_prompt, recon_payload, user_message, model_name, on_session_created=None):
         session_id = self._session_store.create_session(
             project_id=project_id,
             task_id=task_id,
@@ -186,7 +204,7 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
     def fake_runner_init(self, **kwargs):
         captured_runner_kwargs.append(kwargs)
 
-    async def fake_adapter_run(self, *, project_id, task_id, system_prompt, recon_payload, user_message, model_name):
+    async def fake_adapter_run(self, *, project_id, task_id, system_prompt, recon_payload, user_message, model_name, on_session_created=None):
         session_id = self._session_store.create_session(
             project_id=project_id,
             task_id=task_id,
@@ -205,8 +223,8 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
             "memory_counts": {"instruction": 0, "recall": 0},
         }
 
-    async def fake_ensure_payload(self, *, session_id, model_name, max_turns, model_client, runner_result, payload_extractor, finalizer_prompts, fallback_payload_builder=None):
-        del model_name, max_turns, model_client, runner_result, payload_extractor, finalizer_prompts, fallback_payload_builder
+    async def fake_ensure_payload(self, *, session_id, model_name, max_turns, model_client, runner_result, payload_extractor, finalizer_prompts, fallback_payload_builder=None, finalizer_tools=None):
+        del model_name, max_turns, model_client, runner_result, payload_extractor, finalizer_prompts, fallback_payload_builder, finalizer_tools
         return self._session_store.load_session_snapshot(session_id), {"findings": [], "summary": "stub"}
 
     monkeypatch.setattr(

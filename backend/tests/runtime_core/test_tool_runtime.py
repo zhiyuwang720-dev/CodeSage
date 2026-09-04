@@ -505,7 +505,7 @@ def test_canonical_write_tool_requires_approval_for_source_tree_writes():
         snapshot = store.load_session_snapshot(session_id)
 
         assert records[0].status == AuditToolCallStatus.DENIED.value
-        assert "approval" in (records[0].error_message or "").lower()
+        assert "批准" in (records[0].error_message or "")
         assert snapshot.tool_calls[0].output_payload["permission_mode"] == "ask"
         assert snapshot.tool_calls[0].output_payload["guardrail_code"] == "source_write_requires_approval"
     finally:

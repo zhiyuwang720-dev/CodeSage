@@ -170,7 +170,7 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short --import-mode=importlib --ignore=tests/finding_runtime --ignore=tests/runtime_core"
+addopts = "-v --tb=short --import-mode=importlib"
 
 [tool.coverage.run]
 source = ["app"]
