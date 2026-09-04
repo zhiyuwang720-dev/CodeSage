@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
-from app.services.review_runtime.memory import RuntimeMemoryManager, build_memory_message
+from app.services.memory.runtime import RuntimeMemoryManager, build_memory_message
 
 
 # 技能真内容位于 backend/skill_library/skill_library/{code-audit-finding,...}(嵌套包布局);
@@ -56,7 +56,7 @@ def test_memory_manager_loads_instruction_and_recalled_memories(monkeypatch):
     manager = RuntimeMemoryManager(session_factory=session_factory)
     bundle = __import__("asyncio").run(
         manager.preload(
-            agent_type="finding",
+            agent_type="review:security",
             system_prompt="Keep this prompt stable.",
             recon_payload={
                 "summary": "FastAPI auth endpoints with tenant logic.",
@@ -93,7 +93,7 @@ def test_memory_manager_loads_project_claude_and_claw_memories(tmp_path, monkeyp
     manager = RuntimeMemoryManager(session_factory=build_session_factory())
     bundle = __import__("asyncio").run(
         manager.preload(
-            agent_type="finding",
+            agent_type="review:security",
             system_prompt="Stay aligned.",
             recon_payload={
                 "project_info": {"root": str(tmp_path), "languages": ["java"]},

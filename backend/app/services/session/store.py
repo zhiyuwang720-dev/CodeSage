@@ -21,7 +21,7 @@ from app.models.audit_session import (
 )
 from app.services.contracts.models import RuntimeMemoryRecord, RuntimeSessionSnapshot, RuntimeSessionState, TranscriptItem
 from app.services.contracts.query_state import QueryLoopState
-from app.services.runtime_core.session_state import SessionRuntimeState as SharedSessionRuntimeState
+from app.services.session.state import SessionRuntimeState as SharedSessionRuntimeState
 
 
 class AuditSessionPersistenceError(RuntimeError):

@@ -4,18 +4,18 @@ import inspect
 from typing import Any
 
 from app.services.skill.facade import SkillService
-from app.services.runtime_core.memory_runtime import RuntimeMemoryManager, build_runtime_memory_prompt
+from app.services.memory.runtime import RuntimeMemoryManager, build_runtime_memory_prompt
 from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.review_runtime.query_transitions import hydrate_query_loop_state
+from app.services.runtime.query_transitions import hydrate_query_loop_state
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.skill.explicit_loader import load_explicit_skill_injections
 from app.services.skill.scheduler import SkillDiscoveryScheduler
 from app.services.skill.mentions import collect_explicit_skill_mentions
 
 
-class FindingRuntimeAdapter:
+class RuntimeSessionAdapter:
 
-    DEFAULT_USER_MESSAGE = "Continue the audit with the current Finding objective."
+    DEFAULT_USER_MESSAGE = "Continue the review session with the current objective."
 
     def __init__(
         self,
@@ -26,6 +26,7 @@ class FindingRuntimeAdapter:
         memory_manager: RuntimeMemoryManager | None = None,
         discovery_scheduler: SkillDiscoveryScheduler | None = None,
         skill_service: Any = SkillService,
+        agent_type: str = "review:security",
     ):
         self._session_store = session_store
         self._runner = runner
@@ -35,6 +36,7 @@ class FindingRuntimeAdapter:
         )
         self._discovery_scheduler = discovery_scheduler or SkillDiscoveryScheduler()
         self._skill_service = skill_service
+        self._agent_type = agent_type
 
     async def run(
         self,
@@ -44,7 +46,7 @@ class FindingRuntimeAdapter:
         system_prompt: str,
         recon_payload: dict,
         user_message: str | None = None,
-        model_name: str = "finding-runtime",
+        model_name: str = "review-runtime",
         on_session_created=None,
         on_user_message_created=None,
     ) -> dict:
@@ -73,7 +75,7 @@ class FindingRuntimeAdapter:
         )
 
         memory_bundle = await self._memory_manager.preload(
-            agent_type="finding",
+            agent_type=self._agent_type,
             system_prompt=system_prompt,
             recon_payload=recon_payload,
             user_message=effective_user_message,
@@ -177,7 +179,7 @@ class FindingRuntimeAdapter:
     async def _resolve_skill_context(self, *, session_id: str, base_system_prompt: str, user_message: str, recon_payload: dict):
         skill_context = await self._skill_catalog.preload(
             user_id=None,
-            agent_type="finding",
+            agent_type=self._agent_type,
             context={
                 "recon_data": recon_payload,
                 "project_info": recon_payload.get("project_info", {}),
@@ -187,7 +189,7 @@ class FindingRuntimeAdapter:
         )
         runtime_state = self._session_store.load_runtime_state(session_id)
         discovery_snapshot = self._discovery_scheduler.discover(
-            agent_type="finding",
+            agent_type=self._agent_type,
             runtime_state=runtime_state,
             available_skills=skill_context.available_skills,
             matched_skills=skill_context.matched_skills,
@@ -206,7 +208,7 @@ class FindingRuntimeAdapter:
         )
         explicit_skill_injection_text = await load_explicit_skill_injections(
             session_store=self._session_store,
-            agent_type="finding",
+            agent_type=self._agent_type,
             session_id=session_id,
             mentions=explicit_mentions,
             skill_service=self._skill_service,
@@ -265,14 +267,16 @@ class FindingRuntimeAdapter:
         runtime_state = self._session_store.load_runtime_state(session_id)
         runtime_state.metadata["base_system_prompt"] = base_system_prompt
         runtime_state.metadata["last_user_message"] = user_message
+        # 06-P5: agent_type 落库(AuditSession 无此列), 续跑据此还原 review:* 视角。
+        runtime_state.metadata["agent_type"] = self._agent_type
         runtime_state.record_skill_catalog_snapshot(
-            agent_type="finding",
+            agent_type=self._agent_type,
             available_skills=self._skill_refs(skill_context.available_skills),
             matched_skills=self._skill_refs(skill_context.matched_skills),
             primary_skill=str(skill_context.route_plan.get("primary_skill") or "").strip() or None,
         )
         runtime_state.record_skill_discovery_snapshot(
-            agent_type="finding",
+            agent_type=self._agent_type,
             selected_skill=str(discovery_snapshot.get("selected_skill") or "").strip() or None,
             ranked_candidates=list(discovery_snapshot.get("ranked_candidates") or []),
             latest_user_message=user_message,

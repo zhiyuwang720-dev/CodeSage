@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Sequence, Set
 
+# 06-P5: finding 类型退役后, 运行时引擎仅服务 review:* 视角。
+# 漏洞审查专属的 skill 路由/记忆召回目前只对 review:security 视角启用
+# (architecture/quality 的技能绑定与路由在 06-P7 落地)。
+RUNTIME_SKILL_ROUTE_AGENT_TYPES = frozenset({"review:security"})
+
 
 FIXED_FIRST_READS: List[str] = [
     "references/core/anti_hallucination.md",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from typing import Any
-from app.services.review_runtime.compaction.models import CompactionResult
+from app.services.runtime.compaction.models import CompactionResult
 from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
 from app.services.contracts.query_state import QueryLoopState
 POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000

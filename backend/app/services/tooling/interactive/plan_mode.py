@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.runtime_core.interaction_runtime import InteractionRuntime
+from app.services.session.interaction import InteractionRuntime
 from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext
 
 

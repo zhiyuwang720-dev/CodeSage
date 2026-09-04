@@ -1,4 +1,4 @@
-"""运行时分发器(阶段 02 §3.2): 视角 → FindingRuntimeBridge(独立 session)。
+"""运行时分发器(阶段 02 §3.2): 视角 → RuntimeBridge(独立 session)。
 
 生产路径: 每个视角一个 bridge 实例(agent_type=review:<视角>), 注册表内部挂
 FinalizeReview 终点工具并按权限矩阵裁剪工具集; TaskHandoff 为唯一回传通道。
@@ -110,11 +110,11 @@ class RuntimePerspectiveDispatcher:
         self._session_ids: dict[str, str] = {}
 
     async def __call__(self, perspective: str, ctx: Any, followup_findings: list[dict] | None = None) -> dict:
-        from app.services.review_runtime.bridge import FindingRuntimeBridge
+        from app.services.runtime.bridge import RuntimeBridge
         from app.services.tooling.finalize_review import FinalizeReviewTool
 
         spec = build_review_perspective_spec(perspective)
-        bridge = FindingRuntimeBridge(
+        bridge = RuntimeBridge(
             llm_service=self._llm_service,
             tools=self._tools,
             user_id=self._user_id,

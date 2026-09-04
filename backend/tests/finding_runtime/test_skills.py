@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditSkillInvocationStatus
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.skill.tool import RuntimeSkillTool
 from app.services.tooling.runtime import ToolExecutionContext
@@ -16,7 +16,7 @@ from app.services.tooling.runtime import ToolExecutionContext
 class FakeSkillService:
     @staticmethod
     async def resolve_agent_skills(user_id, agent_type, context):
-        assert agent_type == "finding"
+        assert agent_type == "review:security"
         return {
             "metadata": [
                 {
@@ -70,7 +70,7 @@ def test_runtime_skill_catalog_builds_route_snapshot():
     snapshot = asyncio.run(
         catalog.preload(
             user_id=None,
-            agent_type="finding",
+            agent_type="review:security",
             context={"recon_data": {"summary": "auth bug"}, "task": "audit auth flow", "config": {}},
         )
     )
@@ -100,7 +100,7 @@ def test_runtime_skill_tool_persists_skill_invocation_and_runtime_state():
     )
     snapshot = store.load_session_snapshot(session_id)
     runtime_state = store.load_runtime_state(session_id)
-    skill_state = runtime_state.agent_states["finding"].invoked_skills["code-audit-finding"]
+    skill_state = runtime_state.agent_states["review:security"].invoked_skills["code-audit-finding"]
 
     assert payload.output_payload == {"skill": "code-audit-finding", "content": "body"}
     assert len(snapshot.skill_invocations) == 1

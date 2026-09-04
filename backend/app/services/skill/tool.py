@@ -32,7 +32,7 @@ class RuntimeSkillTool(RuntimeTool):
         self,
         *,
         session_store,
-        agent_type: str = "finding",
+        agent_type: str = "review:security",
         user_id: str | None = None,
         skill_service: Any = SkillService,
     ):

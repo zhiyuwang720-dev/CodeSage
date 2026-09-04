@@ -32,8 +32,8 @@ from app.models.agent_task import (
     VulnerabilitySeverity, FindingStatus,
 )
 from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, AuditToolCall
-from app.services.review_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
-from app.services.review_runtime.final_finding_contract import has_meaningful_poc, is_placeholder_finding
+from app.services.runtime.config import RuntimeStack, coerce_runtime_stack
+from app.services.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
 from app.models.user import User
 from app.models.user_config import UserConfig
@@ -143,7 +143,7 @@ class AgentTaskResponse(BaseModel):
     
     error_message: Optional[str] = None
     runtime_session_id: Optional[str] = None
-    finding_runtime_stack: str = FindingRuntimeStack.RUNTIME.value
+    finding_runtime_stack: str = RuntimeStack.RUNTIME.value
     finding_outcome: str = "none"
     runtime_completion_mode: Optional[str] = None
     finalized_findings_count: int = 0
@@ -278,8 +278,8 @@ def _resolve_task_runtime_stack(agent_config: Any) -> str:
     else:
         raw_value = None
     if raw_value in (None, ""):
-        raw_value = getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", FindingRuntimeStack.LEGACY.value)
-    return coerce_finding_runtime_stack(raw_value).value
+        raw_value = getattr(settings, "FINDING_RUNTIME_STACK_DEFAULT", RuntimeStack.LEGACY.value)
+    return coerce_runtime_stack(raw_value).value
 
 
 def _extract_finding_runtime_payload(result_data: Any) -> Dict[str, Any]:
@@ -1441,8 +1441,8 @@ async def create_agent_task(
             detail="仅支持创建 PR review 任务(audit_scope.pr_review 必填); 仓库源码审计任务类型已下线",
         )
 
-    runtime_stack = coerce_finding_runtime_stack(
-        request.finding_runtime_stack or FindingRuntimeStack.RUNTIME.value
+    runtime_stack = coerce_runtime_stack(
+        request.finding_runtime_stack or RuntimeStack.RUNTIME.value
     ).value
     task_name = request.name or f"PR Review - {datetime.now().strftime('%Y%m%d_%H%M%S')}"
 

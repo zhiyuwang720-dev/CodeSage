@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
-from app.services.skill.router import resolve_finding_skill_routes
+from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, resolve_finding_skill_routes
 from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord
 from app.services.skill.file_service import SkillFileService
 
@@ -52,7 +52,7 @@ class RuntimeMemoryManager:
         instructions.extend(self._load_project_instruction_memories(recon_payload=recon_payload, system_prompt=system_prompt))
 
         recalls: list[RuntimeMemoryRecord] = []
-        if agent_type == "finding":
+        if agent_type in RUNTIME_SKILL_ROUTE_AGENT_TYPES:
             context = {
                 "recon_data": recon_payload,
                 "project_info": recon_payload.get("project_info", {}),

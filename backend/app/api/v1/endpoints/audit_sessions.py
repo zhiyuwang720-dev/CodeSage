@@ -35,7 +35,7 @@ from app.models.audit_session import (
 )
 from app.models.project import Project
 from app.models.user import User
-from app.services.review_runtime.bridge import FindingRuntimeBridge
+from app.services.runtime.bridge import RuntimeBridge
 from app.services.llm.service import LLMService
 from app.services.runtime_core.runtime_guardrails import is_guardrails_enabled
 
@@ -279,7 +279,7 @@ async def _build_runtime_follow_up_context(
     *,
     session: AuditSession,
     db: AsyncSession,
-) -> tuple[FindingRuntimeBridge, str, int | None]:
+) -> tuple[RuntimeBridge, str, int | None]:
     from app.api.v1.endpoints.agent_tasks import _get_project_root, _get_user_config
     from app.services.tooling.builder import build_runtime_tool_catalog
 
@@ -287,6 +287,11 @@ async def _build_runtime_follow_up_context(
     project = await db.get(Project, session.project_id)
     if task is None or project is None:
         raise HTTPException(status_code=409, detail="Audit session is missing task or project context")
+
+    # 06-P5: agent_type 由创建时落库的 metadata 还原(review:*), 旧会话缺省回退
+    # review:security —— finding 类型已退役, 续跑不再强制 finding 默认。
+    runtime_metadata = dict((session.runtime_state_json or {}).get("metadata") or {})
+    agent_type = str(runtime_metadata.get("agent_type") or "").strip() or "review:security"
 
     user_config = await _get_user_config(db, task.created_by)
     other_config = (user_config or {}).get("otherConfig", {})
@@ -316,7 +321,7 @@ async def _build_runtime_follow_up_context(
         valid_target_files = [file_path for file_path in target_files if os.path.exists(os.path.join(project_root, file_path))]
         target_files = valid_target_files or None
 
-    llm_service = LLMService(user_config=_build_agent_user_config(user_config, "finding"))
+    llm_service = LLMService(user_config=_build_agent_user_config(user_config, agent_type))
     # 06-P1: finding legacy `_initialize_tools` 整链退役 —— 运行时续聊与 pr_review 分发器
     # 同源, 直接用文件运行时工具目录作为 bridge 文件工具集(注册表内部补 Skill/Shell/Write/交互)。
     tools = build_runtime_tool_catalog(
@@ -324,10 +329,11 @@ async def _build_runtime_follow_up_context(
         exclude_patterns=task.exclude_patterns,
         target_files=target_files,
     )
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=llm_service,
         tools=tools,
         user_id=task.created_by,
+        agent_type=agent_type,
     )
     model_name = None
     latest_turn_model = await db.scalar(
@@ -336,8 +342,8 @@ async def _build_runtime_follow_up_context(
         .order_by(AuditSessionTurn.sequence.desc())
         .limit(1)
     )
-    model_name = str(latest_turn_model or "finding")
-    max_turns = _resolve_runtime_turn_limit(user_config, "finding")
+    model_name = str(latest_turn_model or agent_type)
+    max_turns = _resolve_runtime_turn_limit(user_config, agent_type)
     return bridge, model_name, max_turns
 
 

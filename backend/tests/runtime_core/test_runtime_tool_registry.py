@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
 from app.services.tooling.registry import build_runtime_tool_registry
 from app.services.tooling.runtime import ToolExecutionContext

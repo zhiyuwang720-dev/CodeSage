@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from app.services.review_runtime.compaction.auto_compact import (
+from app.services.runtime.compaction.auto_compact import (
     calculate_token_warning_state,
     get_effective_context_window_size,
 )

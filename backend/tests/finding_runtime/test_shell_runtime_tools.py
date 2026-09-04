@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 from app.db.base import Base
 from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
 from app.services.tooling.registry import build_runtime_tool_registry

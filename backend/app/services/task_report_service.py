@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_task import AgentFinding, AgentTask
 from app.models.project import Project
 from app.models.report_template import AgentTaskReport
-from app.services.review_runtime.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
+from app.services.contracts.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
 from app.services.report_template_file_service import ReportTemplateFileService
 
 DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告

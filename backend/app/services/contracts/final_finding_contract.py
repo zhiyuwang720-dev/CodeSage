@@ -192,11 +192,11 @@ def format_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
         details.append({"field": field, "message": message})
         messages.append(message)
     if not details:
-        return [{"field": "payload", "message": "FinalizeFinding payload is invalid."}]
+        return [{"field": "payload", "message": "Finding report payload is invalid."}]
     return [
         {
             "field": "payload",
-            "message": "FinalizeFinding payload is invalid: " + "; ".join(messages),
+            "message": "Finding report payload is invalid: " + "; ".join(messages),
         },
         *details,
     ]

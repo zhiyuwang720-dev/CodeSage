@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.services.contracts.models import RuntimeContinueReason, RuntimeMessageRole, RuntimeModelResponse, RuntimeStopReason, TranscriptItem
-from app.services.review_runtime.query_degradation import handle_recoverable_response
+from app.services.runtime.query_degradation import handle_recoverable_response
 from app.services.contracts.query_state import QueryLoopState
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "query_parity" / "degradation_cases.json"
@@ -120,14 +120,14 @@ def test_reactive_compact_retry_uses_partial_compaction_service(monkeypatch):
         called["pivot_index"] = pivot_index
         called["direction"] = direction
         called["messages"] = [item.content for item in all_messages]
-        return __import__("app.services.review_runtime.compaction.models", fromlist=["CompactionResult"]).CompactionResult(
+        return __import__("app.services.runtime.compaction.models", fromlist=["CompactionResult"]).CompactionResult(
             boundary_marker=TranscriptItem(role=RuntimeMessageRole.SYSTEM, content="Reactive compact boundary.", name="reactive_compact_boundary"),
             summary_messages=[TranscriptItem(role=RuntimeMessageRole.USER, content="summary", name="reactive_compact_summary")],
             messages_to_keep=[TranscriptItem(role=RuntimeMessageRole.ASSISTANT, content="tail", name="tail")],
         )
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_degradation.partial_compact_conversation",
+        "app.services.runtime.query_degradation.partial_compact_conversation",
         fake_partial_compact_conversation,
     )
 

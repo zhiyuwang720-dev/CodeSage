@@ -1,5 +1,6 @@
-from .memory_runtime import RuntimeMemoryManager, build_memory_message
-from .models import AgentRuntimeState, InvokedSkillState, SessionRuntimeState
+# 06-P5: 记忆/状态已独立至 services/{memory,session}/; 此处仅保留 pkg 级再导出以免破坏既有引用。
+from app.services.memory.runtime import RuntimeMemoryManager, build_memory_message
+from app.services.session.state import AgentRuntimeState, InvokedSkillState, SessionRuntimeState
 from .permission_runtime import RuntimePermissionRuntime, ToolPermissionDecision
 # 06-P3: 技能域已收敛至 services/skill/; 此处仅保留 pkg 级再导出以免破坏既有引用。
 from app.services.skill.runtime import SkillInvocationRuntime

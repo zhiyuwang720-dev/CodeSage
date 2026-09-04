@@ -19,16 +19,16 @@ from app.services.contracts.models import (
     TranscriptItem,
     TurnExecutionResult,
 )
-from app.services.review_runtime.query_attachments import (
+from app.services.runtime.query_attachments import (
     build_between_turn_attachments,
     materialize_pending_tool_use_summary,
     start_pending_tool_use_summary,
 )
-from app.services.review_runtime.compaction.auto_compact import auto_compact_if_needed
-from app.services.review_runtime.compaction.compact import compact_conversation
-from app.services.review_runtime.compaction.models import AutoCompactTrackingState
-from app.services.review_runtime.compaction.post_compact import build_post_compact_messages
-from app.services.review_runtime.query_context import (
+from app.services.runtime.compaction.auto_compact import auto_compact_if_needed
+from app.services.runtime.compaction.compact import compact_conversation
+from app.services.runtime.compaction.models import AutoCompactTrackingState
+from app.services.runtime.compaction.post_compact import build_post_compact_messages
+from app.services.runtime.query_context import (
     append_system_context,
     apply_history_snip,
     apply_microcompact,
@@ -38,25 +38,25 @@ from app.services.review_runtime.query_context import (
     prepend_user_context,
     apply_context_collapse_if_needed,
 )
-from app.services.review_runtime.query_degradation import handle_recoverable_response
-from app.services.review_runtime.query_messages import normalize_messages_for_model
+from app.services.runtime.query_degradation import handle_recoverable_response
+from app.services.runtime.query_messages import normalize_messages_for_model
 from app.services.contracts.query_state import QueryLoopState
-from app.services.review_runtime.session_store import AuditSessionPersistenceError
+from app.services.session.store import AuditSessionPersistenceError
 from app.services.tooling.search import TOOL_SEARCH_TOOL_NAME
 
 # 终点工具名(阶段 02 §3.4.1 参数化): 各领域的终结工具在此登记,
 # 桥接层的 continue_session_until_payload(finalizer_tools=...) 走完全参数化路径。
 # 06-P4: 运行时仅保留 review:* 三种角色, finding/vulnerability_reports 终点名退役。
 TERMINAL_TOOL_NAMES = {"FinalizeReview"}
-from app.services.review_runtime.query_stop_hooks import (
+from app.services.runtime.query_stop_hooks import (
     build_stop_hook_artifact_messages,
     build_stop_hook_messages,
     evaluate_post_tool_hooks,
     evaluate_stop_hooks,
 )
 from app.services.runtime_core.hook_policy import collect_turn_hook_events
-from app.services.review_runtime.query_token_budget import evaluate_token_budget_continuation
-from app.services.review_runtime.query_transitions import (
+from app.services.runtime.query_token_budget import evaluate_token_budget_continuation
+from app.services.runtime.query_transitions import (
     build_continue_state,
     build_terminal_state,
     hydrate_query_loop_state,

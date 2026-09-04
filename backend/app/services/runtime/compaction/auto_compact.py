@@ -5,8 +5,8 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.services.review_runtime.compaction.compact import compact_conversation
-from app.services.review_runtime.compaction.models import AutoCompactTrackingState
+from app.services.runtime.compaction.compact import compact_conversation
+from app.services.runtime.compaction.models import AutoCompactTrackingState
 from app.services.contracts.models import TranscriptItem
 from app.services.contracts.query_state import QueryLoopState
 

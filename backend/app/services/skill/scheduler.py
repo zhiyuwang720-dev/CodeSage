@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.runtime_core.session_state import SessionRuntimeState
+from app.services.session.state import SessionRuntimeState
 
 AI_MARKERS = {
     "ai",

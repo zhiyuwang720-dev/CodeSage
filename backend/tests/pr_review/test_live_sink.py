@@ -170,7 +170,7 @@ def test_sink_ignores_unknown_event_types():
 async def test_dispatcher_emits_session_start(monkeypatch):
     from types import SimpleNamespace
 
-    import app.services.review_runtime.bridge as bridge_mod
+    import app.services.runtime.bridge as bridge_mod
     from app.services.pr_review.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class Recorder:
@@ -198,7 +198,7 @@ async def test_dispatcher_emits_session_start(monkeypatch):
                 "turn_count": 1,
             }
 
-    monkeypatch.setattr(bridge_mod, "FindingRuntimeBridge", StubBridge)
+    monkeypatch.setattr(bridge_mod, "RuntimeBridge", StubBridge)
 
     dispatcher = RuntimePerspectiveDispatcher(
         llm_service=object(),

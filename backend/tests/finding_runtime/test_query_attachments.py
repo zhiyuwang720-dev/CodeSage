@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord
-from app.services.review_runtime.query_attachments import build_between_turn_attachments, start_pending_tool_use_summary
+from app.services.runtime.query_attachments import build_between_turn_attachments, start_pending_tool_use_summary
 from app.services.contracts.query_state import QueryLoopState
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.review_runtime.compaction.prompts import (
+from app.services.runtime.compaction.prompts import (
     BASE_COMPACT_PROMPT,
     NO_TOOLS_PREAMBLE,
     NO_TOOLS_TRAILER,

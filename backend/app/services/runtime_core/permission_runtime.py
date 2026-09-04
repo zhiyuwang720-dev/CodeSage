@@ -56,7 +56,7 @@ def resolve_permission_rule_decision(rules: Any, *, agent_type: str, tool_name: 
 
 
 class RuntimePermissionRuntime:
-    def __init__(self, *, session_store, agent_type: str = "finding"):
+    def __init__(self, *, session_store, agent_type: str = "review:security"):
         self._session_store = session_store
         self._agent_type = agent_type
 

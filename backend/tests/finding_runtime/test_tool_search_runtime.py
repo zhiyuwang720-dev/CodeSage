@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 from app.services.tooling.runtime import ToolExecutionContext, ToolRegistry, build_runtime_tool
 from app.services.tooling.search import ToolSearchInput, ToolSearchRuntimeTool
 

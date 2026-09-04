@@ -7,7 +7,7 @@ from app.services.contracts.models import (
     RuntimeTerminalAction,
     TurnExecutionResult,
 )
-from app.services.review_runtime.query_loop import QueryLoop
+from app.services.runtime.query_loop import QueryLoop
 
 COMPLETED_SESSION_STOP_REASONS = {
     RuntimeStopReason.COMPLETED,
@@ -15,7 +15,7 @@ COMPLETED_SESSION_STOP_REASONS = {
 }
 
 
-class FindingRuntimeRunner:
+class RuntimeRunner:
     def __init__(
         self,
         *,

@@ -1,4 +1,4 @@
-from app.services.review_runtime.config import FindingRuntimeStack, coerce_finding_runtime_stack
+from app.services.runtime.config import RuntimeStack, coerce_runtime_stack
 from app.services.contracts.models import (
     RuntimeContinueReason,
     RuntimeMessageRole,
@@ -11,15 +11,15 @@ from app.services.contracts.models import (
 
 
 def test_runtime_stack_defaults_to_legacy_for_unknown_values():
-    assert coerce_finding_runtime_stack(None) is FindingRuntimeStack.LEGACY
-    assert coerce_finding_runtime_stack("") is FindingRuntimeStack.LEGACY
-    assert coerce_finding_runtime_stack("something-else") is FindingRuntimeStack.LEGACY
+    assert coerce_runtime_stack(None) is RuntimeStack.LEGACY
+    assert coerce_runtime_stack("") is RuntimeStack.LEGACY
+    assert coerce_runtime_stack("something-else") is RuntimeStack.LEGACY
 
 
 def test_runtime_stack_accepts_phase_one_runtime_flag_values():
-    assert coerce_finding_runtime_stack("runtime") is FindingRuntimeStack.RUNTIME
-    assert coerce_finding_runtime_stack("new") is FindingRuntimeStack.RUNTIME
-    assert coerce_finding_runtime_stack("legacy") is FindingRuntimeStack.LEGACY
+    assert coerce_runtime_stack("runtime") is RuntimeStack.RUNTIME
+    assert coerce_runtime_stack("new") is RuntimeStack.RUNTIME
+    assert coerce_runtime_stack("legacy") is RuntimeStack.LEGACY
 
 
 def test_runtime_enums_expose_runtime_states_and_stop_reasons():

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from .session_state import SessionRuntimeState
+from .state import SessionRuntimeState
 
 
 def _utc_now() -> str:

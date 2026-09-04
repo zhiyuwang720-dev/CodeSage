@@ -18,8 +18,8 @@ from app.services.contracts.models import (
     RuntimeModelResponse,
     TranscriptItem,
 )
-from app.services.review_runtime.runner import FindingRuntimeRunner
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.runtime.runner import RuntimeRunner
+from app.services.session.store import AuditSessionStore
 from app.services.tooling.registry import build_runtime_tool_registry
 from app.services.tooling.codec import build_runtime_model_messages
 
@@ -156,7 +156,7 @@ def build_review_runner(
     from app.services.tooling.runtime import ToolOrchestrator
 
     orchestrator = ToolOrchestrator(session_store=session_store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=session_store,
         model_client=model_client,
         tool_registry=registry,

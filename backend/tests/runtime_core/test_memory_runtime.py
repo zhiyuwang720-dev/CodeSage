@@ -9,7 +9,7 @@ from app.db.base import Base
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
 from app.services.contracts.models import RuntimeMemoryRecord
-from app.services.runtime_core.memory_runtime import (
+from app.services.memory.runtime import (
     RUNTIME_MEMORY_HEADER,
     RuntimeMemoryManager,
     build_memory_message,
@@ -84,7 +84,7 @@ def test_shared_memory_runtime_loads_instruction_and_recalled_memories(monkeypat
     manager = RuntimeMemoryManager(session_factory=session_factory)
     bundle = __import__("asyncio").run(
         manager.preload(
-            agent_type="finding",
+            agent_type="review:security",
             system_prompt="Keep this prompt stable.",
             recon_payload={
                 "summary": "FastAPI auth endpoints with tenant logic.",
@@ -120,7 +120,7 @@ def test_shared_memory_runtime_loads_project_memories(tmp_path, monkeypatch):
     manager = RuntimeMemoryManager(session_factory=build_session_factory())
     bundle = __import__("asyncio").run(
         manager.preload(
-            agent_type="finding",
+            agent_type="review:security",
             system_prompt="Stay aligned.",
             recon_payload={
                 "project_info": {"root": str(tmp_path), "languages": ["java"]},
@@ -223,7 +223,7 @@ def test_shared_memory_runtime_ignores_quality_and_performance_rule_sets(monkeyp
     manager = RuntimeMemoryManager(session_factory=session_factory)
     bundle = __import__("asyncio").run(
         manager.preload(
-            agent_type="finding",
+            agent_type="review:security",
             system_prompt="Find CVE-grade security issues.",
             recon_payload={"project_info": {"languages": ["python"]}},
             user_message="Audit the project.",

@@ -13,7 +13,7 @@ from app.db.base import Base
 from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
 from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.services.tooling.interactive.todo import TodoWriteRuntimeTool
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 from app.services.tooling.runtime import (
     RuntimeTool,
     ToolExecutionContext,

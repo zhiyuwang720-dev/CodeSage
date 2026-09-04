@@ -311,7 +311,7 @@ class ToolOrchestrator:
         *,
         session_store,
         tool_registry: ToolRegistry,
-        agent_type: str = "finding",
+        agent_type: str = "review:security",
         permission_runtime: RuntimePermissionRuntime | None = None,
         default_tool_timeout_seconds: float | None = DEFAULT_RUNTIME_TOOL_TIMEOUT_SECONDS,
     ):

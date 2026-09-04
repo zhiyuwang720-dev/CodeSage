@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditMemoryKind
-from app.services.review_runtime.adapters.finding import FindingRuntimeAdapter
+from app.services.runtime.adapters.session import RuntimeSessionAdapter
 from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord, RuntimeMessageRole, RuntimeStopReason, TranscriptItem
 from app.services.contracts.query_state import QueryLoopState
-from app.services.review_runtime.session_store import AuditSessionStore
+from app.services.session.store import AuditSessionStore
 
 
 class FakeRunner:
@@ -117,7 +117,7 @@ def build_store() -> AuditSessionStore:
 def test_finding_runtime_adapter_preserves_prompt_recon_skill_route_and_memories():
     store = build_store()
     runner = FakeRunner()
-    adapter = FindingRuntimeAdapter(
+    adapter = RuntimeSessionAdapter(
         session_store=store,
         runner=runner,
         skill_catalog=FakeSkillCatalog(),
@@ -154,7 +154,7 @@ def test_finding_runtime_adapter_preserves_prompt_recon_skill_route_and_memories
 
 def test_finding_runtime_adapter_injects_explicit_skill_mentions_with_audited_invocation():
     store = build_store()
-    adapter = FindingRuntimeAdapter(
+    adapter = RuntimeSessionAdapter(
         session_store=store,
         runner=FakeRunner(),
         skill_catalog=FakeSkillCatalog(),
@@ -189,7 +189,7 @@ def test_finding_runtime_adapter_injects_explicit_skill_mentions_with_audited_in
 
 def test_finding_runtime_adapter_defaults_user_message_when_not_provided():
     store = build_store()
-    adapter = FindingRuntimeAdapter(
+    adapter = RuntimeSessionAdapter(
         session_store=store,
         runner=FakeRunner(),
         skill_catalog=FakeSkillCatalog(),
@@ -207,12 +207,12 @@ def test_finding_runtime_adapter_defaults_user_message_when_not_provided():
 
     snapshot = store.load_session_snapshot(result["session_id"])
 
-    assert snapshot.messages[-1].content == "Continue the audit with the current Finding objective."
+    assert snapshot.messages[-1].content == "Continue the review session with the current objective."
 
 
 def test_refresh_session_context_rehydrates_query_loop_state_with_latest_user_message():
     store = build_store()
-    adapter = FindingRuntimeAdapter(
+    adapter = RuntimeSessionAdapter(
         session_store=store,
         runner=FakeRunner(),
         skill_catalog=FakeSkillCatalog(),

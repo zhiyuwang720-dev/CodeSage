@@ -18,11 +18,11 @@ from app.services.contracts.models import (
     ToolExecutionPayload,
     TranscriptItem,
 )
-from app.services.review_runtime.query_loop import QueryLoop
+from app.services.runtime.query_loop import QueryLoop
 from app.services.tooling.search import ToolSearchRuntimeTool
 from app.services.contracts.query_state import QueryLoopState
-from app.services.review_runtime.runner import FindingRuntimeRunner
-from app.services.review_runtime.session_store import AuditSessionPersistenceError, AuditSessionStore
+from app.services.runtime.runner import RuntimeRunner
+from app.services.session.store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.skill.tool import RuntimeSkillTool
 from app.services.tooling.finalize_review import FinalizeReviewTool
 from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
@@ -198,7 +198,7 @@ def test_runner_executes_tool_calls_and_loops_until_final_answer():
     )
     registry = ToolRegistry([EchoTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -244,7 +244,7 @@ def test_runner_continues_when_transition_requests_next_turn():
     )
     registry = ToolRegistry([EchoTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -283,7 +283,7 @@ def test_runner_executes_skill_tool_and_persists_skill_invocation():
     )
     registry = ToolRegistry([RuntimeSkillTool(session_store=store, skill_service=FakeSkillService())])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -368,7 +368,7 @@ def test_runner_finalize_review_tool_marks_terminal_completion():
     )
     registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -424,7 +424,7 @@ def test_runner_rejects_reason_only_finalize_review_payload_without_terminal_com
     )
     registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -475,7 +475,7 @@ def test_runner_invalid_finalize_review_continues_with_tool_error_feedback():
     )
     registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -553,7 +553,7 @@ def test_runner_marks_incomplete_natural_end_as_failed_session_state():
     state = store.load_query_loop_state(session_id)
     state.tool_use_context["missing_terminal_action_nudge_count"] = 1
     store.save_query_loop_state(session_id, state)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=FakeModelClient(responses=[{"content": "让我继续审查媒体上传和内部 API。"}]),
         tool_registry=ToolRegistry([EchoTool()]),
@@ -643,7 +643,7 @@ def test_runner_marks_required_terminal_action_exhaustion_as_failed_session_stat
     state = store.load_query_loop_state(session_id)
     state.tool_use_context["missing_terminal_action_nudge_count"] = 2
     store.save_query_loop_state(session_id, state)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=FakeModelClient(
             responses=[
@@ -776,39 +776,39 @@ def test_query_loop_runs_pre_model_pipeline_in_restored_order(monkeypatch):
     events: list[str] = []
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.get_messages_after_compact_boundary",
+        "app.services.runtime.query_loop.get_messages_after_compact_boundary",
         lambda messages, state: (events.append("compact_boundary"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.apply_tool_result_budget",
+        "app.services.runtime.query_loop.apply_tool_result_budget",
         lambda messages, state: (events.append("tool_result_budget"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.apply_history_snip",
+        "app.services.runtime.query_loop.apply_history_snip",
         lambda messages, state: (events.append("history_snip"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.apply_microcompact",
+        "app.services.runtime.query_loop.apply_microcompact",
         lambda messages, state: (events.append("microcompact"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.apply_context_collapse_if_needed",
+        "app.services.runtime.query_loop.apply_context_collapse_if_needed",
         lambda messages, state: (events.append("context_collapse"), (list(messages), state))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.auto_compact_if_needed",
+        "app.services.runtime.query_loop.auto_compact_if_needed",
         lambda messages, state, **kwargs: (events.append("autocompact"), type("Decision", (), {"was_compacted": False, "consecutive_failures": None, "compaction_result": None})())[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.append_system_context",
+        "app.services.runtime.query_loop.append_system_context",
         lambda system_prompt, runtime_state: (events.append("append_system_context"), system_prompt)[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.prepend_user_context",
+        "app.services.runtime.query_loop.prepend_user_context",
         lambda messages, runtime_state: (events.append("prepend_user_context"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.normalize_messages_for_model",
+        "app.services.runtime.query_loop.normalize_messages_for_model",
         lambda messages: (events.append("normalize_messages"), list(messages))[1],
     )
 
@@ -865,11 +865,11 @@ def test_query_loop_saves_between_turn_attachments_and_pending_summary(monkeypat
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.build_between_turn_attachments",
+        "app.services.runtime.query_loop.build_between_turn_attachments",
         lambda **kwargs: [TranscriptItem(role=RuntimeMessageRole.USER, content="memory attachment", name="memory_attachment")],
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.start_pending_tool_use_summary",
+        "app.services.runtime.query_loop.start_pending_tool_use_summary",
         lambda **kwargs: {"status": "pending", "tool_names": ["echo"]},
     )
 
@@ -1050,7 +1050,7 @@ def test_query_loop_uses_stop_hook_blocking_when_runtime_requests_correction(mon
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.evaluate_stop_hooks",
+        "app.services.runtime.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": ["Need to justify the auth bypass conclusion with concrete sink evidence."],
             "prevent_continuation": False,
@@ -1075,7 +1075,7 @@ def test_query_loop_respects_stop_hook_prevented_terminal_reason(monkeypatch):
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.evaluate_stop_hooks",
+        "app.services.runtime.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": [],
             "prevent_continuation": True,
@@ -1098,14 +1098,14 @@ def test_query_loop_uses_token_budget_continuation_when_budget_allows_more_work(
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.evaluate_stop_hooks",
+        "app.services.runtime.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": [],
             "prevent_continuation": False,
         },
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.evaluate_token_budget_continuation",
+        "app.services.runtime.query_loop.evaluate_token_budget_continuation",
         lambda **kwargs: {
             "should_continue": True,
             "message": "Keep investigating until you either exhaust plausible paths or produce stronger evidence.",
@@ -1139,7 +1139,7 @@ def test_query_loop_can_stop_after_tool_execution_when_hook_requests_stop(monkey
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.evaluate_post_tool_hooks",
+        "app.services.runtime.query_loop.evaluate_post_tool_hooks",
         lambda **kwargs: {"hook_stopped": True},
     )
 
@@ -1267,7 +1267,7 @@ def test_runner_marks_prompt_too_long_as_failed_session_state():
             },
         ]
     )
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=ToolRegistry(),
@@ -1435,7 +1435,7 @@ def test_runner_stops_when_runtime_hook_checkpoint_requests_post_tool_stop():
     )
     registry = ToolRegistry([EchoTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -1661,7 +1661,7 @@ def test_query_loop_uses_auto_compact_orchestrator_output_as_model_transcript(mo
         })()
 
     monkeypatch.setattr(
-        "app.services.review_runtime.query_loop.auto_compact_if_needed",
+        "app.services.runtime.query_loop.auto_compact_if_needed",
         lambda messages, state, **kwargs: _Decision(),
     )
 
@@ -1696,7 +1696,7 @@ def test_runner_with_unbounded_max_turns_runs_until_terminal_result():
     )
     registry = ToolRegistry([EchoTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,
@@ -1756,7 +1756,7 @@ def test_runner_activates_deferred_tools_after_tool_search_selection():
         ]
     )
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
-    runner = FindingRuntimeRunner(
+    runner = RuntimeRunner(
         session_store=store,
         model_client=client,
         tool_registry=registry,

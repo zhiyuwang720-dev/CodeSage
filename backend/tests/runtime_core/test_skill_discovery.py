@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.runtime_core.session_state import SessionRuntimeState
+from app.services.session.state import SessionRuntimeState
 from app.services.skill.scheduler import SkillDiscoveryScheduler
 
 

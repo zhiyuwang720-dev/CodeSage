@@ -3,8 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
-from app.services.review_runtime.compaction.compact import partial_compact_conversation
-from app.services.review_runtime.compaction.post_compact import build_post_compact_messages
+from app.services.runtime.compaction.compact import partial_compact_conversation
+from app.services.runtime.compaction.post_compact import build_post_compact_messages
 from app.services.contracts.models import (
     RuntimeContinueReason,
     RuntimeMessageRole,
@@ -12,7 +12,7 @@ from app.services.contracts.models import (
     RuntimeStopReason,
     TranscriptItem,
 )
-from app.services.review_runtime.query_context import recover_context_collapse_from_overflow
+from app.services.runtime.query_context import recover_context_collapse_from_overflow
 from app.services.contracts.query_state import QueryLoopState
 
 ESCALATED_MAX_OUTPUT_TOKENS = 64000

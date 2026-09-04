@@ -7,8 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.review_runtime.bridge import (
-    FindingRuntimeBridge,
+from app.services.runtime.bridge import (
+    RuntimeBridge,
     NATIVE_TOOL_CALLING_REMINDER,
     RuntimeLLMModelClient,
 )
@@ -55,7 +55,7 @@ class FakeLLMService:
         self.calls = []
 
     async def chat_completion(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None):
-        assert agent_type == "finding"
+        assert agent_type == "review:security"
         assert parallel_tool_calls is True
         assert tools is not None
         self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens})
@@ -64,7 +64,7 @@ class FakeLLMService:
         return self.responses.pop(0)
 
     async def chat_completion_stream(self, *, messages, agent_type, tools, parallel_tool_calls, max_tokens=None, retry_enabled=True):
-        assert agent_type == "finding"
+        assert agent_type == "review:security"
         self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens, "stream": True, "retry_enabled": retry_enabled})
         if not self.responses:
             yield {"type": "done", "content": "{}", "usage": {}, "tool_calls": []}
@@ -95,14 +95,14 @@ def build_session_factory():
 
 def test_runtime_model_client_uses_openai_tool_messages_for_claude_openai_compatible():
     llm = FakeLLMServiceWithConfig(provider="claude", endpoint_protocol="openai_compatible")
-    client = RuntimeLLMModelClient(llm_service=llm, agent_type="finding")
+    client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
 
     assert client._resolve_tool_message_format().value == "openai_tools"
 
 
 def test_runtime_model_client_uses_anthropic_blocks_for_anthropic_endpoint():
     llm = FakeLLMServiceWithConfig(provider="claude", endpoint_protocol="anthropic")
-    client = RuntimeLLMModelClient(llm_service=llm, agent_type="finding")
+    client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
 
     assert client._resolve_tool_message_format().value == "anthropic_blocks"
 
@@ -143,7 +143,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
         return RuntimeMemoryBundle()
 
     monkeypatch.setattr(
-        "app.services.review_runtime.adapters.finding.FindingRuntimeAdapter.run",
+        "app.services.runtime.adapters.session.RuntimeSessionAdapter.run",
         fake_adapter_run,
     )
     monkeypatch.setattr(
@@ -151,7 +151,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
         fake_skill_preload,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.memory.RuntimeMemoryManager.preload",
+        "app.services.memory.runtime.RuntimeMemoryManager.preload",
         fake_memory_preload,
     )
 
@@ -168,7 +168,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
             ]
         ]
     )
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=llm,
         tools=[],
         session_factory=build_session_factory(),
@@ -219,19 +219,19 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
         return self._session_store.load_session_snapshot(session_id), {"findings": [], "summary": "stub"}
 
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeRunner.__init__",
+        "app.services.runtime.bridge.RuntimeRunner.__init__",
         fake_runner_init,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.adapters.finding.FindingRuntimeAdapter.run",
+        "app.services.runtime.adapters.session.RuntimeSessionAdapter.run",
         fake_adapter_run,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeBridge._ensure_payload",
+        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
 
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=[],
         session_factory=build_session_factory(),
@@ -267,7 +267,7 @@ def test_continue_dialogue_session_syncs_resume_instruction_and_nudges_empty_res
             ]
         ]
     )
-    bridge = FindingRuntimeBridge(llm_service=llm, tools=[], session_factory=session_factory)
+    bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=session_factory)
     session_id = bridge._session_store.create_session(project_id="project-1", system_prompt="system")
     bridge._session_store.append_message(
         session_id,
@@ -277,7 +277,7 @@ def test_continue_dialogue_session_syncs_resume_instruction_and_nudges_empty_res
     asyncio.run(
         bridge.continue_dialogue_session(
             session_id=session_id,
-            model_name="finding-runtime",
+            model_name="review-runtime",
             max_turns=1,
         )
     )
@@ -298,11 +298,11 @@ def test_bridge_attempts_finalizer_after_incomplete_terminal_action():
         completion_mode=RuntimeCompletionMode.INCOMPLETE,
     )
 
-    assert FindingRuntimeBridge._should_attempt_finalizer(result) is True
+    assert RuntimeBridge._should_attempt_finalizer(result) is True
 
 
 def test_bridge_finalizer_prompt_does_not_force_empty_findings_for_incomplete_audit():
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=build_session_factory())
+    bridge = RuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=build_session_factory())
 
     prompt = bridge._default_finalizer_prompts()[0]
 
@@ -313,7 +313,7 @@ def test_bridge_finalizer_prompt_does_not_force_empty_findings_for_incomplete_au
 
 def test_bridge_fallback_summary_uses_last_assistant_message():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
+    bridge = RuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -328,7 +328,7 @@ def test_bridge_fallback_summary_uses_last_assistant_message():
 
 def test_bridge_fallback_payload_recovers_findings_from_assistant_transcript():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
+    bridge = RuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -353,12 +353,12 @@ def test_bridge_fallback_payload_recovers_findings_from_assistant_transcript():
     assert {finding["vulnerability_type"] for finding in payload["recovered_candidates"]} >= {"idor", "ssrf"}
     assert all(candidate["needs_verification"] is True for candidate in payload["recovered_candidates"])
     assert "候选线索" in payload["summary"]
-    assert "不是最终漏洞结论" in payload["summary"]
+    assert "不是最终结论" in payload["summary"]
 
 
 def test_bridge_fallback_payload_marks_recovered_candidates_as_incomplete():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
+    bridge = RuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -377,11 +377,11 @@ def test_bridge_fallback_payload_marks_recovered_candidates_as_incomplete():
     assert payload["runtime_completion_mode"] == "incomplete"
     assert payload["is_final"] is False
     assert payload["requires_retry"] is True
-    assert "不是最终漏洞结论" in payload["summary"]
+    assert "不是最终结论" in payload["summary"]
 
 
 def test_bridge_exposes_restored_style_runtime_tools():
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=_file_tools(),
         session_factory=build_session_factory(),
@@ -406,7 +406,7 @@ def test_bridge_exposes_shell_runtime_tools_when_shell_backend_is_available(monk
     monkeypatch.setattr("app.services.tooling.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
     monkeypatch.setattr("app.services.tooling.registry.is_powershell_runtime_tool_enabled", lambda: True)
 
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=_file_tools(project_root="D:/repo"),
         session_factory=build_session_factory(),
@@ -420,15 +420,15 @@ def test_bridge_exposes_shell_runtime_tools_when_shell_backend_is_available(monk
 
 def test_bridge_skips_system_transcript_messages_when_building_model_payload():
     llm = FakeLLMService([{"content": "{}", "finish_reason": "stop", "tool_calls": []}])
-    client = FindingRuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
+    client = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
     model_client = client._llm_service
     del model_client
     runtime_client = client.__class__.__dict__  # keep bridge imported
     del runtime_client
 
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
     asyncio.run(
         llm_client.complete(
@@ -459,7 +459,7 @@ def test_native_tool_calling_reminder_requires_actual_tool_call_or_terminal_json
 
 
 def test_bridge_extracts_json_from_mixed_final_answer():
-    payload = FindingRuntimeBridge._parse_payload(
+    payload = RuntimeBridge._parse_payload(
         "Thought: enough evidence collected.\nFinal Answer: {\"findings\": [{\"title\": \"auth bypass\"}], \"summary\": \"done\"}"
     )
 
@@ -514,7 +514,7 @@ def test_runtime_model_client_complete_stream_emits_tokens_and_returns_tool_call
             ]
         ]
     )
-    client = RuntimeLLMModelClient(llm_service=llm, agent_type="finding")
+    client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
 
     streamed_events = []
 
@@ -557,7 +557,7 @@ def test_bridge_run_chat_session_stream_emits_runtime_events():
             ]
         ]
     )
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=llm,
         tools=[],
         session_factory=build_session_factory(),
@@ -614,15 +614,15 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
         fake_skill_preload,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeRunner.run_once",
+        "app.services.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeBridge._ensure_payload",
+        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
 
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=[],
         session_factory=build_session_factory(),
@@ -640,7 +640,7 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
     runtime_state.metadata["last_user_message"] = "continue audit"
     store.replace_runtime_state(session_id, runtime_state)
 
-    result = asyncio.run(bridge.continue_session(session_id=session_id, model_name="finding-runtime"))
+    result = asyncio.run(bridge.continue_session(session_id=session_id, model_name="review-runtime"))
 
     snapshot = store.load_session_snapshot(session_id)
     refreshed_runtime_state = store.load_runtime_state(session_id)
@@ -649,7 +649,7 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
     assert [skill.skill_ref for skill in snapshot.skills] == ["new-skill"]
     assert "fresh skill prompt" in (snapshot.session.system_prompt or "")
     assert "use new skill if it helps" in (snapshot.session.system_prompt or "")
-    assert refreshed_runtime_state.metadata["skill_catalog"]["finding"]["available_skills"] == ["new-skill"]
+    assert refreshed_runtime_state.metadata["skill_catalog"]["review:security"]["available_skills"] == ["new-skill"]
     assert refreshed_runtime_state.metadata["last_user_message"] == "continue audit"
 def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
     async def fake_skill_preload(self, *, user_id, agent_type, context):
@@ -701,11 +701,11 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
         fake_skill_preload,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeRunner.run_once",
+        "app.services.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeBridge._ensure_payload",
+        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
     monkeypatch.setattr(
@@ -713,7 +713,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
         fake_get_skill_body,
     )
 
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=[],
         session_factory=build_session_factory(),
@@ -731,7 +731,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
     runtime_state.metadata["last_user_message"] = "use the report writer skill to draft the CVE report"
     store.replace_runtime_state(session_id, runtime_state)
 
-    asyncio.run(bridge.continue_session(session_id=session_id, model_name="finding-runtime"))
+    asyncio.run(bridge.continue_session(session_id=session_id, model_name="review-runtime"))
 
     snapshot = store.load_session_snapshot(session_id)
     refreshed_runtime_state = store.load_runtime_state(session_id)
@@ -739,7 +739,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
     assert "Discovery scheduler selected: cve-report-writer" in (snapshot.session.system_prompt or "")
     assert "bootstrap for cve-report-writer" not in (snapshot.session.system_prompt or "")
     assert store.list_skill_invocations(session_id) == []
-    assert refreshed_runtime_state.metadata["skill_discovery"]["finding"]["selected_skill"] == "cve-report-writer"
+    assert refreshed_runtime_state.metadata["skill_discovery"]["review:security"]["selected_skill"] == "cve-report-writer"
 
 def test_runtime_model_client_classifies_max_output_tokens_responses():
     llm = FakeLLMService([
@@ -749,9 +749,9 @@ def test_runtime_model_client_classifies_max_output_tokens_responses():
             "tool_calls": [],
         }
     ])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     response = asyncio.run(
@@ -778,9 +778,9 @@ def test_runtime_model_client_classifies_prompt_too_long_errors():
             "error_message": "context too large",
         }
     ])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     response = asyncio.run(
@@ -807,11 +807,11 @@ def test_bridge_skips_finalizer_for_non_finalizable_terminal_reason(monkeypatch)
         return TurnExecutionResult(turn_id="turn-1", stop_reason=RuntimeStopReason.PROMPT_TOO_LONG)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.adapters.finding.FindingRuntimeAdapter.refresh_session_context",
+        "app.services.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
         fake_refresh_session_context,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeRunner.run_once",
+        "app.services.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
 
@@ -822,7 +822,7 @@ def test_bridge_skips_finalizer_for_non_finalizable_terminal_reason(monkeypatch)
             "tool_calls": [],
         }
     ])
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=llm,
         tools=[],
         session_factory=build_session_factory(),
@@ -835,7 +835,7 @@ def test_bridge_skips_finalizer_for_non_finalizable_terminal_reason(monkeypatch)
     result = asyncio.run(
         bridge.continue_session_until_payload(
             session_id=session_id,
-            model_name="finding-runtime",
+            model_name="review-runtime",
             payload_extractor=bridge.extract_final_payload,
             finalizer_prompts=bridge._default_finalizer_prompts(),
             fallback_payload_builder=bridge._default_fallback_payload,
@@ -857,9 +857,9 @@ def test_runtime_model_client_passes_max_output_tokens_override_to_llm_service()
             "tool_calls": [],
         }
     ])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     asyncio.run(
@@ -884,15 +884,15 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
         return TurnExecutionResult(turn_id="turn-1", stop_reason=RuntimeStopReason.COMPLETED)
 
     monkeypatch.setattr(
-        "app.services.review_runtime.adapters.finding.FindingRuntimeAdapter.refresh_session_context",
+        "app.services.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
         fake_refresh_session_context,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.bridge.FindingRuntimeRunner.run_once",
+        "app.services.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
 
-    bridge = FindingRuntimeBridge(
+    bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
         tools=[],
         session_factory=build_session_factory(),
@@ -905,7 +905,7 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
     result = asyncio.run(
         bridge.continue_session_until_payload(
             session_id=session_id,
-            model_name="finding-runtime",
+            model_name="review-runtime",
             payload_extractor=bridge.extract_final_payload,
             finalizer_prompts=bridge._default_finalizer_prompts(),
             fallback_payload_builder=bridge._default_fallback_payload,
@@ -941,9 +941,9 @@ def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done
             yield {"type": "done", "content": "Need tool", "finish_reason": "stop"}
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     async def collect_events():
@@ -982,9 +982,9 @@ def test_runtime_model_client_stream_complete_does_not_reemit_done_tool_calls():
             }
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     async def collect_events():
@@ -1020,9 +1020,9 @@ def test_runtime_model_client_stream_complete_passthroughs_llm_retry_events():
             yield {"type": "done", "content": "恢复完成", "finish_reason": "stop"}
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.review_runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
-        agent_type="finding",
+        agent_type="review:security",
     )
 
     async def collect_events():
