@@ -5,9 +5,6 @@ from typing import Optional
 from app.services.skill_file_service import SkillFileService
 
 from .file_tool import FileReadTool, ReadManyFilesTool, FileSearchTool, ListFilesTool
-from .interaction_agent_tools import AskUserTool, EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool
-from .skill_tool import SkillBodyTool, SkillResourceTool
-from .thinking_tool import ReflectTool, ThinkTool
 
 
 def shared_skill_library_roots() -> list[str]:
@@ -20,14 +17,13 @@ def build_shared_agent_tool_catalog(
     exclude_patterns: Optional[list[str]] = None,
     target_files: Optional[list[str]] = None,
 ) -> dict[str, object]:
-    tools: dict[str, object] = {
-        "think": ThinkTool(),
-        "reflect": ReflectTool(),
-        "TodoWrite": TodoWriteTool(),
-        "AskUser": AskUserTool(),
-        "EnterPlanMode": EnterPlanModeTool(),
-        "ExitPlanMode": ExitPlanModeTool(),
-    }
+    """06-P1 起只保留文件运行时四件(读取侧由 Canonical* 包装成 RuntimeTool)。
+
+    AskUser/EnterPlanMode/ExitPlanMode/TodoWrite 的活版本是 RuntimeTool 变体,由
+    build_runtime_tool_registry 直接注入;legacy AgentTool 副本(interaction/skill/thinking)
+    已于 P1 退役,这里不再产出对应死键。
+    """
+    tools: dict[str, object] = {}
 
     if project_root:
         shared_roots = shared_skill_library_roots()
@@ -41,28 +37,3 @@ def build_shared_agent_tool_catalog(
         )
 
     return tools
-
-
-def build_agent_skill_tools(*, user_id: str | None, agent_type: str) -> dict[str, object]:
-    return {
-        "load_skill_body": SkillBodyTool(user_id, agent_type=agent_type),
-        "skill_resource_lookup": SkillResourceTool(user_id, agent_type=agent_type),
-    }
-
-
-def build_agent_tool_catalog(
-    *,
-    project_root: str | None,
-    user_id: str | None,
-    agent_type: str,
-    exclude_patterns: Optional[list[str]] = None,
-    target_files: Optional[list[str]] = None,
-) -> dict[str, object]:
-    return {
-        **build_shared_agent_tool_catalog(
-            project_root=project_root,
-            exclude_patterns=exclude_patterns,
-            target_files=target_files,
-        ),
-        **build_agent_skill_tools(user_id=user_id, agent_type=agent_type),
-    }

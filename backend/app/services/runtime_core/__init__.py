@@ -26,8 +26,6 @@ __all__ = [
     "AgentRuntimeState",
     "InvokedSkillState",
     "SessionRuntimeState",
-    "RuntimeSessionRegistry",
-    "runtime_session_registry",
     "RuntimePermissionRuntime",
     "ToolPermissionDecision",
     "build_runtime_tool_registry",
