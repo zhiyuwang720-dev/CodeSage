@@ -23,7 +23,7 @@ RUNTIME_TOOL_TIMEOUT_HINT = "工具执行超时：请缩小 path/glob/pattern �
 
 
 # 06-P2: RuntimeTool ABC 与 ToolExecutionContext 迁往契约层; 引擎仍经本模块再导出,
-# 既有 `from ...runtime_core.tool_runtime import RuntimeTool` 引用点不受影响。
+# 既有 `from ...tooling.runtime import RuntimeTool` 引用点不受影响。
 from app.services.contracts.tools import RuntimeTool, ToolExecutionContext
 
 

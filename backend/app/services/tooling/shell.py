@@ -10,7 +10,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.agent.tools.base import AgentTool
 from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.permission_runtime import ToolPermissionDecision
 from app.services.runtime_core.runtime_guardrails import (
@@ -19,7 +18,7 @@ from app.services.runtime_core.runtime_guardrails import (
     has_shell_approval,
     is_guardrails_enabled,
 )
-from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext
 
 DEFAULT_TIMEOUT_MS = 30_000
 MAX_TIMEOUT_MS = 600_000
@@ -399,7 +398,7 @@ class BashRuntimeTool(RuntimeTool):
         self,
         *,
         project_root: str,
-        backend_tool: AgentTool | None = None,
+        backend_tool: Any | None = None,
         executable: str | None = None,
         session_store=None,
     ):
@@ -505,7 +504,7 @@ class PowerShellRuntimeTool(RuntimeTool):
         self,
         *,
         project_root: str,
-        backend_tool: AgentTool | None = None,
+        backend_tool: Any | None = None,
         executable: str | None = None,
         session_store=None,
     ):

@@ -42,11 +42,12 @@ from app.services.review_runtime.query_degradation import handle_recoverable_res
 from app.services.review_runtime.query_messages import normalize_messages_for_model
 from app.services.contracts.query_state import QueryLoopState
 from app.services.review_runtime.session_store import AuditSessionPersistenceError
-from app.services.runtime_core.tool_search_runtime import TOOL_SEARCH_TOOL_NAME
+from app.services.tooling.search import TOOL_SEARCH_TOOL_NAME
 
 # 终点工具名(阶段 02 §3.4.1 参数化): 各领域的终结工具在此登记,
 # 桥接层的 continue_session_until_payload(finalizer_tools=...) 走完全参数化路径。
-TERMINAL_TOOL_NAMES = {"FinalizeFinding", "FinalizeVulnerabilityReports", "FinalizeReview"}
+# 06-P4: 运行时仅保留 review:* 三种角色, finding/vulnerability_reports 终点名退役。
+TERMINAL_TOOL_NAMES = {"FinalizeReview"}
 from app.services.review_runtime.query_stop_hooks import (
     build_stop_hook_artifact_messages,
     build_stop_hook_messages,
@@ -352,8 +353,8 @@ class QueryLoop:
                     content=(
                         "你刚刚使用了纯文本工具调用语法（例如 Tool Call:/Action:），这类内容不会被执行。"
                         "如果还需要继续审计，请改用模型提供方原生的结构化工具调用重新发起同一动作。"
-                        "如果你已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，请调用 FinalizeFinding 提交最终结构化结果。"
-                        "如果只是已有一个漏洞或仍有高风险方向未检查，请继续调用工具审计，不要提前终止。"
+                        "如果你已经充分完成本次审查的主要范围，并准备结束整个审查阶段，请调用 FinalizeReview 提交最终结构化评论集。"
+                        "如果审查尚未完成或仍有高价值文件未检查，请继续调用工具审查，不要提前终止。"
                     ),
                     name="legacy_tool_syntax_nudge",
                     metadata={"synthetic": True, "kind": "legacy_tool_syntax_nudge"},
@@ -723,22 +724,22 @@ class QueryLoop:
                     content=(
                         "你刚刚表达了还要继续审查的意图，但没有真正执行动作。"
                         "如果还需要继续收集证据，请直接调用下一次工具；"
-                        "如果你已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，请调用 FinalizeFinding 提交最终结构化结果。"
-                        "如果只是已有一个漏洞或仍有高风险方向未检查，请继续调用工具审计，不要提前终止。"
+                        "如果你已经充分完成本次审查的主要范围，并准备结束整个审查阶段，请调用 FinalizeReview 提交最终结构化评论集。"
+                        "如果审查尚未完成或仍有高价值文件未检查，请继续调用工具审查，不要提前终止。"
                         "不要只描述下一步计划而不执行。"
                     ),
                     name="terminal_action_nudge",
                     metadata={"synthetic": True, "kind": "terminal_action_nudge"},
                 )
                 nudge_message.content = self._terminal_action_nudge_message or (
-                    "你的上一条回复没有发起任何工具调用，也没有提交最终结构化结果，因此 Finding 阶段尚未完成。\n\n"
+                    "你的上一条回复没有发起任何工具调用，也没有提交最终结构化结果，因此本次审查阶段尚未完成。\n\n"
                     "下一条 assistant 响应必须满足以下二选一：\n"
-                    "1. 如果还需要继续审计、追踪、读取、搜索、验证、补齐证据，或还没有充分覆盖主要高风险攻击面，必须立即调用 "
+                    "1. 如果还需要继续审查、追踪、读取、搜索、验证、补齐证据，或还没有覆盖完计划内的高价值文件，必须立即调用 "
                     "Read/Grep/Glob/Skill/PowerShell 等合适工具。\n"
-                    "2. 如果已经充分完成主要攻击面覆盖，并且准备结束整个 Finding 阶段，必须调用 FinalizeFinding；或输出严格可解析的 "
+                    "2. 如果已经完成本次审查的主要范围，并准备结束整个审查阶段，必须调用 FinalizeReview；或输出严格可解析的 "
                     "{\"findings\": [...], \"summary\": \"...\"} JSON。\n\n"
-                    "发现第一个完整漏洞不等于审计完成；FinalizeFinding 调用成功后会终止 Finding 阶段，不要把它当作阶段性保存工具。\n"
-                    "不要再只用自然语言说明“继续审计”“让我检查”“下一步会做什么”。"
+                    "还没有覆盖完所有应审查的文件不等于审查完成；FinalizeReview 调用成功后会终止审查阶段，不要把它当作阶段性保存工具。\n"
+                    "不要再只用自然语言说明“继续审查”“让我检查”“下一步会做什么”。"
                     "继续就必须实际调用工具，完成就必须提交结构化终点。"
                 )
                 if empty_model_response:
@@ -746,8 +747,8 @@ class QueryLoop:
                     nudge_message.content = (
                         "上一轮模型流正常结束，但没有返回任何正文、reasoning 或原生工具调用。"
                         "这不是完成，不能停在这里。下一条 assistant 响应必须二选一："
-                        "仍需审计就立即调用 Read/Grep/Glob/Skill/PowerShell 等工具；"
-                        "审计已完成就调用 FinalizeFinding 提交结构化结果。"
+                        "仍需审查就立即调用 Read/Grep/Glob/Skill/PowerShell 等工具；"
+                        "审查已完成就调用 FinalizeReview 提交结构化结果。"
                     )
                     nudge_message.metadata = {"synthetic": True, "kind": "empty_model_response_nudge"}
                 next_state = build_continue_state(state, messages=[*working_messages, nudge_message], transition=transition)
@@ -1546,7 +1547,7 @@ class QueryLoop:
                 return RuntimeTerminalAction.FINALIZE_TRIAGE
             if tool_name == "FinalizeVulnerabilityReports":
                 return RuntimeTerminalAction.FINALIZE_VULNERABILITY_REPORTS
-        return RuntimeTerminalAction.FINALIZE_FINDING
+        return RuntimeTerminalAction.FINALIZE_REVIEW
 
     def _should_issue_terminal_action_nudge(
         self,

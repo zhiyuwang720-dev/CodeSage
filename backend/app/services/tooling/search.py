@@ -6,7 +6,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field
 
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext, ToolRegistry
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext, ToolRegistry
 
 
 TOOL_SEARCH_TOOL_NAME = "ToolSearch"

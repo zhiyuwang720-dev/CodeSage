@@ -1,32 +1,14 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.agent.tools.base import AgentTool, ToolResult
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.runtime_core.runtime_tool_registry import build_runtime_tool_registry
-from app.services.runtime_core.tool_runtime import ToolExecutionContext
-
-
-class FakeAgentTool(AgentTool):
-    def __init__(self, name: str):
-        super().__init__()
-        self._name = name
-        self.calls: list[dict] = []
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def description(self) -> str:
-        return f"Tool {self._name}"
-
-    async def _execute(self, **kwargs):
-        self.calls.append(kwargs)
-        return ToolResult(success=True, data={"received": kwargs})
+from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool
+from app.services.tooling.runtime import ToolExecutionContext
 
 
 def build_store() -> AuditSessionStore:
@@ -45,22 +27,24 @@ def build_context() -> ToolExecutionContext:
     )
 
 
-def build_registry(*, list_tool: FakeAgentTool | None = None, search_tool: FakeAgentTool | None = None):
-    return build_runtime_tool_registry(
-        session_store=build_store(),
-        agent_tools={
-            "read_file": FakeAgentTool("read_file"),
-            "read_many_files": FakeAgentTool("read_many_files"),
-            "list_files": list_tool or FakeAgentTool("list_files"),
-            "search_code": search_tool or FakeAgentTool("search_code"),
-        },
-        agent_type="finding",
-        user_id="user-1",
-    )
+def make_workspace(tmp_path) -> str:
+    (tmp_path / "a.py").write_text("def dangerous():\n    return 1\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.txt").write_text("hello dangerous world\n", encoding="utf-8")
+    return str(tmp_path)
 
 
-def test_grep_defaults_to_250_results():
-    grep = build_registry().get("Grep")
+def build_grep(project_root: str) -> GrepRuntimeTool:
+    return GrepRuntimeTool(project_root=project_root)
+
+
+def build_glob(project_root: str) -> GlobRuntimeTool:
+    return GlobRuntimeTool(project_root=project_root)
+
+
+def test_grep_defaults_to_250_results(tmp_path):
+    grep = build_grep(make_workspace(tmp_path))
 
     parsed = grep.validate_input({"pattern": "dangerous"})
 
@@ -72,38 +56,36 @@ def test_grep_defaults_to_250_results():
     assert grep.execution_timeout_seconds(extended, build_context()) == 122
 
 
-async def test_grep_caps_requested_results_to_250_and_warns():
-    search_tool = FakeAgentTool("search_code")
-    grep = build_registry(search_tool=search_tool).get("Grep")
+async def test_grep_caps_requested_results_to_250_and_warns(tmp_path):
+    grep = build_grep(make_workspace(tmp_path))
 
     parsed = grep.validate_input({"pattern": "dangerous", "max_results": 999})
     payload = await grep.execute(parsed, build_context())
 
-    assert search_tool.calls[-1]["max_results"] == 250
     assert payload.metadata["truncated"] is True
+    assert payload.output_payload["applied_limit"] == 250
     assert "结果被截断，使用更具体的 path 或 pattern" in payload.content
 
 
-def test_glob_defaults_to_100_files():
-    glob = build_registry().get("Glob")
+def test_glob_defaults_to_100_files(tmp_path):
+    glob = build_glob(make_workspace(tmp_path))
 
-    parsed = glob.validate_input({"pattern": "**/*.py"})
+    parsed = glob.validate_input({})
 
     assert parsed.max_results == 100
     assert parsed.timeout_seconds == 45
     assert glob.execution_timeout_seconds(parsed, build_context()) == 47
 
-    extended = glob.validate_input({"pattern": "**/*.py", "timeout_seconds": 120})
+    extended = glob.validate_input({"timeout_seconds": 120})
     assert glob.execution_timeout_seconds(extended, build_context()) == 122
 
 
-async def test_glob_caps_requested_files_to_100_and_warns():
-    list_tool = FakeAgentTool("list_files")
-    glob = build_registry(list_tool=list_tool).get("Glob")
+async def test_glob_caps_requested_files_to_100_and_warns(tmp_path):
+    glob = build_glob(make_workspace(tmp_path))
 
-    parsed = glob.validate_input({"pattern": "**/*.py", "max_results": 999})
+    parsed = glob.validate_input({"max_results": 999})
     payload = await glob.execute(parsed, build_context())
 
-    assert list_tool.calls[-1]["max_files"] == 100
     assert payload.metadata["truncated"] is True
+    assert payload.output_payload["applied_limit"] == 100
     assert "结果被截断，使用更具体的 path 或 pattern" in payload.content

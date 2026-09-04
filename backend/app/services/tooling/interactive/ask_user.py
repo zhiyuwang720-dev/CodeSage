@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.services.contracts.models import ToolExecutionPayload
 from app.services.runtime_core.interaction_runtime import InteractionRuntime
-from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext
 
 
 class AskUserInput(BaseModel):

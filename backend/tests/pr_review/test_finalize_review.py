@@ -3,7 +3,7 @@ import asyncio
 import json
 
 from app.services.contracts.models import RuntimeCompletionMode, RuntimeTerminalAction
-from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
+from app.services.tooling.finalize_review import FinalizeReviewTool
 from tests.pr_review.fake_runtime import (
     ScriptedLLMService,
     ScriptedModelClient,
@@ -73,7 +73,7 @@ def test_real_queryloop_finalize_terminal(tmp_path):
     store, runner, registry = build_review_runner(factory, ScriptedModelClient(llm), project_root=tmp_path)
     tool_names = [t.name for t in registry.enabled_tools()]
     assert "FinalizeReview" in tool_names, "review:* 注册表自动挂 FinalizeReview"
-    assert "FinalizeFinding" not in tool_names, "不挂 finding 终点工具"
+    assert "FinalizeVulnerabilityReports" not in tool_names, "不挂 finding 终点工具"
 
     session_id = create_review_session(store, SAMPLE_DIFF, "你是 Security 视角。")
     result = asyncio.run(runner.run_once(session_id=session_id, model_name="review:security"))

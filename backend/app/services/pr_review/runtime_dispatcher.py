@@ -91,7 +91,7 @@ class RuntimePerspectiveDispatcher:
         self,
         *,
         llm_service,
-        tools: dict[str, Any],
+        tools: list[Any],
         project_id: str,
         task_id: str | None = None,
         user_id: str | None = None,
@@ -111,7 +111,7 @@ class RuntimePerspectiveDispatcher:
 
     async def __call__(self, perspective: str, ctx: Any, followup_findings: list[dict] | None = None) -> dict:
         from app.services.review_runtime.bridge import FindingRuntimeBridge
-        from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
+        from app.services.tooling.finalize_review import FinalizeReviewTool
 
         spec = build_review_perspective_spec(perspective)
         bridge = FindingRuntimeBridge(

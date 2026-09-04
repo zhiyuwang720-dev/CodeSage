@@ -4,37 +4,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.agent.tools.base import AgentTool, ToolResult
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.runtime_core.runtime_tool_registry import build_runtime_tool_registry
-from app.services.runtime_core.tool_runtime import ToolExecutionContext
-
-
-class FakeAgentTool(AgentTool):
-    def __init__(self, name: str):
-        super().__init__()
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def description(self) -> str:
-        return f"Tool {self._name}"
-
-    async def _execute(self, **kwargs):
-        return ToolResult(success=True, data=kwargs)
-
-
-class RecordingAgentTool(FakeAgentTool):
-    def __init__(self, name: str):
-        super().__init__(name)
-        self.calls: list[dict] = []
-
-    async def _execute(self, **kwargs):
-        self.calls.append(kwargs)
-        return ToolResult(success=True, data={"received": kwargs})
+from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.services.tooling.registry import build_runtime_tool_registry
+from app.services.tooling.runtime import ToolExecutionContext
 
 
 def build_store() -> AuditSessionStore:
@@ -53,16 +26,19 @@ def build_tool_context() -> ToolExecutionContext:
     )
 
 
+def build_file_tools(*, project_root: str = "D:/repo") -> list:
+    return [
+        ReadRuntimeTool(project_root=project_root),
+        GlobRuntimeTool(project_root=project_root),
+        GrepRuntimeTool(project_root=project_root),
+    ]
+
+
 def test_runtime_tool_registry_builder_exposes_shared_runtime_tools_for_agent():
     store = build_store()
     registry = build_runtime_tool_registry(
         session_store=store,
-        agent_tools={
-            "read_file": FakeAgentTool("read_file"),
-            "read_many_files": FakeAgentTool("read_many_files"),
-            "list_files": FakeAgentTool("list_files"),
-            "search_code": FakeAgentTool("search_code"),
-        },
+        file_tools=build_file_tools(),
         agent_type="recon",
         user_id="user-1",
     )
@@ -87,12 +63,7 @@ def test_runtime_tool_descriptions_explain_audit_usage_and_continue_contract():
     store = build_store()
     registry = build_runtime_tool_registry(
         session_store=store,
-        agent_tools={
-            "read_file": FakeAgentTool("read_file"),
-            "read_many_files": FakeAgentTool("read_many_files"),
-            "list_files": FakeAgentTool("list_files"),
-            "search_code": FakeAgentTool("search_code"),
-        },
+        file_tools=build_file_tools(),
         agent_type="finding",
         user_id="user-1",
     )

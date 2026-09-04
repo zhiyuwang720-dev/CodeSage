@@ -226,7 +226,7 @@ async def run_review_pipeline_async(
             await maybe_awaitable
 
     if dispatcher is None:
-        from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
+        from app.services.tooling.builder import build_runtime_tool_catalog
         from app.services.llm.service import LLMService
 
         from .runtime_dispatcher import RuntimePerspectiveDispatcher
@@ -234,7 +234,7 @@ async def run_review_pipeline_async(
         project_root = ctx.source_dir or workspace_root or "."
         dispatcher = RuntimePerspectiveDispatcher(
             llm_service=LLMService(),
-            tools=build_shared_agent_tool_catalog(project_root=project_root),
+            tools=build_runtime_tool_catalog(project_root=project_root),
             project_id=ctx.pr_key or ctx.repo,
             task_id=options.get("task_id"),
             session_factory=session_factory,

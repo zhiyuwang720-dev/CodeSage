@@ -2,7 +2,8 @@
 import pytest
 
 from app.services.pr_review.orchestrator import TOOL_MATRICES
-from app.services.runtime_core.runtime_tool_registry import build_runtime_tool_registry
+from app.services.tooling.builder import build_runtime_tool_catalog
+from app.services.tooling.registry import build_runtime_tool_registry
 from tests.pr_review.fake_runtime import build_review_runner, make_session_factory
 
 
@@ -14,6 +15,7 @@ def registry_names(tmp_path):
 
 
 def _names(tmp_path, agent_type: str, allowlist: set[str] | None = None):
+    del allowlist
     factory = make_session_factory(tmp_path)
     _, _, registry = build_review_runner(
         factory, object().__new__(object), project_root=tmp_path, agent_type=agent_type,
@@ -24,37 +26,32 @@ def _names(tmp_path, agent_type: str, allowlist: set[str] | None = None):
 def test_review_registry_has_finalize_review_not_finding(tmp_path):
     names = _names(tmp_path, "review:security")
     assert "FinalizeReview" in names
-    assert "FinalizeFinding" not in names
+    assert "FinalizeVulnerabilityReports" not in names
 
 
-def test_finding_registry_unaffected(tmp_path):
-    """finding 注册表保持原行为(FinalizeFinding), 不含 review 终点。"""
-    from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
-
+def test_non_review_registry_has_no_terminal_finalizer(tmp_path):
+    """非 review:* 注册表不挂任何终点工具(finding 终点工具已随 P4 退役)。"""
     factory = make_session_factory(tmp_path)
     session_store = factory()
     registry = build_runtime_tool_registry(
         session_store=session_store,
-        agent_tools=build_shared_agent_tool_catalog(project_root=str(tmp_path)),
+        file_tools=build_runtime_tool_catalog(project_root=str(tmp_path)),
         agent_type="finding",
-        include_finding_finalizer=True,
     )
     names = {t.name for t in registry.enabled_tools()}
-    assert "FinalizeFinding" in names
     assert "FinalizeReview" not in names
+    assert not {"FinalizeReview", "FinalizeVulnerabilityReports"} & names
 
 
 def test_allowlist_filters_tools(tmp_path):
     """tool_allowlist 裁剪: 架构视角按矩阵保留 Read/Glob/Grep/Bash/PowerShell/Skill, 但无 Write。"""
     factory = make_session_factory(tmp_path)
     session_store = factory()
-    from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
 
     registry = build_runtime_tool_registry(
         session_store=session_store,
-        agent_tools=build_shared_agent_tool_catalog(project_root=str(tmp_path)),
+        file_tools=build_runtime_tool_catalog(project_root=str(tmp_path)),
         agent_type="review:architecture",
-        include_finding_finalizer=False,
         tool_allowlist=TOOL_MATRICES["architecture"],
     )
     names = {t.name for t in registry.enabled_tools()}

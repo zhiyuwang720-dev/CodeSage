@@ -281,7 +281,7 @@ async def _build_runtime_follow_up_context(
     db: AsyncSession,
 ) -> tuple[FindingRuntimeBridge, str, int | None]:
     from app.api.v1.endpoints.agent_tasks import _get_project_root, _get_user_config
-    from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
+    from app.services.tooling.builder import build_runtime_tool_catalog
 
     task = await db.get(AgentTask, session.task_id) if session.task_id else None
     project = await db.get(Project, session.project_id)
@@ -318,8 +318,8 @@ async def _build_runtime_follow_up_context(
 
     llm_service = LLMService(user_config=_build_agent_user_config(user_config, "finding"))
     # 06-P1: finding legacy `_initialize_tools` 整链退役 —— 运行时续聊与 pr_review 分发器
-    # 同源, 直接用文件运行时工具四件作为 bridge 工具集(注册表内部挂 Canonical*/RuntimeTool)。
-    tools = build_shared_agent_tool_catalog(
+    # 同源, 直接用文件运行时工具目录作为 bridge 文件工具集(注册表内部补 Skill/Shell/Write/交互)。
+    tools = build_runtime_tool_catalog(
         project_root=project_root,
         exclude_patterns=task.exclude_patterns,
         target_files=target_files,

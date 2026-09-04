@@ -1,7 +1,7 @@
-"""FinalizeReview 终结工具(阶段 02 §3.4): 替代 FinalizeFinding 的 PR 审查终点。
+"""FinalizeReview 终结工具(阶段 02 §3.4): PR 审查终点。
 
-同机制复用(finalize_finding.py): 校验失败返回 finalization_rejected 反馈给模型,
-校验通过返回 final_payload 并触发终止(terminal_action)。
+校验失败返回 finalization_rejected 反馈给模型, 校验通过返回 final_payload 并触发终止
+(terminal_action)。
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.services.contracts.final_review_contract import (
     format_validation_errors,
 )
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext
 
 
 class InvalidFinalizeReviewInput:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.config import settings
-from app.services.agent.tools.sandbox_tool import SandboxManager
+from app.services.tooling.sandbox import SandboxManager
 
 
 def test_sandbox_manager_maps_managed_workspace_to_host_root(monkeypatch):

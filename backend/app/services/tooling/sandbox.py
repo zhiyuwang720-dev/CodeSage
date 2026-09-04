@@ -1,6 +1,6 @@
 """
-沙箱管理器(06-P1: 仅保留 SandboxConfig + SandboxManager; legacy AgentTool 子类退役)。
-Docker 沙箱命令执行由 SandboxManager.execute_command 提供; 删除的 AgentTool 类:
+沙箱管理器(06-P1: 仅保留 SandboxConfig + SandboxManager; legacy 工具子类退役)。
+Docker 沙箱命令执行由 SandboxManager.execute_command 提供; 删除的 legacy 类:
 SandboxTool/SandboxHttpTool/VulnerabilityVerifyTool/PhpTestTool/CommandInjectionTestTool。
 """
 

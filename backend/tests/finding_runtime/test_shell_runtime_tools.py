@@ -1,41 +1,54 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 
-from app.services.agent.tools.base import AgentTool, ToolResult
 from app.services.review_runtime.session_store import AuditSessionStore
 from app.db.base import Base
-from app.services.runtime_core.runtime_tool_registry import build_runtime_tool_registry
+from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.services.tooling.registry import build_runtime_tool_registry
 from app.services.runtime_core.runtime_guardrails import register_shell_approval
-from app.services.runtime_core.shell_runtime_tools import (
+from app.services.tooling.shell import (
     BashRuntimeTool,
     BashToolInput,
     PowerShellRuntimeTool,
     PowerShellToolInput,
 )
-from app.services.runtime_core.tool_runtime import ToolExecutionContext
+from app.services.tooling.runtime import ToolExecutionContext
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
-class FakeExecAgentTool(AgentTool):
+class _FakeBackendResult:
+    success = True
+    error = None
+
+    def __init__(self, data=None, metadata=None):
+        self.data = data or {"stdout": "ok", "stderr": "", "exit_code": 0}
+        self.metadata = metadata or {}
+
+    def to_dict(self):
+        return {
+            "success": self.success,
+            "data": self.data,
+            "error": self.error,
+            "duration_ms": 0,
+            "metadata": self.metadata,
+        }
+
+    def to_string(self):
+        return "ok"
+
+
+class FakeExecBackend:
+    """沙箱 shell 后端替身: 鸭子类型兼容 Bash/PowerShell 工具的 backend_tool 路径。"""
+
     def __init__(self, name: str = "sandbox_exec"):
-        super().__init__()
-        self._name = name
+        self.name = name
         self.calls: list[dict] = []
-        self.project_root = "D:/repo"
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def description(self) -> str:
-        return f"Tool {self._name}"
-
-    async def _execute(self, **kwargs):
-        self.calls.append(dict(kwargs))
-        return ToolResult(success=True, data={"stdout": "ok", "stderr": "", "exit_code": 0}, metadata={"backend": self._name})
+    async def execute(self, command=None, timeout=None):
+        self.calls.append({"command": command, "timeout": timeout})
+        return _FakeBackendResult(metadata={"backend": self.name})
 
 
 def _context() -> ToolExecutionContext:
@@ -46,6 +59,14 @@ def _store() -> AuditSessionStore:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return AuditSessionStore(session_factory=sessionmaker(bind=engine))
+
+
+def _file_tools(project_root: str) -> list:
+    return [
+        ReadRuntimeTool(project_root=project_root),
+        GlobRuntimeTool(project_root=project_root),
+        GrepRuntimeTool(project_root=project_root),
+    ]
 
 
 def test_bash_runtime_tool_matches_restored_style_metadata_and_safety_flags():
@@ -75,8 +96,8 @@ def test_bash_runtime_tool_matches_restored_style_metadata_and_safety_flags():
 
 
 def test_bash_runtime_tool_executes_with_backend_tool_when_present(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
-    backend = FakeExecAgentTool()
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    backend = FakeExecBackend()
     tool = BashRuntimeTool(project_root="D:/repo", backend_tool=backend, executable=None)
 
     payload = asyncio.run(tool.execute(BashToolInput(command="ls -la", timeout=9_000), _context()))
@@ -111,23 +132,13 @@ def test_powershell_runtime_tool_matches_restored_style_metadata_and_safety_flag
 
 
 def test_runtime_tool_registry_adds_shell_tools_when_shell_backends_are_available(monkeypatch):
-    sandbox_exec = FakeExecAgentTool("sandbox_exec")
-    read_tool = FakeExecAgentTool("read_file")
-    list_tool = FakeExecAgentTool("list_files")
-    search_tool = FakeExecAgentTool("search_code")
-
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.detect_bash_executable", lambda: None)
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.is_powershell_runtime_tool_enabled", lambda: True)
+    monkeypatch.setattr("app.services.tooling.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
+    monkeypatch.setattr("app.services.tooling.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    monkeypatch.setattr("app.services.tooling.registry.is_powershell_runtime_tool_enabled", lambda: True)
 
     registry = build_runtime_tool_registry(
-        session_store=object(),
-        agent_tools={
-            "read_file": read_tool,
-            "list_files": list_tool,
-            "search_code": search_tool,
-            "sandbox_exec": sandbox_exec,
-        },
+        session_store=_store(),
+        file_tools=_file_tools("D:/repo"),
         agent_type="finding",
         user_id=None,
     )
@@ -139,13 +150,13 @@ def test_runtime_tool_registry_adds_shell_tools_when_shell_backends_are_availabl
 
 
 def test_bash_runtime_tool_requires_approval_for_mutating_commands_when_guardrails_are_enabled(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.metadata["guardrails"] = {"enabled": True}
     store.replace_runtime_state(session_id, runtime_state)
-    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecAgentTool(), executable=None, session_store=store)
+    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
 
     decision = asyncio.run(
         tool.check_permission(
@@ -160,7 +171,7 @@ def test_bash_runtime_tool_requires_approval_for_mutating_commands_when_guardrai
 
 
 def test_bash_runtime_tool_allows_session_approved_mutating_command(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -172,7 +183,7 @@ def test_bash_runtime_tool_allows_session_approved_mutating_command(monkeypatch)
         guardrail_code="shell_command_requires_approval",
     )
     store.replace_runtime_state(session_id, runtime_state)
-    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecAgentTool(), executable=None, session_store=store)
+    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
 
     decision = asyncio.run(
         tool.check_permission(
@@ -185,13 +196,13 @@ def test_bash_runtime_tool_allows_session_approved_mutating_command(monkeypatch)
 
 
 def test_bash_runtime_tool_requires_approval_for_destructive_commands_when_guardrails_are_enabled(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.metadata["guardrails"] = {"enabled": True}
     store.replace_runtime_state(session_id, runtime_state)
-    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecAgentTool(), executable=None, session_store=store)
+    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
 
     decision = asyncio.run(
         tool.check_permission(
@@ -206,10 +217,10 @@ def test_bash_runtime_tool_requires_approval_for_destructive_commands_when_guard
 
 
 def test_bash_runtime_tool_allows_destructive_commands_when_guardrails_are_disabled(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
-    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecAgentTool(), executable=None, session_store=store)
+    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
 
     decision = asyncio.run(
         tool.check_permission(
@@ -222,13 +233,13 @@ def test_bash_runtime_tool_allows_destructive_commands_when_guardrails_are_disab
 
 
 def test_bash_runtime_tool_requires_approval_for_commands_targeting_paths_outside_project_root(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.metadata["guardrails"] = {"enabled": True}
     store.replace_runtime_state(session_id, runtime_state)
-    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecAgentTool(), executable=None, session_store=store)
+    tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
 
     decision = asyncio.run(
         tool.check_permission(
@@ -243,7 +254,7 @@ def test_bash_runtime_tool_requires_approval_for_commands_targeting_paths_outsid
 
 
 def test_bash_runtime_tool_consumes_single_use_shell_approval_after_first_execution(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -256,7 +267,7 @@ def test_bash_runtime_tool_consumes_single_use_shell_approval_after_first_execut
         scope="single_use",
     )
     store.replace_runtime_state(session_id, runtime_state)
-    backend = FakeExecAgentTool()
+    backend = FakeExecBackend()
     tool = BashRuntimeTool(project_root="D:/repo", backend_tool=backend, executable=None, session_store=store)
     context = ToolExecutionContext(session_id=session_id, turn_id="turn-1", tool_use_id="tool-use-1", tool_call_id="tool-call-1")
 
@@ -290,7 +301,7 @@ def test_bash_runtime_tool_consumes_single_use_shell_approval_after_first_execut
 
 
 def test_bash_runtime_tool_keeps_session_scope_shell_approval_reusable(monkeypatch):
-    monkeypatch.setattr("app.services.runtime_core.shell_runtime_tools.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -303,7 +314,7 @@ def test_bash_runtime_tool_keeps_session_scope_shell_approval_reusable(monkeypat
         scope="session",
     )
     store.replace_runtime_state(session_id, runtime_state)
-    backend = FakeExecAgentTool()
+    backend = FakeExecBackend()
     tool = BashRuntimeTool(project_root="D:/repo", backend_tool=backend, executable=None, session_store=store)
 
     first_decision = asyncio.run(

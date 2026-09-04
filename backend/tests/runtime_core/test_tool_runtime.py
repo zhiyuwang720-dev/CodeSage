@@ -12,15 +12,15 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
 from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload
-from app.services.agent.tools.todo_runtime_tool import TodoWriteRuntimeTool
+from app.services.tooling.interactive.todo import TodoWriteRuntimeTool
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.runtime_core.tool_runtime import (
+from app.services.tooling.runtime import (
     RuntimeTool,
     ToolExecutionContext,
     ToolOrchestrator,
     ToolRegistry,
 )
-from app.services.runtime_core.runtime_tool_registry import CanonicalWriteTool
+from app.services.tooling.write import WriteRuntimeTool
 
 
 class EchoInput(BaseModel):
@@ -335,7 +335,7 @@ def test_canonical_write_tool_writes_artifacts_under_managed_output_dir():
     session_id = store.create_session(project_id="project-1")
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool()])
+    registry = ToolRegistry([WriteRuntimeTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -380,7 +380,7 @@ def test_canonical_write_tool_treats_any_dot_auditai_path_as_managed_output():
     session_id = store.create_session(project_id="project-1")
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool()])
+    registry = ToolRegistry([WriteRuntimeTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -428,7 +428,7 @@ def test_canonical_write_tool_prefers_configured_project_root_over_session_paylo
     stale_root = tmp_path / "stale-project"
     project_root.mkdir()
     stale_root.mkdir()
-    registry = ToolRegistry([CanonicalWriteTool(project_root=str(project_root))])
+    registry = ToolRegistry([WriteRuntimeTool(project_root=str(project_root))])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -473,7 +473,7 @@ def test_canonical_write_tool_requires_approval_for_source_tree_writes():
     runtime_state.metadata["guardrails"] = {"enabled": True}
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -517,7 +517,7 @@ def test_canonical_write_tool_allows_source_tree_write_when_guardrails_are_disab
     session_id = store.create_session(project_id="project-1")
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -568,7 +568,7 @@ def test_canonical_write_tool_allows_session_approved_source_tree_write():
     ]
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -617,7 +617,7 @@ def test_canonical_write_tool_requires_approval_before_overwriting_existing_arti
     existing_file = project_root / ".auditai" / "reports" / "report.md"
     existing_file.parent.mkdir(parents=True, exist_ok=True)
     existing_file.write_text("old", encoding="utf-8")
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     try:
         records = asyncio.run(
@@ -670,7 +670,7 @@ def test_canonical_write_tool_consumes_single_use_source_write_approval_after_fi
     ]
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     session_ref = type(
         "SessionRef",
@@ -743,7 +743,7 @@ def test_canonical_write_tool_keeps_session_scope_source_write_approval_reusable
     ]
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
-    registry = ToolRegistry([CanonicalWriteTool(session_store=store)])
+    registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
     session_ref = type(
         "SessionRef",

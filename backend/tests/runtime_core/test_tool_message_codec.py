@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.runtime_core.tool_message_codec import (
+from app.services.tooling.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )

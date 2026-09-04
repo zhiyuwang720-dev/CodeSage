@@ -10,7 +10,7 @@ from app.db.base import Base
 from app.models.audit_session import AuditToolCallStatus
 from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.review_runtime.tooling import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
 
 
 class EchoInput(BaseModel):

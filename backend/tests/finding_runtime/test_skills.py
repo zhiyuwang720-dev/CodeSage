@@ -10,7 +10,7 @@ from app.models.audit_session import AuditSkillInvocationStatus
 from app.services.review_runtime.session_store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.skill.tool import RuntimeSkillTool
-from app.services.review_runtime.tooling import ToolExecutionContext
+from app.services.tooling.runtime import ToolExecutionContext
 
 
 class FakeSkillService:

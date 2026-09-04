@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
+from app.services.tooling.builder import build_runtime_tool_catalog
 from app.services.contracts.models import (
     RuntimeMessageRole,
     RuntimeModelResponse,
@@ -20,8 +20,8 @@ from app.services.contracts.models import (
 )
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.runtime_core import build_runtime_tool_registry
-from app.services.runtime_core.tool_message_codec import build_runtime_model_messages
+from app.services.tooling.registry import build_runtime_tool_registry
+from app.services.tooling.codec import build_runtime_model_messages
 
 
 def make_session_factory(tmp_path):
@@ -61,7 +61,7 @@ class ScriptedLLMService:
 class ScriptedModelClient:
     """spike SpikeModelClient 的测试版: 包装 ScriptedLLMService → RuntimeModelResponse。"""
 
-    FINALIZER_TOOL_NAMES = {"FinalizeFinding", "FinalizeReview", "FinalizeVulnerabilityReports"}
+    FINALIZER_TOOL_NAMES = {"FinalizeReview"}
 
     def __init__(self, llm_service):
         self._llm_service = llm_service
@@ -150,11 +150,10 @@ def build_review_runner(
     session_store = AuditSessionStore(session_factory=session_factory)
     registry = build_runtime_tool_registry(
         session_store=session_store,
-        agent_tools=build_shared_agent_tool_catalog(project_root=str(project_root)),
+        file_tools=build_runtime_tool_catalog(project_root=str(project_root)),
         agent_type=agent_type,
-        include_finding_finalizer=False,
     )
-    from app.services.runtime_core.tool_runtime import ToolOrchestrator
+    from app.services.tooling.runtime import ToolOrchestrator
 
     orchestrator = ToolOrchestrator(session_store=session_store, tool_registry=registry)
     runner = FindingRuntimeRunner(

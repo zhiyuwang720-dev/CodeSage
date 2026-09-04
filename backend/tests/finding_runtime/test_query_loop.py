@@ -19,13 +19,13 @@ from app.services.contracts.models import (
     TranscriptItem,
 )
 from app.services.review_runtime.query_loop import QueryLoop
-from app.services.runtime_core.tool_search_runtime import ToolSearchRuntimeTool
+from app.services.tooling.search import ToolSearchRuntimeTool
 from app.services.contracts.query_state import QueryLoopState
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.skill.tool import RuntimeSkillTool
-from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
-from app.services.review_runtime.tooling import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
+from app.services.tooling.finalize_review import FinalizeReviewTool
+from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
 
 
 class FakeModelClient:
@@ -118,57 +118,33 @@ def _messages_without_system(snapshot):
     return [message for message in snapshot.messages if message.role != RuntimeMessageRole.SYSTEM.value]
 
 
-def _valid_finalize_input() -> dict:
-    return {
-        "findings": [
-            {
-                "vulnerability_type": "ssrf",
-                "severity": "high",
-                "title": "SSRF in webhook fetcher",
-                "description": "The webhook fetcher accepts a user-controlled URL and fetches it without an SSRF allowlist.",
-                "file_path": "pkg/modules/webhook/webhook.go",
-                "line_start": 99,
-                "line_end": 131,
-                "code_snippet": "target := r.Header.Get(\"Gotenberg-Webhook-Url\")",
-                "source": "HTTP header Gotenberg-Webhook-Url",
-                "sink": "retryablehttp client request to the supplied webhook URL",
-                "suggestion": "Validate webhook URLs with a strict allowlist and block loopback/link-local/private ranges.",
-                "confidence": 0.95,
-                "needs_verification": True,
-                "verdict": "candidate",
-                "exploit_chain": [
-                    {
-                        "step": 1,
-                        "location": "pkg/modules/webhook/webhook.go:99-131",
-                        "description": "User-controlled webhook URL is accepted from the request header.",
-                        "data_state": "The URL remains attacker controlled.",
-                        "bypass_reason": "No SSRF allowlist is applied before the outbound request.",
-                    }
-                ],
-                "poc": {
-                    "description": "Submit a webhook URL pointing at a loopback service and observe the server initiating the request.",
-                    "preconditions": ["Webhook feature is enabled."],
-                    "steps": [
-                        {
-                            "step": 1,
-                            "action": "Send a conversion request with Gotenberg-Webhook-Url set to http://127.0.0.1:8080/admin.",
-                            "request": "POST /forms/chromium/convert/url",
-                            "expected_response": "The server attempts to contact the supplied internal URL.",
-                        }
-                    ],
-                    "payload": "Gotenberg-Webhook-Url: http://127.0.0.1:8080/admin",
-                    "impact": "An authenticated attacker can pivot the server into internal HTTP services.",
-                    "cve_justification": "The issue exposes SSRF reachability through a network-facing endpoint.",
-                },
-                "impact": "An attacker can reach internal network services from the server.",
-                "cve_justification": "Network-reachable SSRF with internal service impact is CVE-relevant.",
-                "verification_notes": "Source, sink, and propagation path were verified in code.",
-            }
-        ],
-        "summary": "Completed audit with one structured SSRF candidate.",
-        "completion_note": "Evidence chain is closed.",
-        "needs_handoff": True,
+def _review_finding(**overrides) -> dict:
+    base = {
+        "rule_id": "SEC-SSRF",
+        "severity": "high",
+        "category": "security",
+        "title": "SSRF in webhook fetcher",
+        "description": "The webhook fetcher accepts a user-controlled URL and fetches it without an SSRF allowlist.",
+        "file_path": "pkg/modules/webhook/webhook.go",
+        "line_start": 99,
+        "line_end": 131,
+        "code_snippet": "target := r.Header.Get(\"Gotenberg-Webhook-Url\")",
+        "suggestion": "Validate webhook URLs with a strict allowlist.",
+        "confidence": 0.95,
+        "needs_verification": True,
+        "verdict": "confirmed",
+        "source": "security",
     }
+    base.update(overrides)
+    return base
+
+
+def _valid_review_input() -> dict:
+    return {
+        "findings": [_review_finding()],
+        "summary": "Completed review with one structured SSRF comment.",
+    }
+
 
 
 def test_query_loop_run_turn_persists_assistant_reply_and_turn():
@@ -372,25 +348,25 @@ def test_query_loop_rejects_textual_tool_call_fallback_and_requests_native_tool_
     assert snapshot.checkpoints[-1].state_payload["transition"] == RuntimeContinueReason.LEGACY_TOOL_SYNTAX_NUDGE.value
 
 
-def test_runner_finalize_finding_tool_marks_terminal_completion():
+def test_runner_finalize_review_tool_marks_terminal_completion():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect code"))
     client = FakeModelClient(
         responses=[
             {
-                "content": "Ready to submit final findings",
+                "content": "Ready to submit final review",
                 "tool_calls": [
                     {
                         "id": "tool-1",
-                        "name": "FinalizeFinding",
-                        "input": _valid_finalize_input(),
+                        "name": "FinalizeReview",
+                        "input": _valid_review_input(),
                     }
                 ],
             }
         ]
     )
-    registry = ToolRegistry([FinalizeFindingTool()])
+    registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
     runner = FindingRuntimeRunner(
         session_store=store,
@@ -402,23 +378,22 @@ def test_runner_finalize_finding_tool_marks_terminal_completion():
     result = asyncio.run(runner.run_once(session_id=session_id, model_name="gpt-test"))
 
     assert result.stop_reason is RuntimeStopReason.COMPLETED
-    assert result.terminal_action is RuntimeTerminalAction.FINALIZE_FINDING
+    assert result.terminal_action is RuntimeTerminalAction.FINALIZE_REVIEW
     assert result.completion_mode is RuntimeCompletionMode.FINALIZE_TOOL
-    assert result.final_payload == _valid_finalize_input()
+    assert result.final_payload == _valid_review_input()
 
 
-def test_finalize_finding_description_explains_terminal_contract_and_required_fields():
-    description = FinalizeFindingTool.description
+def test_finalize_review_description_explains_terminal_contract_and_required_fields():
+    description = FinalizeReviewTool.description
 
-    assert "提交 Finding 阶段的最终结构化审计结论" in description
-    assert "这是终点工具" in description
-    assert "审计完成且没有确认可报告漏洞时" in description
-    assert "不要调用 FinalizeFinding" in description
-    assert "vulnerability_type、severity、title、description" in description
-    assert "不要只用自然语言宣布“审计完成”" in description
+    assert "提交 PR 审查的最终结构化评论集" in description
+    assert "这是终点工具，不是记录中间发现的工具" in description
+    assert "rule_id、severity(low/medium/high/critical)、category" in description
+    assert "line_start/line_end 必须落在 diff 新增行" in description
+    assert "不要只用自然语言宣布“审查完成”" in description
 
 
-def test_runner_rejects_reason_only_finalize_finding_payload_without_terminal_completion():
+def test_runner_rejects_reason_only_finalize_review_payload_without_terminal_completion():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect code"))
@@ -429,11 +404,11 @@ def test_runner_rejects_reason_only_finalize_finding_payload_without_terminal_co
                 "tool_calls": [
                     {
                         "id": "tool-1",
-                        "name": "FinalizeFinding",
+                        "name": "FinalizeReview",
                         "input": {
                             "findings": [
                                 {
-                                    "reason": "SSRF vulnerability with the exploit chain and PoC hidden in free-form prose.",
+                                    "reason": "SSRF vulnerability described only in free-form prose.",
                                 }
                             ],
                             "summary": "Found SSRF.",
@@ -447,7 +422,7 @@ def test_runner_rejects_reason_only_finalize_finding_payload_without_terminal_co
             },
         ]
     )
-    registry = ToolRegistry([FinalizeFindingTool()])
+    registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
     runner = FindingRuntimeRunner(
         session_store=store,
@@ -464,10 +439,10 @@ def test_runner_rejects_reason_only_finalize_finding_payload_without_terminal_co
     assert len(client.calls) == 2
     assert snapshot.tool_calls[0].status == AuditToolCallStatus.COMPLETED.value
     assert snapshot.tool_calls[0].output_payload["finalization_rejected"] is True
-    assert "reason" in snapshot.tool_calls[0].output_payload["validation_errors"][0]["message"]
+    assert snapshot.tool_calls[0].output_payload["validation_errors"]
 
 
-def test_runner_invalid_finalize_finding_continues_with_tool_error_feedback():
+def test_runner_invalid_finalize_review_continues_with_tool_error_feedback():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="继续审查"))
@@ -478,15 +453,16 @@ def test_runner_invalid_finalize_finding_continues_with_tool_error_feedback():
                 "tool_calls": [
                     {
                         "id": "tool-1",
-                        "name": "FinalizeFinding",
+                        "name": "FinalizeReview",
                         "input": {
                             "findings": [
                                 {
+                                    "rule_id": "SEC-SSRF",
                                     "title": "SSRF in webhook fetcher",
                                     "severity": "high",
-                                    "vulnerability_type": "ssrf",
                                 }
-                            ]
+                            ],
+                            "summary": "partial fields",
                         },
                     }
                 ],
@@ -497,7 +473,7 @@ def test_runner_invalid_finalize_finding_continues_with_tool_error_feedback():
             },
         ]
     )
-    registry = ToolRegistry([FinalizeFindingTool()])
+    registry = ToolRegistry([FinalizeReviewTool()])
     orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry)
     runner = FindingRuntimeRunner(
         session_store=store,

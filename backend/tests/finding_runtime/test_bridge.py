@@ -21,7 +21,7 @@ from app.services.contracts.models import (
     TranscriptItem,
     TurnExecutionResult,
 )
-from app.services.agent.tools.base import AgentTool, ToolResult
+from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
 
 
 @pytest.fixture(autouse=True)
@@ -41,21 +41,12 @@ def _force_streaming_path():
         _cfg.LLM_DISABLE_STREAMING = original
 
 
-class FakeAgentTool(AgentTool):
-    def __init__(self, name: str):
-        super().__init__()
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def description(self) -> str:
-        return f"Tool {self._name}"
-
-    async def _execute(self, **kwargs):
-        return ToolResult(success=True, data=kwargs)
+def _file_tools(*, project_root: str = "D:/repo") -> list:
+    return [
+        ReadRuntimeTool(project_root=project_root),
+        GlobRuntimeTool(project_root=project_root),
+        GrepRuntimeTool(project_root=project_root),
+    ]
 
 
 class FakeLLMService:
@@ -179,7 +170,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
     )
     bridge = FindingRuntimeBridge(
         llm_service=llm,
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
 
@@ -242,7 +233,7 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
 
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
 
@@ -276,7 +267,7 @@ def test_continue_dialogue_session_syncs_resume_instruction_and_nudges_empty_res
             ]
         ]
     )
-    bridge = FindingRuntimeBridge(llm_service=llm, tools={}, session_factory=session_factory)
+    bridge = FindingRuntimeBridge(llm_service=llm, tools=[], session_factory=session_factory)
     session_id = bridge._session_store.create_session(project_id="project-1", system_prompt="system")
     bridge._session_store.append_message(
         session_id,
@@ -311,18 +302,18 @@ def test_bridge_attempts_finalizer_after_incomplete_terminal_action():
 
 
 def test_bridge_finalizer_prompt_does_not_force_empty_findings_for_incomplete_audit():
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools={}, session_factory=build_session_factory())
+    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=build_session_factory())
 
     prompt = bridge._default_finalizer_prompts()[0]
 
-    assert "只有在审计已经完成" in prompt
+    assert "只有在审查已经完成" in prompt
     assert "如果仍需继续查看文件、验证调用链、补齐 source/sink/PoC/影响面" in prompt
     assert "证据不足" not in prompt
 
 
 def test_bridge_fallback_summary_uses_last_assistant_message():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools={}, session_factory=session_factory)
+    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -337,7 +328,7 @@ def test_bridge_fallback_summary_uses_last_assistant_message():
 
 def test_bridge_fallback_payload_recovers_findings_from_assistant_transcript():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools={}, session_factory=session_factory)
+    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -367,7 +358,7 @@ def test_bridge_fallback_payload_recovers_findings_from_assistant_transcript():
 
 def test_bridge_fallback_payload_marks_recovered_candidates_as_incomplete():
     session_factory = build_session_factory()
-    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools={}, session_factory=session_factory)
+    bridge = FindingRuntimeBridge(llm_service=FakeLLMService([]), tools=[], session_factory=session_factory)
     store = bridge._session_store
     session_id = store.create_session(project_id="project-1", system_prompt="system")
     store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
@@ -392,13 +383,7 @@ def test_bridge_fallback_payload_marks_recovered_candidates_as_incomplete():
 def test_bridge_exposes_restored_style_runtime_tools():
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={
-            "read_file": FakeAgentTool("read_file"),
-            "read_many_files": FakeAgentTool("read_many_files"),
-            "list_files": FakeAgentTool("list_files"),
-            "search_code": FakeAgentTool("search_code"),
-            "think": FakeAgentTool("think"),
-        },
+        tools=_file_tools(),
         session_factory=build_session_factory(),
     )
 
@@ -417,25 +402,13 @@ def test_bridge_exposes_restored_style_runtime_tools():
 
 
 def test_bridge_exposes_shell_runtime_tools_when_shell_backend_is_available(monkeypatch):
-    read_tool = FakeAgentTool("read_file")
-    read_tool.project_root = "D:/repo"
-    list_tool = FakeAgentTool("list_files")
-    list_tool.project_root = "D:/repo"
-    search_tool = FakeAgentTool("search_code")
-    search_tool.project_root = "D:/repo"
-
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.detect_bash_executable", lambda: None)
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
-    monkeypatch.setattr("app.services.runtime_core.runtime_tool_registry.is_powershell_runtime_tool_enabled", lambda: True)
+    monkeypatch.setattr("app.services.tooling.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
+    monkeypatch.setattr("app.services.tooling.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    monkeypatch.setattr("app.services.tooling.registry.is_powershell_runtime_tool_enabled", lambda: True)
 
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={
-            "read_file": read_tool,
-            "list_files": list_tool,
-            "search_code": search_tool,
-            "sandbox_exec": FakeAgentTool("sandbox_exec"),
-        },
+        tools=_file_tools(project_root="D:/repo"),
         session_factory=build_session_factory(),
     )
 
@@ -447,7 +420,7 @@ def test_bridge_exposes_shell_runtime_tools_when_shell_backend_is_available(monk
 
 def test_bridge_skips_system_transcript_messages_when_building_model_payload():
     llm = FakeLLMService([{"content": "{}", "finish_reason": "stop", "tool_calls": []}])
-    client = FindingRuntimeBridge(llm_service=llm, tools={}, session_factory=build_session_factory())
+    client = FindingRuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
     model_client = client._llm_service
     del model_client
     runtime_client = client.__class__.__dict__  # keep bridge imported
@@ -497,16 +470,16 @@ def test_runtime_model_client_formats_tool_error_result_as_structured_feedback()
     mapped = RuntimeLLMModelClient._map_transcript_item(
         TranscriptItem(
             role=RuntimeMessageRole.TOOL_RESULT,
-            content="Invalid input for tool 'FinalizeFinding': summary: Field required",
-            name="FinalizeFinding",
+            content="Invalid input for tool 'Write': path: Field required",
+            name="Write",
             metadata={"status": "invalid", "is_error": True, "duration_ms": 7},
             payload={
                 "tool_use_id": "tool-1",
                 "tool_call_id": "call-1",
-                "tool_name": "FinalizeFinding",
-                "input": {"findings": [{"title": "SSRF"}]},
+                "tool_name": "Write",
+                "input": {"content": "hello"},
                 "output": {},
-                "error_message": "Invalid input for tool 'FinalizeFinding': summary: Field required",
+                "error_message": "Invalid input for tool 'Write': path: Field required",
             },
         )
     )
@@ -514,7 +487,7 @@ def test_runtime_model_client_formats_tool_error_result_as_structured_feedback()
     assert mapped is not None
     assert mapped["role"] == "user"
     assert "工具执行失败" in mapped["content"]
-    assert '"tool_name": "FinalizeFinding"' in mapped["content"]
+    assert '"tool_name": "Write"' in mapped["content"]
     assert '"is_error": true' in mapped["content"]
     assert '"status": "invalid"' in mapped["content"]
 
@@ -586,7 +559,7 @@ def test_bridge_run_chat_session_stream_emits_runtime_events():
     )
     bridge = FindingRuntimeBridge(
         llm_service=llm,
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
 
@@ -651,7 +624,7 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
 
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
     store = bridge._session_store
@@ -742,7 +715,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
 
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
     store = bridge._session_store
@@ -851,7 +824,7 @@ def test_bridge_skips_finalizer_for_non_finalizable_terminal_reason(monkeypatch)
     ])
     bridge = FindingRuntimeBridge(
         llm_service=llm,
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
     store = bridge._session_store
@@ -921,7 +894,7 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
 
     bridge = FindingRuntimeBridge(
         llm_service=FakeLLMService([]),
-        tools={},
+        tools=[],
         session_factory=build_session_factory(),
     )
     store = bridge._session_store
@@ -955,7 +928,7 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
 
     assert result["final_payload"]["findings"] == []
     assert len(finalization_prompts) == 1
-    assert "FinalizeFinding" in finalization_prompts[0].content
+    assert "FinalizeReview" in finalization_prompts[0].content
 
 
 

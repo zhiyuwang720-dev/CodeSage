@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.services.review_runtime.session_store import AuditSessionStore
 from app.services.runtime_core.permission_runtime import RuntimePermissionRuntime
-from app.services.runtime_core.tool_runtime import ToolExecutionContext
+from app.services.tooling.runtime import ToolExecutionContext
 
 
 def build_store() -> AuditSessionStore:

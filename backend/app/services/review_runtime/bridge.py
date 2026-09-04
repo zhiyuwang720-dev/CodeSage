@@ -21,10 +21,10 @@ from app.services.contracts.models import (
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
-from app.services.review_runtime.tooling import ToolOrchestrator, ToolRegistry
-from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
-from app.services.runtime_core import build_runtime_tool_registry
-from app.services.runtime_core.tool_message_codec import (
+from app.services.tooling.runtime import ToolOrchestrator, ToolRegistry
+from app.services.tooling.finalize_review import FinalizeReviewTool
+from app.services.tooling.registry import build_runtime_tool_registry
+from app.services.tooling.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )
@@ -35,15 +35,16 @@ INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lo
 AUTO_FINALIZER_PROMPTS_ENABLED = True
 RESUME_TERMINAL_ACTION_NUDGE_LIMIT = 5
 RUNTIME_FINALIZATION_PROMPT = (
-    "你正在处理 Finding 阶段的最终提交恢复流程。\n\n"
-    "不要因为当前已经存在一个完整漏洞就直接结束。FinalizeFinding 是终点工具，调用成功后审计会立即停止。\n\n"
-    "如果审计尚未充分覆盖主要攻击面，或者仍存在需要继续验证的高价值候选，请不要调用 FinalizeFinding；"
+    "你正在处理本次审查的最终提交恢复流程。\n\n"
+    "不要因为当前已经存在一条完整评论就直接结束。FinalizeReview 是终点工具，调用成功后审查阶段会立即停止。\n\n"
+    "如果审查尚未覆盖计划内的高价值文件，或者仍存在需要继续核实的高价值候选，请不要调用 FinalizeReview；"
     "应继续调用 Read/Grep/Glob/PowerShell/Skill 等工具补齐证据。\n\n"
-    "只有在审计已经完成且以下条件满足时才调用 FinalizeFinding：\n"
-    "1. 已经完成主要攻击面覆盖；\n"
-    "2. 所有放入 findings 的漏洞都具备完整 source→sink 利用链、PoC、impact、cve_justification 和 verification_notes；\n"
-    "3. 如果 findings 数量较少，summary 明确说明已覆盖范围、被排除候选和没有更多可报告漏洞的原因。\n\n"
-    "不要输出 Markdown，不要自然语言宣布完成。继续审计就调用工具；确实完成才调用 FinalizeFinding。"
+    "只有在审查已经完成且以下条件满足时才调用 FinalizeReview：\n"
+    "1. 已经完成计划内的 diff 阅读与相关文件核对；\n"
+    "2. 所有放入 findings 的评论都具备完整字段(rule_id/severity/category/title/description/file_path/line_start/line_end/"
+    "confidence/needs_verification/verdict/source)，line 落在 diff 新增行；\n"
+    "3. 如果 findings 数量较少，summary 明确说明已覆盖范围、被排除候选和没有更多可报告问题的原因。\n\n"
+    "不要输出 Markdown，不要自然语言宣布完成。继续审查就调用工具；确实完成才调用 FinalizeReview。"
 )
 FINALIZER_ELIGIBLE_STOP_REASONS = {
     RuntimeStopReason.COMPLETED,
@@ -54,9 +55,9 @@ NATIVE_TOOL_CALLING_REMINDER = (
     "工具调用协议：\n"
     "当存在可用工具时，继续审计不能只用自然语言表达计划。凡是你说“继续、检查、查看、读取、搜索、追踪、"
     "验证、确认、补齐证据、分析调用链”等意思，必须在同一条 assistant 响应中实际发起原生结构化工具调用。\n\n"
-    "如果还需要证据：直接调用 Read/Grep/Glob/Skill/PowerShell 等合适工具继续审计。如果还没有充分覆盖主要攻击面，也必须继续调用工具。\n"
-    "如果审计已经充分完成：调用 FinalizeFinding 提交结构化结果；或输出可解析的 {\"findings\": [...], \"summary\": \"...\"} JSON。\n"
-    "注意：发现第一个完整漏洞不等于审计完成。FinalizeFinding 调用成功后会终止 Finding 阶段，因此不要把它当作阶段性保存工具。\n"
+    "如果还需要证据：直接调用 Read/Grep/Glob/Skill/PowerShell 等合适工具继续审查。如果还没有完成计划内的高价值文件阅读，也必须继续调用工具。\n"
+    "如果审查已经充分完成：调用 FinalizeReview 提交结构化评论集；或输出可解析的 {\"findings\": [...], \"summary\": \"...\"} JSON。\n"
+    "注意：还没有覆盖完所有应审查的文件不等于审查完成。FinalizeReview 调用成功后会终止审查阶段，因此不要把它当作阶段性保存工具。\n"
     "禁止只回复“我将继续/让我继续/下一步我会...”而不调用工具。这样的响应会被视为未完成。\n"
     "不要输出伪工具语法，例如 Tool Call:、Action:、JSON 形式的伪调用；只能使用模型提供方原生 tool_call。"
 )
@@ -543,7 +544,7 @@ class FindingRuntimeBridge:
         self,
         *,
         llm_service,
-        tools: dict[str, Any],
+        tools: list[Any],
         user_id: str | None = None,
         session_factory=None,
         agent_type: str = "finding",
@@ -747,8 +748,8 @@ class FindingRuntimeBridge:
                 role=RuntimeMessageRole.USER,
                 name="runtime_resume",
                 content=(
-                    "这是一次从上一个完整审计边界恢复的任务。请基于已有审计记录继续检查尚未完成的高价值候选，"
-                    "不要把之前的中断或自然语言总结当作完成。只有确实完成审计后，才调用 FinalizeFinding 提交结构化结果；"
+                    "这是一次从上一个完整审查边界恢复的任务。请基于已有审查记录继续检查尚未完成的高价值候选，"
+                    "不要把之前的中断或自然语言总结当作完成。只有确实完成审查后，才调用结构化终点工具(FinalizeReview)提交结果；"
                     "若仍需证据，请继续调用工具。"
                 ),
                 metadata={"kind": "runtime_resume_instruction"},
@@ -911,7 +912,7 @@ class FindingRuntimeBridge:
                 return snapshot, fallback_payload_builder(snapshot)
             raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
-        finalizer_registry = ToolRegistry(finalizer_tools or [FinalizeFindingTool()])
+        finalizer_registry = ToolRegistry(finalizer_tools or [FinalizeReviewTool()])
         finalizer_orchestrator = ToolOrchestrator(session_store=self._session_store, tool_registry=finalizer_registry)
         for index, prompt in enumerate(finalizer_prompts, start=1):
             self._session_store.append_message(
@@ -944,16 +945,14 @@ class FindingRuntimeBridge:
         raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
     def _build_tool_registry(self, tool_allowlist: set[str] | None = None) -> ToolRegistry:
-        # 阶段 02: agent_type 参数化(默认 finding 兼容); review:* 视角由
-        # build_runtime_tool_registry 内部挂 FinalizeReview 终点工具。
-        # tool_allowlist 为空 → 全量工具(非 review 调用方不变); 非空 → 按 §3.1 权限矩阵裁剪,
-        # 终点工具(FinalizeReview/FinalizeFinding)始终保留。
+        # 阶段 02: agent_type 参数化; review:* 视角由 build_runtime_tool_registry 内部挂
+        # FinalizeReview 终点工具。tool_allowlist 为空 → 全量工具(非 review 调用方不变);
+        # 非空 → 按 §3.1 权限矩阵裁剪, 终点工具 FinalizeReview 始终保留。
         return build_runtime_tool_registry(
             session_store=self._session_store,
-            agent_tools=self._tools,
+            file_tools=self._tools,
             agent_type=self._agent_type,
             user_id=self._user_id,
-            include_finding_finalizer=not str(self._agent_type or "").startswith("review:"),
             tool_allowlist=tool_allowlist,
         )
 
