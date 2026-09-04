@@ -53,7 +53,6 @@ interface CreateTaskDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onTaskCreated: () => void;
-	onFastScanStarted?: (taskId: string) => void;
 	preselectedProjectId?: string;
 }
 

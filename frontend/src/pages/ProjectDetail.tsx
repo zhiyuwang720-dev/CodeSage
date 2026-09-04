@@ -29,16 +29,15 @@ import {
   Terminal
 } from "lucide-react";
 import { api } from "@/shared/config/database";
-import type { Project, AuditTask, CreateProjectForm, AuditIssue } from "@/shared/types";
+import type { Project, CreateProjectForm } from "@/shared/types";
 import type { AgentFinding, AgentTask } from "@/shared/api/agentTasks";
 import { getAgentTasks, updateAgentFinding } from "@/shared/api/agentTasks";
 import { apiClient } from "@/shared/api/serverClient";
 import { isRepositoryProject, getSourceTypeLabel, getRepositoryPlatformLabel } from "@/shared/utils/projectUtils";
 import { toast } from "sonner";
 import CreateTaskDialog from "@/components/audit/CreateTaskDialog";
-import TerminalProgressDialog from "@/components/audit/TerminalProgressDialog";
 import { SUPPORTED_LANGUAGES, REPOSITORY_PLATFORMS } from "@/shared/constants";
-import type { AggregatedAgentFinding, AggregatedAuditIssue, IssuesSummary, LatestProblem, UnifiedTask } from "@/shared/types";
+import type { AggregatedAgentFinding, IssuesSummary, LatestProblem } from "@/shared/types";
 import {
   PROJECT_DETAIL_ISSUES_FETCH_CONCURRENCY as ISSUES_FETCH_CONCURRENCY,
   PROJECT_DETAIL_ISSUES_MAX_TASKS as ISSUES_MAX_TASKS,
@@ -51,12 +50,9 @@ import { ProjectStatsCards, type ProjectCombinedStats } from "@/pages/project-de
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
-  const [auditTasks, setAuditTasks] = useState<AuditTask[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
-  const [showTerminalDialog, setShowTerminalDialog] = useState(false);
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<CreateProjectForm>({
     name: "",
     description: "",
@@ -67,13 +63,10 @@ export default function ProjectDetail() {
     programming_languages: []
   });
   const [activeTab, setActiveTab] = useState("overview");
-  const [latestIssues, setLatestIssues] = useState<AggregatedAuditIssue[]>([]);
   const [latestFindings, setLatestFindings] = useState<AggregatedAgentFinding[]>([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
   const [issuesSummary, setIssuesSummary] = useState<IssuesSummary>({
-    completedAuditTasksCount: 0,
     completedAgentTasksCount: 0,
-    fetchedAuditTasksCount: 0,
     fetchedAgentTasksCount: 0,
     isLimited: false,
     maxTasks: 20
@@ -119,62 +112,39 @@ export default function ProjectDetail() {
     return results;
   }
 
-  async function fetchAuditIssues(taskId: string): Promise<AuditIssue[]> {
-    // Use apiClient directly so we can control timeout behavior at the call site
-    const res = await withTimeout(apiClient.get(`/tasks/${taskId}/issues`), REQUEST_TIMEOUT_MS, `GET /tasks/${taskId}/issues`);
-    return res.data;
-  }
-
   async function fetchAgentFindings(taskId: string): Promise<AgentFinding[]> {
     const res = await withTimeout(apiClient.get(`/agent-tasks/${taskId}/findings`), REQUEST_TIMEOUT_MS, `GET /agent-tasks/${taskId}/findings`);
     return res.data;
   }
 
   useEffect(() => {
-    if (activeTab === 'issues' && (auditTasks.length > 0 || agentTasks.length > 0)) {
+    if (activeTab === 'issues' && agentTasks.length > 0) {
       loadLatestIssues();
     }
-  }, [activeTab, auditTasks, agentTasks]);
+  }, [activeTab, agentTasks]);
 
   const loadLatestIssues = async () => {
-    const completedAuditTasks = auditTasks
-      .filter((t: AuditTask) => t.status === 'completed')
-      .sort((a: AuditTask, b: AuditTask) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     const completedAgentTasks = agentTasks
       .filter((t: AgentTask) => t.status === 'completed')
       .sort((a: AgentTask, b: AgentTask) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    const limitedAuditTasks = completedAuditTasks.slice(0, ISSUES_MAX_TASKS);
     const limitedAgentTasks = completedAgentTasks.slice(0, ISSUES_MAX_TASKS);
 
     setIssuesSummary({
-      completedAuditTasksCount: completedAuditTasks.length,
       completedAgentTasksCount: completedAgentTasks.length,
-      fetchedAuditTasksCount: limitedAuditTasks.length,
       fetchedAgentTasksCount: limitedAgentTasks.length,
-      isLimited: completedAuditTasks.length > ISSUES_MAX_TASKS || completedAgentTasks.length > ISSUES_MAX_TASKS,
+      isLimited: completedAgentTasks.length > ISSUES_MAX_TASKS,
       maxTasks: ISSUES_MAX_TASKS
     });
 
-    if (limitedAuditTasks.length === 0 && limitedAgentTasks.length === 0) {
-      setLatestIssues([]);
+    if (limitedAgentTasks.length === 0) {
       setLatestFindings([]);
       return;
     }
 
       setLoadingIssues(true);
       try {
-      const [issuesResults, findingsResults] = await Promise.all([
-        mapWithConcurrency(limitedAuditTasks, ISSUES_FETCH_CONCURRENCY, async (task: AuditTask) => {
-          const issues = await fetchAuditIssues(task.id);
-          const enriched: AggregatedAuditIssue[] = (issues || []).map((issue) => ({
-            ...(issue as AuditIssue),
-            task_created_at: task.created_at,
-            task_completed_at: task.completed_at
-          }));
-          return enriched;
-        }),
-        mapWithConcurrency(limitedAgentTasks, ISSUES_FETCH_CONCURRENCY, async (task: AgentTask) => {
+        const findingsResults = await mapWithConcurrency(limitedAgentTasks, ISSUES_FETCH_CONCURRENCY, async (task: AgentTask) => {
           const findings = await fetchAgentFindings(task.id);
           const enriched: AggregatedAgentFinding[] = (findings || []).map((finding) => ({
             ...(finding as AgentFinding),
@@ -182,46 +152,27 @@ export default function ProjectDetail() {
             task_completed_at: task.completed_at
           }));
           return enriched;
-        })
-      ]);
+        });
 
-      const flatIssues = issuesResults
-        .filter((r: PromiseSettledResult<AggregatedAuditIssue[]>): r is PromiseFulfilledResult<AggregatedAuditIssue[]> => r.status === 'fulfilled')
-        .flatMap((r: PromiseFulfilledResult<AggregatedAuditIssue[]>) => r.value);
-      const flatFindings = findingsResults
-        .filter((r: PromiseSettledResult<AggregatedAgentFinding[]>): r is PromiseFulfilledResult<AggregatedAgentFinding[]> => r.status === 'fulfilled')
-        .flatMap((r: PromiseFulfilledResult<AggregatedAgentFinding[]>) => r.value);
+        const flatFindings = findingsResults
+          .filter((r: PromiseSettledResult<AggregatedAgentFinding[]>): r is PromiseFulfilledResult<AggregatedAgentFinding[]> => r.status === 'fulfilled')
+          .flatMap((r: PromiseFulfilledResult<AggregatedAgentFinding[]>) => r.value);
 
-      const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-      flatIssues.sort((a: AggregatedAuditIssue, b: AggregatedAuditIssue) => {
-        const createdAtA = new Date(a.created_at).getTime();
-        const createdAtB = new Date(b.created_at).getTime();
-        if (createdAtA !== createdAtB) return createdAtB - createdAtA;
+        const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+        flatFindings.sort((a: AggregatedAgentFinding, b: AggregatedAgentFinding) => {
+          const createdAtA = new Date(a.created_at).getTime();
+          const createdAtB = new Date(b.created_at).getTime();
+          if (createdAtA !== createdAtB) return createdAtB - createdAtA;
 
-        const severityA = severityRank[a.severity] ?? 0;
-        const severityB = severityRank[b.severity] ?? 0;
-        if (severityA !== severityB) return severityB - severityA;
+          const severityA = severityRank[String(a.severity || '').toLowerCase()] ?? 0;
+          const severityB = severityRank[String(b.severity || '').toLowerCase()] ?? 0;
+          if (severityA !== severityB) return severityB - severityA;
 
-        const taskCreatedAtA = a.task_created_at ? new Date(a.task_created_at).getTime() : 0;
-        const taskCreatedAtB = b.task_created_at ? new Date(b.task_created_at).getTime() : 0;
-        return taskCreatedAtB - taskCreatedAtA;
-      });
-
-      setLatestIssues(flatIssues);
-      flatFindings.sort((a: AggregatedAgentFinding, b: AggregatedAgentFinding) => {
-        const createdAtA = new Date(a.created_at).getTime();
-        const createdAtB = new Date(b.created_at).getTime();
-        if (createdAtA !== createdAtB) return createdAtB - createdAtA;
-
-        const severityA = severityRank[String(a.severity || '').toLowerCase()] ?? 0;
-        const severityB = severityRank[String(b.severity || '').toLowerCase()] ?? 0;
-        if (severityA !== severityB) return severityB - severityA;
-
-        const taskCreatedAtA = a.task_created_at ? new Date(a.task_created_at).getTime() : 0;
-        const taskCreatedAtB = b.task_created_at ? new Date(b.task_created_at).getTime() : 0;
-        return taskCreatedAtB - taskCreatedAtA;
-      });
-      setLatestFindings(flatFindings);
+          const taskCreatedAtA = a.task_created_at ? new Date(a.task_created_at).getTime() : 0;
+          const taskCreatedAtB = b.task_created_at ? new Date(b.task_created_at).getTime() : 0;
+          return taskCreatedAtB - taskCreatedAtA;
+        });
+        setLatestFindings(flatFindings);
       } catch (error) {
         console.error('Failed to load issues:', error);
         toast.error("加载问题列表失败");
@@ -267,35 +218,11 @@ export default function ProjectDetail() {
       return 'low';
     };
 
-    const audit: LatestProblem[] = latestIssues.map((i) => ({
-      // AuditIssue 在后端 schema 里可能叫 message（frontend type 没显式定义），这里做兼容兜底
-      // 同时优先展示更"可读"的说明字段，避免 UI 出现大量 '-'
-      kind: 'audit',
-      id: i.id,
-      task_id: i.task_id,
-      task_created_at: i.task_created_at,
-      created_at: i.created_at,
-      severity: normalizeSeverity(i.severity),
-      title: i.title || '(未命名问题)',
-      description:
-        i.description ??
-        (i as any).message ??
-        (i as any).ai_explanation ??
-        (i as any).suggestion ??
-        (i as any).code_snippet ??
-        null,
-      file_path: i.file_path,
-      line_number: i.line_number ?? null,
-      category: (i as any).issue_type ?? null,
-      status: i.status ?? null,
-    }));
-
     const agent: LatestProblem[] = latestFindings.map((f) => {
       const rawTitle = f.title || '(未命名漏洞)';
       const parsed = (!f.file_path || f.file_path === '-') ? parsePathLineFromTitle(rawTitle) : null;
 
       return {
-        kind: 'agent',
         id: f.id,
         task_id: f.task_id,
         task_created_at: f.task_created_at,
@@ -313,7 +240,7 @@ export default function ProjectDetail() {
       };
     });
 
-    const merged = [...audit, ...agent];
+    const merged = agent;
     // 按时间倒序（最新在前），时间相同再按严重程度
     const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
     merged.sort((a, b) => {
@@ -330,15 +257,11 @@ export default function ProjectDetail() {
       return taskCreatedAtB - taskCreatedAtA;
     });
     return merged;
-  }, [latestIssues, latestFindings]);
+  }, [latestFindings]);
 
   const handleStatusChange = async (problem: LatestProblem, newStatus: string) => {
     try {
-      if (problem.kind === "agent") {
-        await updateAgentFinding(problem.task_id, problem.id, { status: newStatus });
-      } else {
-        await api.updateAuditIssue(problem.task_id, problem.id, { status: newStatus } as any);
-      }
+      await updateAgentFinding(problem.task_id, problem.id, { status: newStatus });
       toast.success("状态已更新");
       await loadLatestIssues();
     } catch (error) {
@@ -394,9 +317,8 @@ export default function ProjectDetail() {
 
     try {
       setLoading(true);
-      const [projectRes, auditTasksRes, agentTasksRes] = await Promise.allSettled([
+      const [projectRes, agentTasksRes] = await Promise.allSettled([
         api.getProjectById(id),
-        api.getAuditTasks(id),
         getAgentTasks({ project_id: id })
       ]);
 
@@ -405,13 +327,6 @@ export default function ProjectDetail() {
       } else {
         console.error('Failed to load project:', projectRes.reason);
         setProject(null);
-      }
-
-      if (auditTasksRes.status === 'fulfilled') {
-        setAuditTasks(Array.isArray(auditTasksRes.value) ? auditTasksRes.value : []);
-      } else {
-        console.error('Failed to load audit tasks:', auditTasksRes.reason);
-        setAuditTasks([]);
       }
 
       if (agentTasksRes.status === 'fulfilled') {
@@ -430,31 +345,22 @@ export default function ProjectDetail() {
     }
   };
 
-  const unifiedTasks: UnifiedTask[] = useMemo(() => {
-    const merged: UnifiedTask[] = [
-      ...auditTasks.map((t) => ({ kind: 'audit' as const, task: t })),
-      ...agentTasks.map((t) => ({ kind: 'agent' as const, task: t })),
-    ];
-    merged.sort((a, b) => new Date((b.task as any).created_at).getTime() - new Date((a.task as any).created_at).getTime());
-    return merged;
-  }, [auditTasks, agentTasks]);
+  const recentTasks = useMemo(() => {
+    const sorted = [...agentTasks].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return sorted;
+  }, [agentTasks]);
 
   const combinedStats: ProjectCombinedStats = useMemo(() => {
-    const totalTasks = auditTasks.length + agentTasks.length;
-    const completedTasks =
-      auditTasks.filter((t) => t.status === 'completed').length +
-      agentTasks.filter((t) => t.status === 'completed').length;
-    const totalIssues =
-      auditTasks.reduce((sum, t) => sum + (t.issues_count || 0), 0) +
-      agentTasks.reduce((sum, t) => sum + (t.findings_count || 0), 0);
+    const totalTasks = agentTasks.length;
+    const completedTasks = agentTasks.filter((t) => t.status === 'completed').length;
+    const totalIssues = agentTasks.reduce((sum, t) => sum + (t.findings_count || 0), 0);
     const avgQualityScore = totalTasks > 0
-      ? (
-        (auditTasks.reduce((sum, t) => sum + (t.quality_score || 0), 0) +
-          agentTasks.reduce((sum, t) => sum + (t.quality_score || 0), 0)) / totalTasks
-      )
+      ? agentTasks.reduce((sum, t) => sum + (t.quality_score || 0), 0) / totalTasks
       : 0;
     return { totalTasks, completedTasks, totalIssues, avgQualityScore };
-  }, [auditTasks, agentTasks]);
+  }, [agentTasks]);
 
   const handleRunAudit = () => {
     setShowCreateTaskDialog(true);
@@ -527,16 +433,11 @@ export default function ProjectDetail() {
   };
 
   const handleTaskCreated = () => {
-    toast.success("审计任务已创建", {
-      description: '因为网络和代码文件大小等因素，审计时长通常至少需要1分钟，请耐心等待...',
+    toast.success("PR 审查任务已创建", {
+      description: '因为网络和代码文件大小等因素，审查时长通常至少需要1分钟，请耐心等待...',
       duration: 5000
     });
     loadProjectData();
-  };
-
-  const handleFastScanStarted = (taskId: string) => {
-    setCurrentTaskId(taskId);
-    setShowTerminalDialog(true);
   };
 
   if (loading) {
@@ -694,38 +595,34 @@ export default function ProjectDetail() {
                 <h3 className="section-title">最近活动</h3>
               </div>
               <div>
-                {unifiedTasks.length > 0 ? (
+                {recentTasks.length > 0 ? (
                   <div className="space-y-2">
-                    {unifiedTasks.slice(0, 5).map((t) => (
+                    {recentTasks.slice(0, 5).map((task) => (
                       <Link
-                        key={`${t.kind}:${t.task.id}`}
-                        to={t.kind === 'audit' ? `/tasks/${t.task.id}` : `/agent-audit/${t.task.id}`}
+                        key={task.id}
+                        to={`/agent-audit/${task.id}`}
                         className="flex items-center justify-between p-3 bg-muted/50 rounded-lg hover:bg-muted transition-all group"
                       >
                         <div className="flex items-center space-x-3">
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${t.task.status === 'completed' ? 'bg-emerald-500/20' :
-                            t.task.status === 'running' ? 'bg-sky-500/20' :
-                              t.task.status === 'failed' ? 'bg-rose-500/20' :
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${task.status === 'completed' ? 'bg-emerald-500/20' :
+                            task.status === 'running' ? 'bg-sky-500/20' :
+                              task.status === 'failed' ? 'bg-rose-500/20' :
                                 'bg-muted'
                             }`}>
-                            {getStatusIcon(t.task.status)}
+                            {getStatusIcon(task.status)}
                           </div>
                           <div>
                             <p className="text-sm font-bold text-foreground group-hover:text-primary transition-colors uppercase">
-                              {t.kind === 'audit'
-                                ? ((t.task as AuditTask).task_type === 'repository' ? '审计任务' : '即时分析')
-                                : 'Agent 审计'}
+                              {task.name || "PR 审查任务"}
                             </p>
                             <p className="text-xs text-muted-foreground font-mono">
-                              {formatDate(t.task.created_at)}
+                              {formatDate(task.created_at)}
                             </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Badge className={t.kind === 'agent' ? 'cyber-badge-info' : 'cyber-badge-muted'}>
-                            {t.kind === 'agent' ? 'AGENT' : 'AUDIT'}
-                          </Badge>
-                          {getStatusBadge(t.task.status)}
+                          <Badge className="cyber-badge-info">AGENT</Badge>
+                          {getStatusBadge(task.status)}
                         </div>
                       </Link>
                     ))}
@@ -743,7 +640,7 @@ export default function ProjectDetail() {
 
         <TabsContent value="tasks" className="flex flex-col gap-6 mt-6">
           <ProjectTasksTab
-            unifiedTasks={unifiedTasks}
+            tasks={recentTasks}
             onCreateTask={handleCreateTask}
             formatDate={formatDate}
             renderStatusBadge={getStatusBadge}
@@ -753,7 +650,7 @@ export default function ProjectDetail() {
 
         <TabsContent value="issues" className="flex flex-col gap-6 mt-6">
           <ProjectIssuesTab
-            hasAnyTasks={auditTasks.length > 0 || agentTasks.length > 0}
+            hasAnyTasks={agentTasks.length > 0}
             issuesSummary={issuesSummary}
             loading={loadingIssues}
             latestProblems={latestProblems}
@@ -911,16 +808,7 @@ export default function ProjectDetail() {
         open={showCreateTaskDialog}
         onOpenChange={setShowCreateTaskDialog}
         onTaskCreated={handleTaskCreated}
-        onFastScanStarted={handleFastScanStarted}
         preselectedProjectId={id}
-      />
-
-      {/* 终端进度对话框 */}
-      <TerminalProgressDialog
-        open={showTerminalDialog}
-        onOpenChange={setShowTerminalDialog}
-        taskId={currentTaskId}
-        taskType="repository"
       />
     </div>
   );

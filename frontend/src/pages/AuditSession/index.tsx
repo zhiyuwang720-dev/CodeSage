@@ -36,15 +36,7 @@ export default function AuditSessionPage() {
     }
     try {
       const result = await sendMessage(content, mode, selectedSkillRefs);
-      if (mode === "generate_report_and_sync") {
-        const managed = result.synced_managed_vulnerability;
-        if (managed) {
-          toast.success(`报告已同步到漏洞管理：${managed.vulnerability_name}`);
-        } else {
-          toast.success("报告生成流程已完成");
-        }
-        return;
-      }
+      void result;
       toast.success("消息已加入会话");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "发送失败");

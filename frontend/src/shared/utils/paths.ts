@@ -14,7 +14,6 @@ export const paths = {
   pages: '@/pages',
   
   // 功能模块
-  analysisFeature: '@/features/analysis',
   projectsFeature: '@/features/projects',
   auditFeature: '@/features/audit',
   

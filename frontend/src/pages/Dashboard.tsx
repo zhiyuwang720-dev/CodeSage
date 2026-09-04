@@ -9,7 +9,6 @@ import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
-  Bot,
   Calendar,
   CheckCircle2,
   Clock,
@@ -27,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getAgentTasks, type AgentTask } from "@/shared/api/agentTasks";
 import { api, isDemoMode } from "@/shared/config/database";
-import type { AuditTask, Project, ProjectStats, UnifiedTask } from "@/shared/types";
+import type { Project, ProjectStats } from "@/shared/types";
 
 const runningStatuses = new Set([
   "running",
@@ -112,7 +111,7 @@ const t: Translate = (key, values) => {
 export default function Dashboard() {
   const [stats, setStats] = useState<ProjectStats | null>(null);
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
-  const [recentTasks, setRecentTasks] = useState<UnifiedTask[]>([]);
+  const [recentTasks, setRecentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -128,7 +127,6 @@ export default function Dashboard() {
       const results = await Promise.allSettled([
         api.getProjectStats(),
         api.getProjects(),
-        api.getAuditTasks(),
         getAgentTasks({ limit: 10 }),
       ]);
 
@@ -157,17 +155,10 @@ export default function Dashboard() {
           : []
       );
 
-      const tasks: AuditTask[] =
-        results[2].status === "fulfilled" && Array.isArray(results[2].value) ? results[2].value : [];
       const agentTasksList: AgentTask[] =
-        results[3].status === "fulfilled" && Array.isArray(results[3].value) ? results[3].value : [];
-
-      const unified: UnifiedTask[] = [
-        ...tasks.map((task) => ({ kind: "audit" as const, task })),
-        ...agentTasksList.map((task) => ({ kind: "agent" as const, task })),
-      ];
-      unified.sort((a, b) => new Date(b.task.created_at).getTime() - new Date(a.task.created_at).getTime());
-      setRecentTasks(unified.slice(0, 10));
+        results[2].status === "fulfilled" && Array.isArray(results[2].value) ? results[2].value : [];
+      agentTasksList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setRecentTasks(agentTasksList.slice(0, 10));
     } catch (error) {
       console.error("Dashboard data load failed:", error);
       toast.error(t("dashboard.loadFailed"));
@@ -200,9 +191,9 @@ export default function Dashboard() {
   };
 
   const pendingIssues = stats ? Math.max(stats.total_issues - stats.resolved_issues, 0) : 0;
-  const runningTaskCount = recentTasks.filter((item) => runningStatuses.has(item.task.status)).length;
+  const runningTaskCount = recentTasks.filter((item) => runningStatuses.has(item.status)).length;
   const completedTaskCount = stats?.completed_tasks || 0;
-  const failedTaskCount = recentTasks.filter((item) => item.task.status === "failed").length;
+  const failedTaskCount = recentTasks.filter((item) => item.status === "failed").length;
   const queuedTaskCount = Math.max((stats?.total_tasks || 0) - completedTaskCount - runningTaskCount - failedTaskCount, 0);
   // PR 问题严重度分布来自后端 /projects/stats(仅统计 pr_review 任务发现)
   const riskCounts = stats
@@ -401,20 +392,16 @@ export default function Dashboard() {
               <SectionHeader icon={<Clock className="h-5 w-5 text-emerald-600" />} title={t("dashboard.recentTasks")} to="/audit-tasks" t={t} />
               <div className="space-y-3">
                 {recentTasks.length > 0 ? (
-                  recentTasks.slice(0, 6).map((unified) => {
-                    const isAgent = unified.kind === "agent";
-                    const task = unified.task;
-                    const taskLink = isAgent ? `/agent-audit/${task.id}` : `/tasks/${task.id}`;
-                    const taskName = isAgent
-                      ? (task as AgentTask).name || t("dashboard.unknownProject")
-                      : (task as AuditTask).project?.name || t("dashboard.unknownProject");
+                  recentTasks.slice(0, 6).map((task) => {
+                    const taskLink = `/agent-audit/${task.id}`;
+                    const taskName = task.name || t("dashboard.unknownProject");
                     const score = task.quality_score?.toFixed(1) || "0.0";
                     const isRunning = runningStatuses.has(task.status);
                     const isCompleted = task.status === "completed";
 
                     return (
                       <Link
-                        key={`${unified.kind}-${task.id}`}
+                        key={task.id}
                         to={taskLink}
                         className="group grid gap-3 rounded-[22px] border border-transparent bg-[#f8fbf9] p-4 transition hover:border-[#b7d1c1] hover:bg-white md:grid-cols-[minmax(0,1fr)_auto]"
                       >
@@ -428,7 +415,7 @@ export default function Dashboard() {
                                   : "bg-rose-100 text-rose-700"
                             }`}
                           >
-                            {isAgent ? <Bot className="h-4 w-4" /> : isCompleted ? <CheckCircle2 className="h-4 w-4" /> : isRunning ? <Clock className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                            {isCompleted ? <CheckCircle2 className="h-4 w-4" /> : isRunning ? <Clock className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
                           </span>
                           <div className="min-w-0">
                             <p className="truncate text-base font-semibold text-slate-800 transition group-hover:text-[hsl(var(--primary))]">
@@ -436,7 +423,7 @@ export default function Dashboard() {
                             </p>
                             <p className="mt-1 text-sm text-slate-500">
                               {t("dashboard.qualityScore", { score })}
-                              {isAgent && <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">Agent</span>}
+                              <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">Agent</span>
                             </p>
                           </div>
                         </div>
@@ -498,22 +485,18 @@ export default function Dashboard() {
               </div>
               <div className="space-y-2">
                 {recentTasks.length > 0 ? (
-                  recentTasks.slice(0, 3).map((unified) => {
-                    const isAgent = unified.kind === "agent";
-                    const task = unified.task;
-                    const taskLink = isAgent ? `/agent-audit/${task.id}` : `/tasks/${task.id}`;
+                  recentTasks.slice(0, 3).map((task) => {
+                    const taskLink = `/agent-audit/${task.id}`;
                     const isRunning = runningStatuses.has(task.status);
                     const isCompleted = task.status === "completed";
                     const isFailed = task.status === "failed";
-                    const taskName = isAgent
-                      ? (task as AgentTask).name || t("dashboard.unknownProject")
-                      : (task as AuditTask).project?.name || t("dashboard.unknownProject");
-                    const issuesCount = isAgent ? (task as AgentTask).findings_count : (task as AuditTask).issues_count;
-                    const statusText = activityStatusText({ isAgent, isCompleted, isRunning, isFailed, t });
+                    const taskName = task.name || t("dashboard.unknownProject");
+                    const issuesCount = task.findings_count;
+                    const statusText = activityStatusText({ isAgent: true, isCompleted, isRunning, isFailed, t });
 
                     return (
                       <Link
-                        key={`${unified.kind}-${task.id}`}
+                        key={task.id}
                         to={taskLink}
                         className={`block rounded-[20px] border p-3 transition ${
                           isCompleted

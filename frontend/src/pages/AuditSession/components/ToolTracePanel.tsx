@@ -4,7 +4,9 @@ import { Check, ChevronDown, ChevronUp, Copy, DatabaseZap, Hammer, Loader2, Shie
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AuditSessionToolCall } from "@/pages/AuditSession/types";
-import type { DirectAuditApprovalScope } from "@/shared/api/agentDirectAudit";
+
+// 审批粒度:单次工具调用批准 / 本次会话批准
+type DirectAuditApprovalScope = "single_use" | "session";
 
 interface ToolTracePanelProps {
   toolCalls: AuditSessionToolCall[];

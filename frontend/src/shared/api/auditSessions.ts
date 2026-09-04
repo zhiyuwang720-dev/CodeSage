@@ -1,5 +1,4 @@
 import { apiClient } from "./serverClient";
-import type { ManagedVulnerability } from "./vulnerabilities";
 
 export interface AuditSessionMessage {
   id: string;
@@ -95,11 +94,10 @@ export interface AuditSessionDetail {
   resume_status?: string | null;
 }
 
-export type AuditSessionMessageMode = "chat" | "generate_report_and_sync";
+export type AuditSessionMessageMode = "chat";
 
 export interface AuditSessionMessageMutationResponse extends AuditSessionMessage {
   mode: AuditSessionMessageMode;
-  synced_managed_vulnerability?: ManagedVulnerability | null;
 }
 
 export interface AuditSessionStreamEvent {
@@ -130,12 +128,11 @@ export interface AuditSessionStreamEvent {
   status?: string;
   message_id?: string;
   mode?: AuditSessionMessageMode;
-  synced_managed_vulnerability?: ManagedVulnerability | null;
+  status?: string;
 }
 
 export interface AuditSessionStreamResult {
   mode: AuditSessionMessageMode;
-  synced_managed_vulnerability?: ManagedVulnerability | null;
 }
 
 export async function getAuditSession(sessionId: string): Promise<AuditSessionDetail> {
@@ -272,7 +269,6 @@ export async function streamAuditSessionMessage(
       if (event.type === "done") {
         streamResult = {
           mode: event.mode || mode,
-          synced_managed_vulnerability: event.synced_managed_vulnerability ?? null,
         };
       }
     }

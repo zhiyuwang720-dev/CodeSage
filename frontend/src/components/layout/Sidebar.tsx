@@ -14,7 +14,6 @@ import {
   Menu,
   ScanSearch,
   Settings,
-  ShieldAlert,
   UserCircle,
   X,
 } from 'lucide-react';
@@ -30,7 +29,6 @@ const routeIcons: Record<string, ReactNode> = {
   '/audit-tasks': <ListTodo className="h-[18px] w-[18px]" />,
   '/skills': <BookOpen className="h-[18px] w-[18px]" />,
   '/report-templates': <FileText className="h-[18px] w-[18px]" />,
-  '/vulnerabilities': <ShieldAlert className="h-[18px] w-[18px]" />,
   '/admin': <Settings className="h-[18px] w-[18px]" />,
 };
 
