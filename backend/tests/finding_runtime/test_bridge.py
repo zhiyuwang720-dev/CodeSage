@@ -156,7 +156,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
         fake_adapter_run,
     )
     monkeypatch.setattr(
-        "app.services.review_runtime.skills.RuntimeSkillCatalog.preload",
+        "app.services.skill.catalog.RuntimeSkillCatalog.preload",
         fake_skill_preload,
     )
     monkeypatch.setattr(
@@ -637,7 +637,7 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
         return self._session_store.load_session_snapshot(session_id), {"findings": [], "summary": "continued"}
 
     monkeypatch.setattr(
-        "app.services.review_runtime.skills.RuntimeSkillCatalog.preload",
+        "app.services.skill.catalog.RuntimeSkillCatalog.preload",
         fake_skill_preload,
     )
     monkeypatch.setattr(
@@ -724,7 +724,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
         raise AssertionError(f"discovery must not auto-load skill body for {skill_ref}")
 
     monkeypatch.setattr(
-        "app.services.review_runtime.skills.RuntimeSkillCatalog.preload",
+        "app.services.skill.catalog.RuntimeSkillCatalog.preload",
         fake_skill_preload,
     )
     monkeypatch.setattr(
@@ -736,7 +736,7 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
         fake_ensure_payload,
     )
     monkeypatch.setattr(
-        "app.services.agent.skill_service.SkillService.get_skill_body",
+        "app.services.skill.facade.SkillService.get_skill_body",
         fake_get_skill_body,
     )
 

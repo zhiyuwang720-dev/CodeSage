@@ -1,6 +1,6 @@
 import json
 
-from app.services.skills_runtime.migration import load_agent_bindings
+from app.services.skill.library.migration import load_agent_bindings
 
 
 def test_load_agent_bindings_reads_primary_bindings_file(tmp_path):

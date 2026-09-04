@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .models import SkillBinding
+from app.services.skill.library.models import SkillBinding
 
 
 def _read_json(path: Path, default: Any) -> Any:

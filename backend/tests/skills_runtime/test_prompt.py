@@ -1,5 +1,5 @@
-from app.services.skills_runtime.models import SkillEntry, SkillRoutePlan
-from app.services.skills_runtime.prompt import build_skill_prompt_state
+from app.services.skill.library.models import SkillEntry, SkillRoutePlan
+from app.services.skill.library.prompt import build_skill_prompt_state
 
 
 def _entry(slug: str) -> SkillEntry:

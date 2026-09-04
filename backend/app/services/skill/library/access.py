@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-from .models import SkillEntry
+from app.services.skill.library.models import SkillEntry
 
 
 def _is_within(root: Path, target: Path) -> bool:

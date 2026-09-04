@@ -20,7 +20,7 @@ from app.services.contracts.models import (
 )
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.review_runtime.skills import RuntimeSkillCatalog
+from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.review_runtime.tooling import ToolOrchestrator, ToolRegistry
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
 from app.services.runtime_core import build_runtime_tool_registry

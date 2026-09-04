@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import SkillEntry, SkillPromptState, SkillRoutePlan
+from app.services.skill.library.models import SkillEntry, SkillPromptState, SkillRoutePlan
 
 
 def _append_text_tag(lines: list[str], tag: str, value: str | None) -> None:

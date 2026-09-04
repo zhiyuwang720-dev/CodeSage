@@ -1,8 +1,9 @@
 from .memory_runtime import RuntimeMemoryManager, build_memory_message
 from .models import AgentRuntimeState, InvokedSkillState, SessionRuntimeState
 from .permission_runtime import RuntimePermissionRuntime, ToolPermissionDecision
-from .skill_discovery import SkillDiscoveryScheduler
-from .skill_runtime import SkillInvocationRuntime
+# 06-P3: 技能域已收敛至 services/skill/; 此处仅保留 pkg 级再导出以免破坏既有引用。
+from app.services.skill.runtime import SkillInvocationRuntime
+from app.services.skill.scheduler import SkillDiscoveryScheduler
 from .tool_runtime import (
     RuntimeTool,
     StreamingToolExecutor,

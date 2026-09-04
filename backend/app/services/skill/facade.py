@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.services.skill_file_service import SkillFileService
-from app.services.skills_runtime.access import list_skill_resources, read_skill_body, read_skill_resource
-from app.services.skills_runtime.catalog import resolve_agent_skill_state, resolve_skill_entry
-from app.services.skills_runtime.migration import load_agent_bindings
+from app.services.skill.file_service import SkillFileService
+from app.services.skill.library.access import list_skill_resources, read_skill_body, read_skill_resource
+from app.services.skill.library.catalog import resolve_agent_skill_state, resolve_skill_entry
+from app.services.skill.library.migration import load_agent_bindings
 
 
 class SkillService:

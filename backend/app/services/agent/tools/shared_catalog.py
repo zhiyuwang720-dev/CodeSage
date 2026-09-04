@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.file_service import SkillFileService
 
 from .file_tool import FileReadTool, ReadManyFilesTool, FileSearchTool, ListFilesTool
 

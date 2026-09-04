@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.audit_session import AuditSkillInvocationStatus
-from app.services.agent.skill_service import SkillService
+from app.services.skill.facade import SkillService
 
 
 class SkillInvocationRuntime:

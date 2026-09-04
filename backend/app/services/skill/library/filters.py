@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import SkillBinding, SkillEntry
+from app.services.skill.library.models import SkillBinding, SkillEntry
 
 
 def normalize_keywords(values: list[str]) -> list[str]:

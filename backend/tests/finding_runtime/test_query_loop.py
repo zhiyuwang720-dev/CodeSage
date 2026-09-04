@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -23,7 +23,7 @@ from app.services.runtime_core.tool_search_runtime import ToolSearchRuntimeTool
 from app.services.contracts.query_state import QueryLoopState
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionPersistenceError, AuditSessionStore
-from app.services.review_runtime.skills import RuntimeSkillTool
+from app.services.skill.tool import RuntimeSkillTool
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
 from app.services.review_runtime.tooling import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
 

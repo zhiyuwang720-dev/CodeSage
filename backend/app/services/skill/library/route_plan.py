@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import SkillEntry, SkillRoutePlan
+from app.services.skill.library.models import SkillEntry, SkillRoutePlan
 
 
 def build_skill_route_plan(

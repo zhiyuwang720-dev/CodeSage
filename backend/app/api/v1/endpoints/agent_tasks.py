@@ -51,7 +51,7 @@ from app.services.agent.task_executor import (
     request_agent_task_cancellation,
 )
 from app.services.git_ssh_service import GitSSHOperations
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.file_service import SkillFileService
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

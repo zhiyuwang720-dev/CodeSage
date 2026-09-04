@@ -1,5 +1,5 @@
-from app.services.skills_runtime.filters import select_skill_entries
-from app.services.skills_runtime.models import SkillBinding, SkillEntry
+from app.services.skill.library.filters import select_skill_entries
+from app.services.skill.library.models import SkillBinding, SkillEntry
 
 
 def _entry(slug: str, tags: list[str] | None = None) -> SkillEntry:

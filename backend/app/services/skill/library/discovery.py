@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 import yaml
 
-from .models import SkillEntry
+from app.services.skill.library.models import SkillEntry
 
 
 def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:

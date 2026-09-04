@@ -10,7 +10,7 @@ from app.services.agent.tools.base import AgentTool
 from app.services.agent.tools.plan_mode_runtime_tool import EnterPlanModeRuntimeTool, ExitPlanModeRuntimeTool
 from app.services.agent.tools.todo_runtime_tool import TodoWriteRuntimeTool
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.review_runtime.skills import RuntimeSkillTool
+from app.services.skill.tool import RuntimeSkillTool
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
 from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
 from app.services.runtime_core.permission_runtime import ToolPermissionDecision

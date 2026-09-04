@@ -1,8 +1,8 @@
-﻿import logging
+import logging
 from typing import Any, Dict, List
 
 from app.services.report_template_file_service import ReportTemplateFileService
-from app.services.skill_file_service import AGENT_TYPES, SkillFileService
+from app.services.skill.file_service import AGENT_TYPES, SkillFileService
 from app.services.task_report_service import DEFAULT_REPORT_TEMPLATE
 
 logger = logging.getLogger(__name__)

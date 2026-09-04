@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from app.services.agent.skill_service import SkillService
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.facade import SkillService
+from app.services.skill.file_service import SkillFileService
 
 
 def _write_skill(library_root, slug: str, *, tags=None, description="Demo skill"):

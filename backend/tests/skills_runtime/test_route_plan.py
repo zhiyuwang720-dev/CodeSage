@@ -1,5 +1,5 @@
-from app.services.skills_runtime.models import SkillEntry
-from app.services.skills_runtime.route_plan import build_skill_route_plan
+from app.services.skill.library.models import SkillEntry
+from app.services.skill.library.route_plan import build_skill_route_plan
 
 
 def _entry(slug: str) -> SkillEntry:

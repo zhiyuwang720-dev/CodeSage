@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.runtime_core.skill_mentions import collect_explicit_skill_mentions
+from app.services.skill.mentions import collect_explicit_skill_mentions
 
 
 SKILLS = [

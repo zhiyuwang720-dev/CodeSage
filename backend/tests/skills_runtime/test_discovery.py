@@ -1,6 +1,6 @@
-﻿import json
+import json
 
-from app.services.skills_runtime.discovery import discover_skill_entries
+from app.services.skill.library.discovery import discover_skill_entries
 
 
 def test_discover_skill_entries_reads_canonical_skill_roots(tmp_path):

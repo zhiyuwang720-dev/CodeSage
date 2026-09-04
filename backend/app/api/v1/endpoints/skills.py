@@ -20,9 +20,9 @@ from app.schemas.skill import (
     SkillResponse,
     SkillUpdate,
 )
-from app.services.agent.skill_service import SkillService
+from app.services.skill.facade import SkillService
 from app.services.init_agent_assets import init_agent_assets
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.file_service import SkillFileService
 
 router = APIRouter()
 

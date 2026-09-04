@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .discovery import discover_skill_entries
-from .filters import select_skill_entries
-from .migration import load_agent_bindings
-from .models import SkillEntry, SkillPromptState
-from .prompt import build_skill_prompt_state
-from .route_plan import build_skill_route_plan
+from app.services.skill.library.discovery import discover_skill_entries
+from app.services.skill.library.filters import select_skill_entries
+from app.services.skill.library.migration import load_agent_bindings
+from app.services.skill.library.models import SkillEntry, SkillPromptState
+from app.services.skill.library.prompt import build_skill_prompt_state
+from app.services.skill.library.route_plan import build_skill_route_plan
 
 
 def compose_match_text(context: dict[str, Any]) -> str:

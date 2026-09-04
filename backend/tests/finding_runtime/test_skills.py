@@ -8,7 +8,8 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.audit_session import AuditSkillInvocationStatus
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.review_runtime.skills import RuntimeSkillCatalog, RuntimeSkillTool
+from app.services.skill.catalog import RuntimeSkillCatalog
+from app.services.skill.tool import RuntimeSkillTool
 from app.services.review_runtime.tooling import ToolExecutionContext
 
 

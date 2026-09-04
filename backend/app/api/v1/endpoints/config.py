@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from copy import deepcopy
@@ -15,12 +15,12 @@ from app.core.encryption import decrypt_sensitive_data, encrypt_sensitive_data
 from app.db.session import get_db
 from app.models.user import User
 from app.models.user_config import UserConfig
-from app.services.agent.skill_service import SkillService
+from app.services.skill.facade import SkillService
 from app.services.init_agent_assets import init_agent_assets
 from app.services.llm.factory import LLMFactory
 from app.services.llm.service import LLMService
 from app.services.report_template_file_service import ReportTemplateFileService
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.file_service import SkillFileService
 
 router = APIRouter()
 

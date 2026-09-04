@@ -8,9 +8,9 @@ from sqlalchemy import select
 
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
-from app.services.agent.agents.finding_skill_router import resolve_finding_skill_routes
+from app.services.skill.router import resolve_finding_skill_routes
 from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord
-from app.services.skill_file_service import SkillFileService
+from app.services.skill.file_service import SkillFileService
 
 MAX_RECALLS = 5
 MAX_CONTENT_CHARS = 3200
