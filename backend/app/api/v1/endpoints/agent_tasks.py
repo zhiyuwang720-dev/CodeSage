@@ -24,7 +24,6 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
 
 from app.api import deps
-from app.api.v1.endpoints.config import _normalize_workflow_config, WORKFLOW_AGENT_TYPES, WORKFLOW_LOCKED_AGENTS
 from app.db.session import get_db, async_session_factory, get_pr_review_sync_session_factory
 from app.models.agent_task import (
     AgentTask, AgentEvent, AgentFinding, AgentTreeNode,

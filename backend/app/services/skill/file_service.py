@@ -16,7 +16,9 @@ import httpx
 
 from app.services.skill.library.discovery import parse_frontmatter
 
-AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification", "audit_chat"]
+# 06-P7: 引擎收敛为 review:* 单语义视角。orchestrator/recon/scan/triage/finding/
+# verification/audit_chat 等旧多-agent 类型已随 finding 线路整体退役, 不再维护绑定。
+AGENT_TYPES = ["review:security", "review:architecture", "review:quality"]
 
 
 def _safe_relative_path(value: str) -> str:
@@ -120,7 +122,10 @@ class SkillFileService:
 
     @classmethod
     def agent_root(cls, agent_type: str) -> Path:
-        path = cls.agents_root() / agent_type
+        # 绑定目录按 slugify(agent_type) 落盘: review:security → review-security,
+        # 规避 Windows 目录名中的非法冒号。bindings.json 内仍记录原始 agent_type 标签
+        # (review:security), 目录名只是存储位置; 旧无冒号类型(slugify 恒等)目录兼容不改名。
+        path = cls.agents_root() / cls.slugify(agent_type)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

@@ -4,7 +4,7 @@ from typing import Any
 
 from app.services.contracts.models import RuntimeSkillCatalogSnapshot
 from app.services.skill.facade import SkillService
-from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, build_finding_skill_route_message
+from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, build_review_skill_route_message
 
 
 class RuntimeSkillCatalog:
@@ -21,7 +21,7 @@ class RuntimeSkillCatalog:
         resolved = await self._skill_service.resolve_agent_skills(user_id, agent_type, context)
         prompt = self._skill_service.build_skill_briefing(resolved)
         route_message = (
-            build_finding_skill_route_message(context, resolved)
+            build_review_skill_route_message(context, resolved)
             if agent_type in RUNTIME_SKILL_ROUTE_AGENT_TYPES
             else prompt
         )

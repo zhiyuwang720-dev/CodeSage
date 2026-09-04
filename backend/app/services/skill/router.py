@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Sequence, Set
 
-# 06-P5: finding 类型退役后, 运行时引擎仅服务 review:* 视角。
-# 漏洞审查专属的 skill 路由/记忆召回目前只对 review:security 视角启用
-# (architecture/quality 的技能绑定与路由在 06-P7 落地)。
+# 06-P7: finding 类型已整体退役, 运行时引擎仅服务 review:* 视角。
+# 代码审查技能路由/记忆召回目前只对 review:security 视角启用
+# (architecture/quality 暂无配套技能, 绑定/路由按需扩展)。
 RUNTIME_SKILL_ROUTE_AGENT_TYPES = frozenset({"review:security"})
 
 
@@ -166,7 +166,7 @@ def _append_unique(items: List[str], values: Sequence[str]) -> None:
             items.append(value)
 
 
-def resolve_finding_skill_routes(context: Dict[str, Any], skill_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def resolve_review_skill_routes(context: Dict[str, Any], skill_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     recon_data = context.get("recon_data", {}) or {}
     project_profile = recon_data.get("project_profile", {}) or {}
     project_info = context.get("project_info", {}) or {}
@@ -231,9 +231,9 @@ def resolve_finding_skill_routes(context: Dict[str, Any], skill_context: Dict[st
     }
 
 
-def build_finding_skill_route_message(context: Dict[str, Any], skill_context: Dict[str, Any] | None = None) -> str:
+def build_review_skill_route_message(context: Dict[str, Any], skill_context: Dict[str, Any] | None = None) -> str:
     skill_context = skill_context or {}
-    route = resolve_finding_skill_routes(context, skill_context)
+    route = resolve_review_skill_routes(context, skill_context)
     skill_prompt = (skill_context.get("prompt") or "").strip()
     primary_skill = route.get("primary_skill") or "the bound primary skill"
     secondary_skills = route.get("secondary_skills") or []
@@ -250,7 +250,7 @@ def build_finding_skill_route_message(context: Dict[str, Any], skill_context: Di
     lines.extend(
         [
             "",
-            "Finding 技能路由计划：",
+            "审查技能路由计划：",
             f"- 主审计技能：{primary_skill}",
             f"- 启动步骤：先读取 {primary_skill} 目录条目中的 skill_file_path；仅在兼容旧流程时才回退使用 load_skill_body。",
         ]

@@ -20,13 +20,15 @@ from app.services.init_agent_assets import init_agent_assets
 from app.services.llm.factory import LLMFactory
 from app.services.llm.service import LLMService
 from app.services.report_template_file_service import ReportTemplateFileService
-from app.services.skill.file_service import SkillFileService
+from app.services.skill.file_service import AGENT_TYPES, SkillFileService
 
 router = APIRouter()
 
-AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification", "audit_chat"]
-WORKFLOW_AGENT_TYPES = ["orchestrator", "recon", "scan", "triage", "finding", "verification"]
-WORKFLOW_LOCKED_AGENTS = {"orchestrator", "recon"}
+# 06-P7: 引擎已收敛为 review:* 单语义视角; 旧多-agent(orchestrator/finding/audit_chat 等)
+# 随 finding 线路退役, per-agent LLM 配置/workflow 面板只服务现役 review 三视角。
+# AGENT_TYPES 单一来源 = skill.file_service(绑定循环同源, 避免两处清单漂移)。
+WORKFLOW_AGENT_TYPES = list(AGENT_TYPES)
+WORKFLOW_LOCKED_AGENTS: set[str] = set()
 SENSITIVE_LLM_FIELDS = [
     "llmApiKey",
     "geminiApiKey",

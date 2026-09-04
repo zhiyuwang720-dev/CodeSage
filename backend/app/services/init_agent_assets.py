@@ -7,8 +7,11 @@ from app.services.task_report_service import DEFAULT_REPORT_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
+# 06-P7: 默认绑定收敛到 review:* 视角。code-audit-finding(漏洞审计技能内容)改绑到
+# review:security; architecture/quality 暂无配套技能内容, 空绑(预留新 slug)。
+# finding/audit_chat 等旧 agent 已退役, 不再为其维护默认绑定。
 DEFAULT_AGENT_SKILLS: Dict[str, List[Dict[str, Any]]] = {
-    "finding": [
+    "review:security": [
         {
             "slug": "code-audit-finding",
             "always_include": True,
@@ -23,21 +26,10 @@ DEFAULT_AGENT_SKILLS: Dict[str, List[Dict[str, Any]]] = {
                 "source-review",
             ],
         }
-    ]
+    ],
+    "review:architecture": [],
+    "review:quality": [],
 }
-
-LEGACY_FINDING_SKILLS: List[Dict[str, Any]] = [
-    {
-        "slug": "skill-dfyx-code-security-review",
-        "match_keywords": ["auth", "idor", "access-control", "business-logic", "ssrf"],
-    },
-    {
-        "slug": "code-security",
-        "match_keywords": ["security", "injection", "auth", "idor", "ssrf", "deserialization"],
-    },
-]
-
-AUDIT_CHAT_AGENT_TYPE = "audit_chat"
 
 DEFAULT_REPORT_TEMPLATE_SLUG = "report-template"
 DEFAULT_REPORT_TEMPLATE_NAME = "Default Vulnerability Report"
@@ -75,34 +67,6 @@ async def init_skill_bindings() -> List[str]:
                     match_config=dict(skill_spec.get("match_config", {})),
                 )
             slugs.append(slug)
-
-    for skill_spec in LEGACY_FINDING_SKILLS:
-        slug = SkillFileService.slugify(skill_spec["slug"])
-        if SkillFileService.skill_file(slug).exists() and not _binding_exists("finding", slug):
-            SkillFileService.upsert_binding(
-                "finding",
-                slug,
-                enabled=True,
-                always_include=True,
-                sort_order=1,
-                match_keywords=list(skill_spec.get("match_keywords", [])),
-                match_config={},
-            )
-            slugs.append(slug)
-
-    for slug in SkillFileService.list_skill_slugs():
-        normalized_slug = SkillFileService.slugify(slug)
-        if not _binding_exists(AUDIT_CHAT_AGENT_TYPE, normalized_slug):
-            SkillFileService.upsert_binding(
-                AUDIT_CHAT_AGENT_TYPE,
-                normalized_slug,
-                enabled=True,
-                always_include=False,
-                sort_order=10,
-                match_keywords=[],
-                match_config={},
-            )
-            slugs.append(normalized_slug)
 
     SkillFileService.sync_all()
     return slugs

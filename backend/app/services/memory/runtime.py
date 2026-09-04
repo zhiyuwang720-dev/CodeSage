@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
-from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, resolve_finding_skill_routes
+from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, resolve_review_skill_routes
 from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord
 from app.services.skill.file_service import SkillFileService
 
@@ -59,7 +59,7 @@ class RuntimeMemoryManager:
                 "task": user_message,
                 "config": {},
             }
-            route = resolve_finding_skill_routes(context, skill_context)
+            route = resolve_review_skill_routes(context, skill_context)
             recalls = self._load_recalled_memories(
                 recon_payload=recon_payload,
                 user_message=user_message,

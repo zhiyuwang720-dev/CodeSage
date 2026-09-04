@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from app.services.skill.library.models import SkillBinding
+
+
+def _slugify(value: str) -> str:
+    """绑定目录名规约, 须与 SkillFileService.slugify 保持同一映射。
+
+    review:security 在 Windows 上无法作为目录名(冒号非法), file_service.agent_root
+    写入时按 slugify(agent_type) 落盘(agents/review-security); 此处读取路径必须一致,
+    否则 resolve_agent_skills 等经 load_agent_bindings 的读面会与写面错位。
+    """
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", (value or "").strip().lower()).strip("-") or "skill"
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -22,7 +33,7 @@ def runtime_state_root(library_root: Path) -> Path:
 
 def load_agent_bindings(library_root: Path, agent_type: str) -> list[SkillBinding]:
     library_root = Path(library_root)
-    agent_root = library_root / "agents" / agent_type
+    agent_root = library_root / "agents" / _slugify(agent_type)
     payload = _read_json(agent_root / "bindings.json", {"skills": []})
     bindings_by_slug: dict[str, SkillBinding] = {}
 
