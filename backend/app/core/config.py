@@ -134,14 +134,6 @@ class Settings(BaseSettings):
     AGENT_EVENT_STREAM_ENABLED: bool = False
     AGENT_EVENT_STREAM_MAXLEN: int = 5000
     AGENT_EVENT_STREAM_BLOCK_MS: int = 15000
-    ONE_CLICK_CVE_EXECUTION_MODE: str = "inline"
-    ONE_CLICK_CVE_QUEUE_NAME: str = "autocve:arq:one_click_cve_batches"
-    ONE_CLICK_CVE_WORKER_CONCURRENCY: int = 1
-    ONE_CLICK_CVE_WORKER_JOB_TIMEOUT_SECONDS: int = 10800
-    ONE_CLICK_CVE_WORKER_MAX_TRIES: int = 1
-    ONE_CLICK_CVE_MAX_REPOSITORY_SIZE_KB: int = 512000
-    ONE_CLICK_CVE_AGENT_TIMEOUT_SECONDS: int = 3000
-    AUDIT_SESSION_RESUME_TIMEOUT_SECONDS: int = 3000
     REDIS_URL: str = "redis://localhost:6379/0"
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"
     SANDBOX_IMAGE: str = "autocve-sandbox:latest"

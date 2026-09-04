@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.api import deps
 from app.core.config import settings
 from app.core.encryption import decrypt_sensitive_data
-from app.db.session import get_db
+from app.db.session import async_session_factory, get_db
 from app.models.agent_task import AgentFinding, AgentTask, FindingStatus
 from app.models.audit_session import (
     AuditHandoff,
@@ -38,8 +39,8 @@ from app.services.agent.tools.sandbox_tool import SandboxManager
 from app.services.review_runtime.bridge import FindingRuntimeBridge
 from app.services.llm.service import LLMService
 from app.services.runtime_core.runtime_guardrails import is_guardrails_enabled
-from app.services.review_runtime.resume_queue import enqueue_audit_session_resume
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -375,13 +376,52 @@ async def continue_runtime_session(*, session_id: str, content: str, db: AsyncSe
             pass
 
 
+_resume_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_inline_session_resume(session_id: str, resume_token: str) -> None:
+    """arq resume 消费链已剪断: resume 改走进程内内联, runner 自身会把 session.state 收敛。
+
+    continue_dialogue_session 会先追加 runtime_resume 指令再 run_once;
+    runner 结束把 session.state 写为 completed/failed(见 review_runtime/runner.py)。
+    """
+
+    async def _run() -> None:
+        async with async_session_factory() as db:
+            try:
+                await continue_runtime_session(session_id=session_id, content="", db=db)
+            except Exception as exc:
+                logger.error(f"Audit session inline resume failed for {session_id}: {exc}")
+                try:
+                    session = await db.get(AuditSession, session_id)
+                    if session is not None and session.state == "running":
+                        session.state = "failed"
+                        runtime_state = dict(session.runtime_state_json or {})
+                        metadata = dict(runtime_state.get("metadata") or {})
+                        metadata["resume_job"] = {
+                            **dict(metadata.get("resume_job") or {}),
+                            "status": "failed",
+                            "error_kind": "resume_error",
+                            "error": str(exc),
+                        }
+                        runtime_state["metadata"] = metadata
+                        session.runtime_state_json = runtime_state
+                        await db.commit()
+                except Exception:
+                    pass
+
+    task = asyncio.create_task(_run())
+    _resume_tasks.add(task)
+    task.add_done_callback(_resume_tasks.discard)
+
+
 async def queue_runtime_session_resume(
     *,
     session_id: str,
     current_user_id: str,
     db: AsyncSession,
 ) -> tuple[AuditSession, bool]:
-    """Atomically claim a failed session and enqueue one durable resume job."""
+    """Atomically claim a failed session and schedule an in-process inline resume."""
     session = await db.scalar(
         select(AuditSession).where(AuditSession.id == session_id).with_for_update()
     )
@@ -416,27 +456,7 @@ async def queue_runtime_session_resume(
         task.completed_at = None
     await db.commit()
 
-    try:
-        await enqueue_audit_session_resume(session.id, resume_token)
-    except Exception as exc:
-        await db.refresh(session)
-        session.state = "failed"
-        runtime_state = dict(session.runtime_state_json or {})
-        metadata = dict(runtime_state.get("metadata") or {})
-        metadata["resume_job"] = {
-            **dict(metadata.get("resume_job") or {}),
-            "status": "enqueue_failed",
-            "can_resume": True,
-            "error_kind": "queue_unavailable",
-            "error": str(exc),
-        }
-        runtime_state["metadata"] = metadata
-        session.runtime_state_json = runtime_state
-        if task is not None:
-            task.status = "failed"
-            task.error_message = f"继续审计任务入队失败：{exc}"
-        await db.commit()
-        raise HTTPException(status_code=503, detail="Resume queue is temporarily unavailable") from exc
+    _schedule_inline_session_resume(session.id, resume_token)
     return session, True
 
 
@@ -541,7 +561,7 @@ async def resume_audit_session(
     )
     if not queued:
         return AuditSessionResumeResponse(session_id=session_id, status="running", message="Audit session is already running")
-    return AuditSessionResumeResponse(session_id=session_id, status="running", message="Audit session resume job queued")
+    return AuditSessionResumeResponse(session_id=session_id, status="running", message="Audit session resume scheduled (in-process)")
 
 
 @router.get("/{session_id}/messages", response_model=list[AuditSessionMessageResponse])
@@ -680,10 +700,8 @@ async def create_audit_session_message(
     if session is None:
         raise HTTPException(status_code=404, detail="Audit session not found")
     mode = str(payload.mode or "chat").strip() or "chat"
-    if mode not in {"chat", "generate_report_and_sync"}:
-        raise HTTPException(status_code=400, detail="Unsupported audit session message mode")
-    if mode == "generate_report_and_sync" and session.runtime_stack != "runtime":
-        raise HTTPException(status_code=400, detail="Report generation and sync is only supported for runtime audit sessions")
+    if mode != "chat":
+        raise HTTPException(status_code=400, detail="Only chat mode is supported for audit session messages")
 
     next_sequence = await db.scalar(
         select(func.max(AuditSessionMessage.sequence)).where(AuditSessionMessage.session_id == session_id)
@@ -710,15 +728,6 @@ async def create_audit_session_message(
 
     if session.runtime_stack == "runtime":
         await continue_runtime_session(session_id=session_id, content=payload.content, db=db)
-    if session.runtime_stack == "runtime":
-        if mode == "generate_report_and_sync":
-            try:
-                synced_managed_vulnerability = await _generate_and_sync_follow_up_managed_vulnerability(session=session, db=db)
-            except ValueError as exc:
-                await db.rollback()
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        else:
-            await continue_audit_chat_session(session_id=session_id, content=payload.content, db=db)
 
     return _to_message_mutation_response(
         message,
@@ -737,10 +746,8 @@ async def stream_audit_session_message(
     if session is None:
         raise HTTPException(status_code=404, detail="Audit session not found")
     mode = str(payload.mode or "chat").strip() or "chat"
-    if mode not in {"chat", "generate_report_and_sync"}:
-        raise HTTPException(status_code=400, detail="Unsupported audit session message mode")
-    if mode == "generate_report_and_sync" and session.runtime_stack != "runtime":
-        raise HTTPException(status_code=400, detail="Report generation and sync is only supported for runtime audit sessions")
+    if mode != "chat":
+        raise HTTPException(status_code=400, detail="Only chat mode is supported for audit session messages")
 
     next_sequence = await db.scalar(
         select(func.max(AuditSessionMessage.sequence)).where(AuditSessionMessage.session_id == session_id)
@@ -780,50 +787,6 @@ async def stream_audit_session_message(
                     "usage": {},
                     "mode": mode,
                     "result": result,
-                })
-                if mode == "generate_report_and_sync":
-                    synced_managed_vulnerability = await _generate_and_sync_follow_up_managed_vulnerability(session=session, db=db)
-                else:
-                    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-
-                    async def collect_event(event: dict[str, Any]):
-                        await queue.put(event)
-
-                    async def worker():
-                        try:
-                            await continue_audit_chat_session(
-                                session_id=session_id,
-                                content=payload.content,
-                                db=db,
-                                event_sink=collect_event,
-                            )
-                        finally:
-                            await queue.put(None)
-
-                    worker_task = asyncio.create_task(worker())
-                    try:
-                        while True:
-                            try:
-                                event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                            except asyncio.TimeoutError:
-                                yield _format_sse_event({"type": "heartbeat"})
-                                continue
-                            if event is None:
-                                break
-                            yield _format_sse_event(event)
-                        await worker_task
-                    finally:
-                        if not worker_task.done():
-                            worker_task.cancel()
-                yield _format_sse_event({
-                    "type": "done",
-                    "usage": {},
-                    "mode": mode,
-                    "synced_managed_vulnerability": (
-                        ManagedVulnerabilityDetailResponse.model_validate(synced_managed_vulnerability).model_dump(mode="json")
-                        if synced_managed_vulnerability is not None
-                        else None
-                    ),
                 })
             except Exception as exc:
                 await db.rollback()

@@ -1,7 +1,6 @@
 """PR 审查三视角 + Orchestrator 提示词(阶段 02 §3.1)。
 
-领域语义只存在于这层"皮"上(通用运行时零领域语义不变量); 独立成模块,
-不改动 AutoCVE 既有 system_prompts.py。
+领域语义只存在于这层"皮"上(通用运行时零领域语义不变量); 独立成模块, 不含 legacy agent 编排。
 """
 from __future__ import annotations
 

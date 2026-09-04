@@ -32,7 +32,6 @@ Kode-CLI/
 
 # local runtime state
 .codesage/
-codesage/sessions/
 
 # 上传/审查临时工作区(上传的 diff、运行时产物, 不随仓库上传)
 projects/.auditai_workspaces/

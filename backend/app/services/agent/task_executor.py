@@ -28,14 +28,6 @@ def request_agent_task_cancellation(task_id: str) -> None:
     if runner and hasattr(runner, "cancel"):
         runner.cancel()
 
-    from app.services.agent.core.graph_controller import stop_all_agents
-
-    try:
-        stop_result = stop_all_agents(exclude_root=False)
-        logger.info("[Cancel] Stopped all agents: %s", stop_result)
-    except Exception as exc:
-        logger.warning("[Cancel] Failed to stop agents via registry: %s", exc)
-
     asyncio_task = _running_asyncio_tasks.get(task_id)
     if asyncio_task and not asyncio_task.done():
         asyncio_task.cancel()

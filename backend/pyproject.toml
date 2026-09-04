@@ -170,7 +170,7 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short --import-mode=importlib --ignore=tests/api/test_agent_direct_audit_api.py --ignore=tests/finding_runtime --ignore=tests/runtime_core -k 'not test_finding_system_prompt_includes_code_audit_skill_overlay and not test_finding_initial_message_requires_loading_skill_and_project_specific_references and not test_auto_generate_managed_reports_when_verification_disabled'"
+addopts = "-v --tb=short --import-mode=importlib --ignore=tests/finding_runtime --ignore=tests/runtime_core"
 
 [tool.coverage.run]
 source = ["app"]

@@ -13,13 +13,6 @@ from app.services.review_runtime.models import ToolExecutionPayload
 from app.services.review_runtime.skills import RuntimeSkillTool
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
 from app.services.review_runtime.tools.finalize_review import FinalizeReviewTool
-from app.services.review_runtime.tools.finalize_vulnerability_reports import FinalizeVulnerabilityReportsTool
-from app.services.triage_runtime.tools import (
-    FinalizeTriageBatchTool,
-    FinalizeTriageTool,
-    GetScanFindingTool,
-    GetTriageBatchTool,
-)
 from app.services.runtime_core.permission_runtime import ToolPermissionDecision
 from app.services.runtime_core.runtime_guardrails import (
     APPROVAL_SCOPE_SINGLE_USE,
@@ -591,7 +584,6 @@ def build_runtime_tool_registry(
     agent_type: str,
     user_id: str | None = None,
     include_finding_finalizer: bool = True,
-    include_report_finalizer: bool = False,
     tool_allowlist: set[str] | None = None,
 ) -> ToolRegistry:
     tools: list[RuntimeTool] = []
@@ -649,20 +641,9 @@ def build_runtime_tool_registry(
     )
     if str(agent_type or "").strip() == "finding" and include_finding_finalizer:
         tools.append(FinalizeFindingTool())
-    if str(agent_type or "").strip() == "finding" and include_report_finalizer:
-        tools.append(FinalizeVulnerabilityReportsTool())
     if str(agent_type or "").strip().startswith("review:"):
         # 阶段 02: PR 审查三视角(review:security/architecture/quality)共用 FinalizeReview 终点
         tools.append(FinalizeReviewTool())
-    if str(agent_type or "").strip() == "triage":
-        tools.extend(
-            [
-                GetTriageBatchTool(project_root=project_root),
-                GetScanFindingTool(project_root=project_root),
-                FinalizeTriageBatchTool(project_root=project_root),
-                FinalizeTriageTool(project_root=project_root),
-            ]
-        )
     tools.extend(
         [
             TodoWriteRuntimeTool(session_store),
@@ -673,7 +654,7 @@ def build_runtime_tool_registry(
     )
     if tool_allowlist is not None:
         # 阶段 02 权限矩阵(§3.2.2): 视角只能调用矩阵内工具; 终点工具始终保留
-        allow = set(tool_allowlist) | {"FinalizeReview", "FinalizeFinding", "FinalizeVulnerabilityReports"}
+        allow = set(tool_allowlist) | {"FinalizeReview", "FinalizeFinding"}
         tools = [tool for tool in tools if tool.name in allow]
 
     registry = ToolRegistry(tools)

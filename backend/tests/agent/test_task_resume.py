@@ -8,15 +8,11 @@ from fastapi import BackgroundTasks, HTTPException
 
 import app.api.v1.endpoints.agent_tasks as agent_tasks_endpoint
 from app.api.v1.endpoints.agent_tasks import (
-    _bootstrap_legacy_agent_memories,
-    _mark_task_resume_restore,
-    _restore_agents_from_checkpoints,
     _save_findings,
     resume_agent_task,
 )
 from app.models.agent_task import AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.models.project import Project
-from app.services.review_runtime.models import RuntimeMemoryBundle, RuntimeMemoryRecord
 
 
 class _FakeDB:
@@ -93,26 +89,6 @@ async def test_resume_agent_task_rejects_completed_tasks():
     assert exc_info.value.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_restore_agents_from_checkpoints_returns_only_restored_agents():
-    restored_agent = SimpleNamespace(
-        agent_id="agent-1",
-        name="Recon",
-        restore_runtime_session_from_checkpoint=AsyncMock(return_value={"checkpoint_id": "cp-1"}),
-    )
-    idle_agent = SimpleNamespace(
-        agent_id="agent-2",
-        name="Scan",
-        restore_runtime_session_from_checkpoint=AsyncMock(return_value=None),
-    )
-
-    restored = await _restore_agents_from_checkpoints([restored_agent, idle_agent])
-
-    assert restored == [{"agent_id": "agent-1", "agent_name": "Recon", "checkpoint_id": "cp-1"}]
-    restored_agent.restore_runtime_session_from_checkpoint.assert_awaited_once()
-    idle_agent.restore_runtime_session_from_checkpoint.assert_awaited_once()
-
-
 class _FakeFindingScalars:
     def __init__(self, findings):
         self._findings = findings
@@ -164,35 +140,6 @@ def _build_existing_finding(*, fingerprint: str | None = None, verified: bool = 
     return finding
 
 
-def test_mark_task_resume_restore_records_restored_agents_and_clears_resume_flag():
-    task = AgentTask(
-        id='task-1',
-        project_id='project-1',
-        created_by='user-1',
-        name='Demo',
-        version_label='resume-test',
-        status=AgentTaskStatus.PAUSED,
-        agent_config={
-            'resume_from_checkpoint': True,
-            'resume_count': 2,
-        },
-    )
-
-    changed = _mark_task_resume_restore(
-        task,
-        [
-            {'agent_id': 'agent-1', 'agent_name': 'Recon', 'checkpoint_id': 'cp-1'},
-            {'agent_id': 'agent-2', 'agent_name': 'Finding', 'checkpoint_id': 'cp-2'},
-        ],
-    )
-
-    assert changed is True
-    assert task.agent_config['resume_from_checkpoint'] is False
-    assert task.agent_config['last_resume_restore_count'] == 2
-    assert task.agent_config['last_resume_restored_agents'][0]['agent_id'] == 'agent-1'
-    assert task.current_step == 'Resumed from 2 runtime checkpoints'
-
-
 @pytest.mark.asyncio
 async def test_save_findings_merges_duplicate_resume_finding_instead_of_reinserting():
     existing = _build_existing_finding()
@@ -229,60 +176,3 @@ async def test_save_findings_merges_duplicate_resume_finding_instead_of_reinsert
     assert existing.references == ['https://example.com/advisory']
     assert existing.finding_metadata['merge_count'] == 1
     db.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_legacy_agent_memories_loads_shared_memories(monkeypatch):
-    bundle = RuntimeMemoryBundle(
-        instructions=[
-            RuntimeMemoryRecord(
-                memory_kind="instruction",
-                title="Project rule",
-                source_type="project_memory",
-                source_ref="CLAUDE.md",
-                content="Focus auth flows.",
-                metadata={"scope": "project"},
-            )
-        ],
-        recalls=[],
-    )
-
-    async def fake_preload(self, **kwargs):
-        assert kwargs["agent_type"] == "analysis"
-        return bundle
-
-    monkeypatch.setattr('app.services.runtime_core.memory_runtime.RuntimeMemoryManager.preload', fake_preload)
-
-    loaded_bundles = []
-
-    class _FakeAgent:
-        agent_id = 'agent-1'
-        agent_type = SimpleNamespace(value='analysis')
-        config = SimpleNamespace(system_prompt='Base prompt')
-        state = SimpleNamespace(metadata={})
-
-        def load_runtime_memory_bundle(self, incoming_bundle, *, source='preload'):
-            loaded_bundles.append((incoming_bundle, source))
-            self.state.metadata['memory_runtime'] = {'instructions': [{'source_ref': 'CLAUDE.md'}]}
-
-    task = AgentTask(
-        id='task-1',
-        project_id='project-1',
-        created_by='user-1',
-        name='Demo',
-        description='Audit auth flows',
-        version_label='resume-test',
-        target_vulnerabilities=['idor'],
-    )
-
-    loaded = await _bootstrap_legacy_agent_memories(
-        agents=[_FakeAgent()],
-        project_root='D:/demo/project',
-        project_info={'name': 'Demo Project', 'languages': ['python']},
-        task=task,
-    )
-
-    assert len(loaded_bundles) == 1
-    assert loaded_bundles[0][1] == 'task-bootstrap'
-    assert loaded[0]['instruction_count'] == 1
-    assert loaded[0]['recall_count'] == 0

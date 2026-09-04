@@ -23,9 +23,6 @@ from app.services.review_runtime.session_store import AuditSessionStore
 from app.services.review_runtime.skills import RuntimeSkillCatalog
 from app.services.review_runtime.tooling import ToolOrchestrator, ToolRegistry
 from app.services.review_runtime.tools.finalize_finding import FinalizeFindingTool
-from app.services.review_runtime.tools.finalize_vulnerability_reports import (
-    FinalizeVulnerabilityReportsTool,
-)
 from app.services.runtime_core import build_runtime_tool_registry
 from app.services.runtime_core.tool_message_codec import (
     ToolMessageFormat,
@@ -34,7 +31,6 @@ from app.services.runtime_core.tool_message_codec import (
 from app.services.llm.protocols.registry import resolve_tool_message_format
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
-REPORT_GENERATION_RUNTIME_TOOLS = {"Read", "Glob", "Grep"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
 AUTO_FINALIZER_PROMPTS_ENABLED = True
 RESUME_TERMINAL_ACTION_NUDGE_LIMIT = 5
@@ -951,7 +947,7 @@ class FindingRuntimeBridge:
         # 阶段 02: agent_type 参数化(默认 finding 兼容); review:* 视角由
         # build_runtime_tool_registry 内部挂 FinalizeReview 终点工具。
         # tool_allowlist 为空 → 全量工具(非 review 调用方不变); 非空 → 按 §3.1 权限矩阵裁剪,
-        # 终点工具(FinalizeReview/FinalizeFinding/FinalizeVulnerabilityReports)始终保留。
+        # 终点工具(FinalizeReview/FinalizeFinding)始终保留。
         return build_runtime_tool_registry(
             session_store=self._session_store,
             agent_tools=self._tools,
@@ -959,71 +955,6 @@ class FindingRuntimeBridge:
             user_id=self._user_id,
             include_finding_finalizer=not str(self._agent_type or "").startswith("review:"),
             tool_allowlist=tool_allowlist,
-        )
-
-    def _build_report_generation_tool_registry(self) -> ToolRegistry:
-        full_registry = build_runtime_tool_registry(
-            session_store=self._session_store,
-            agent_tools=self._tools,
-            agent_type="finding",
-            user_id=self._user_id,
-            include_finding_finalizer=False,
-            include_report_finalizer=True,
-        )
-        allowed_names = {*REPORT_GENERATION_RUNTIME_TOOLS, FinalizeVulnerabilityReportsTool.name}
-        return ToolRegistry([tool for tool in full_registry.all_tools() if tool.name in allowed_names])
-
-    def prepare_report_generation_continuation(
-        self,
-        *,
-        session_id: str,
-        system_prompt: str,
-        context_message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        prompt = str(system_prompt or "").strip()
-        if not prompt:
-            raise ValueError("Report generation system prompt must not be empty.")
-        runtime_state = self._session_store.load_runtime_state(session_id)
-        runtime_state.metadata["base_system_prompt"] = prompt
-        runtime_state.metadata["last_user_message"] = str(context_message or "")
-        runtime_state.metadata["report_generation_mode"] = True
-        self._session_store.update_system_prompt(session_id, prompt)
-        self._session_store.replace_runtime_state(session_id, runtime_state)
-        return self._session_store.append_message(
-            session_id,
-            TranscriptItem(
-                role=RuntimeMessageRole.USER,
-                name="managed_report_generator",
-                content=str(context_message or ""),
-                metadata={
-                    "kind": "internal_managed_report_request",
-                    **dict(metadata or {}),
-                },
-            ),
-        )
-
-    async def continue_session_until_report_payload(
-        self,
-        *,
-        session_id: str,
-        payload_extractor: Callable[[Any], Any | None],
-        finalizer_prompts: list[str],
-        terminal_action_nudge_message: str | None = None,
-        model_name: str = "finding-runtime",
-        max_turns: int | None = None,
-        fallback_payload_builder: Callable[[Any], Any] | None = None,
-    ) -> dict[str, Any]:
-        return await self.continue_session_until_payload(
-            session_id=session_id,
-            payload_extractor=payload_extractor,
-            finalizer_prompts=finalizer_prompts,
-            model_name=model_name,
-            max_turns=max_turns,
-            fallback_payload_builder=fallback_payload_builder,
-            tool_registry=self._build_report_generation_tool_registry(),
-            finalizer_tools=[FinalizeVulnerabilityReportsTool()],
-            terminal_action_nudge_message=terminal_action_nudge_message,
         )
 
     @staticmethod
