@@ -502,7 +502,7 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progr
     """PR review 运行时事件 → AgentEvent 流。
 
     复用 EventManager.add_event: 统一落库 agent_events + 内存队列实时(/stream) + Redis。
-    review 事件契约见 review_runtime/query_loop.py 与 pr_review/runtime_dispatcher.tag_event_sink
+    review 事件契约见 app/services/runtime/query_loop.py 与 pr_review/runtime_dispatcher.tag_event_sink
     (事件 dict 带 perspective 字段; tool_call 的 dict 在 event["tool_call"], 名称取 name)。
 
     事件映射对齐 AutoCVE 契约(base.py:480-490): thinking_start/thinking_token/thinking_end

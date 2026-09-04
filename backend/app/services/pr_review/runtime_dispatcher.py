@@ -43,7 +43,7 @@ def tag_event_sink(event_sink, perspective: str):
 
 @dataclass(frozen=True)
 class ReviewPerspectiveSpec:
-    """视角运行规格(spec §3.5: build_review_runtime_spec 落点)。"""
+    """视角运行规格(引擎 review:* 单语义视角的 runtime spec 落点)。"""
 
     perspective: str
     agent_type: str

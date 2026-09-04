@@ -33,7 +33,7 @@ def test_interaction_runtime_tools_update_session_runtime_state_via_orchestrator
             ExitPlanModeRuntimeTool(store),
         ]
     )
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -51,7 +51,7 @@ def test_interaction_runtime_tools_update_session_runtime_state_via_orchestrator
     runtime_state = store.load_runtime_state(session_id)
 
     assert [record.status for record in records] == ["completed", "completed", "completed", "completed"]
-    assert runtime_state.agent_states["finding"].pending_todos[0]["title"] == "Inspect payment flow"
+    assert runtime_state.agent_states["review:security"].pending_todos[0]["title"] == "Inspect payment flow"
     assert runtime_state.metadata["questions"]
     assert runtime_state.metadata["plan_mode"]["last_exit_reason"] == "Decision recorded"
     assert runtime_state.permission_mode == "default"

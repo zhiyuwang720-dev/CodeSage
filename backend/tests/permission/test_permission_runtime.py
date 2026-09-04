@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.services.session.store import AuditSessionStore
-from app.services.runtime_core.permission_runtime import RuntimePermissionRuntime
+from app.services.permission.runtime import RuntimePermissionRuntime
 from app.services.tooling.runtime import ToolExecutionContext
 
 
@@ -24,7 +24,7 @@ def build_context(store: AuditSessionStore) -> tuple[str, str, ToolExecutionCont
         turn_id=turn_id,
         tool_use_id="tool-use-1",
         tool_call_id="tool-call-1",
-        agent_type="finding",
+        agent_type="review:security",
     )
     return session_id, turn_id, context
 
@@ -36,7 +36,7 @@ def test_permission_runtime_allows_system_tools_during_plan_mode():
     runtime_state.permission_mode = "plan"
     store.replace_runtime_state(session_id, runtime_state)
 
-    runtime = RuntimePermissionRuntime(session_store=store, agent_type="finding")
+    runtime = RuntimePermissionRuntime(session_store=store, agent_type="review:security")
     decision = runtime.evaluate_tool_use(tool_name="AskUser", context=context)
 
     assert decision.allowed is True
@@ -51,7 +51,7 @@ def test_permission_runtime_blocks_non_readonly_tools_in_plan_mode():
     runtime_state.permission_mode = "plan"
     store.replace_runtime_state(session_id, runtime_state)
 
-    runtime = RuntimePermissionRuntime(session_store=store, agent_type="finding")
+    runtime = RuntimePermissionRuntime(session_store=store, agent_type="review:security")
     decision = runtime.evaluate_tool_use(tool_name="Write", context=context)
 
     assert decision.allowed is False
@@ -65,13 +65,13 @@ def test_permission_runtime_supports_explicit_ask_rules():
     session_id, _, context = build_context(store)
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.metadata["permission_rules"] = {
-        "finding": {
+        "review:security": {
             "Write": {"mode": "ask", "reason": "Need approval before mutating state."}
         }
     }
     store.replace_runtime_state(session_id, runtime_state)
 
-    runtime = RuntimePermissionRuntime(session_store=store, agent_type="finding")
+    runtime = RuntimePermissionRuntime(session_store=store, agent_type="review:security")
     decision = runtime.evaluate_tool_use(tool_name="Write", context=context)
 
     assert decision.allowed is False
@@ -85,13 +85,13 @@ def test_permission_runtime_respects_skill_allowed_tools_after_explicit_rules():
     session_id, _, context = build_context(store)
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.record_skill_contract(
-        agent_type="finding",
+        agent_type="review:security",
         skill_ref="code-audit-finding",
         contract={"allowed_tools": ["Read"]},
     )
     store.replace_runtime_state(session_id, runtime_state)
 
-    runtime = RuntimePermissionRuntime(session_store=store, agent_type="finding")
+    runtime = RuntimePermissionRuntime(session_store=store, agent_type="review:security")
     denied = runtime.evaluate_tool_use(tool_name="Write", context=context)
     allowed = runtime.evaluate_tool_use(tool_name="Read", context=context)
 

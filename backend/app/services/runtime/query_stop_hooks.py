@@ -3,8 +3,8 @@
 from typing import Any
 
 from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.runtime_core.hook_policy import evaluate_post_tool_hook_policy, evaluate_stop_hook_policy
-from app.services.runtime_core.hook_runtime import HookExecutorRuntime
+from app.services.hooks.policy import evaluate_post_tool_hook_policy, evaluate_stop_hook_policy
+from app.services.hooks.runtime import HookExecutorRuntime
 
 
 async def evaluate_stop_hooks(

@@ -43,7 +43,7 @@ _DETAILED_ANALYSIS_INSTRUCTION_PARTIAL = """在提供最终总结前，请用 <a
    - 特别关注收到的用户反馈，尤其是用户要求你改变做法的地方。
 2. 复核技术准确性和完整性，逐项覆盖必要元素。"""
 
-AUDIT_COMPACTION_RETENTION_INSTRUCTIONS = """如果对话内容涉及 Finding 审计、漏洞挖掘或代码安全分析，摘要还必须保留：
+AUDIT_COMPACTION_RETENTION_INSTRUCTIONS = """如果对话内容涉及安全/架构/质量代码审查、漏洞挖掘或代码安全分析，摘要还必须保留：
 
 - 已确认的漏洞及其 source、sink、PoC 状态；
 - 尚未闭合但值得继续验证的候选线索；

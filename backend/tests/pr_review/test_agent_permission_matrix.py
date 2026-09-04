@@ -30,13 +30,13 @@ def test_review_registry_has_finalize_review_not_finding(tmp_path):
 
 
 def test_non_review_registry_has_no_terminal_finalizer(tmp_path):
-    """非 review:* 注册表不挂任何终点工具(finding 终点工具已随 P4 退役)。"""
+    """非 review:* 注册表不挂任何终点工具(引擎 finalizer 仅绑定 review:* 视角)。"""
     factory = make_session_factory(tmp_path)
     session_store = factory()
     registry = build_runtime_tool_registry(
         session_store=session_store,
         file_tools=build_runtime_tool_catalog(project_root=str(tmp_path)),
-        agent_type="finding",
+        agent_type="generic",
     )
     names = {t.name for t in registry.enabled_tools()}
     assert "FinalizeReview" not in names

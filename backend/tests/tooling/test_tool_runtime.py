@@ -91,7 +91,7 @@ def test_tool_orchestrator_times_out_slow_runtime_tools():
     orchestrator = ToolOrchestrator(
         session_store=store,
         tool_registry=registry,
-        agent_type="finding",
+        agent_type="review:security",
         default_tool_timeout_seconds=0.01,
     )
 
@@ -125,7 +125,7 @@ def build_workspace_temp_dir() -> Path:
 def seed_skill_runtime_state(store: AuditSessionStore, session_id: str) -> None:
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.record_skill_contract(
-        agent_type="finding",
+        agent_type="review:security",
         skill_ref="code-audit-finding",
         contract={
             "allowed_tools": ["Read"],
@@ -145,7 +145,7 @@ def test_shared_tool_runtime_enforces_allowed_tools_and_records_denial_hooks():
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     seed_skill_runtime_state(store, session_id)
     registry = ToolRegistry([WriteTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -171,7 +171,7 @@ def test_shared_tool_runtime_emits_pre_and_post_hooks_for_allowed_tool():
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     seed_skill_runtime_state(store, session_id)
     registry = ToolRegistry([ReadTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -189,7 +189,7 @@ def test_shared_tool_runtime_emits_pre_and_post_hooks_for_allowed_tool():
     ]
 
     assert records[0].status == AuditToolCallStatus.COMPLETED.value
-    assert records[0].result.output_payload == {"echo": "alpha", "agent": "finding"}
+    assert records[0].result.output_payload == {"echo": "alpha", "agent": "review:security"}
     assert hook_events == ["PreToolUse", "PostToolUse"]
 
 
@@ -228,7 +228,7 @@ def test_shared_tool_runtime_serializes_conflicting_concurrency_keys():
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     events: list[tuple[str, str]] = []
     registry = ToolRegistry([ScopedConcurrentTool(events)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -255,13 +255,13 @@ def test_shared_tool_runtime_converts_ask_permission_rules_into_denied_tool_reco
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     runtime_state = store.load_runtime_state(session_id)
     runtime_state.metadata["permission_rules"] = {
-        "finding": {
+        "review:security": {
             "Write": {"mode": "ask", "reason": "Need human approval before write actions."}
         }
     }
     store.replace_runtime_state(session_id, runtime_state)
     registry = ToolRegistry([WriteTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -286,7 +286,7 @@ def test_shared_tool_runtime_keeps_system_interaction_tools_available_under_skil
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     seed_skill_runtime_state(store, session_id)
     registry = ToolRegistry([TodoWriteRuntimeTool(store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -303,7 +303,7 @@ def test_shared_tool_runtime_keeps_system_interaction_tools_available_under_skil
     )
 
     runtime_state = store.load_runtime_state(session_id)
-    agent_state = runtime_state.agent_states["finding"]
+    agent_state = runtime_state.agent_states["review:security"]
 
     assert records[0].status == AuditToolCallStatus.COMPLETED.value
     assert agent_state.pending_todos[0]["title"] == "Capture exploit chain"
@@ -316,7 +316,7 @@ def test_shared_tool_runtime_keeps_skill_tool_available_under_skill_permissions(
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     seed_skill_runtime_state(store, session_id)
     registry = ToolRegistry([SkillTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
 
     records = asyncio.run(
         orchestrator.execute_tool_calls(
@@ -336,7 +336,7 @@ def test_canonical_write_tool_writes_artifacts_under_managed_output_dir():
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -381,7 +381,7 @@ def test_canonical_write_tool_treats_any_dot_auditai_path_as_managed_output():
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool()])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -429,7 +429,7 @@ def test_canonical_write_tool_prefers_configured_project_root_over_session_paylo
     project_root.mkdir()
     stale_root.mkdir()
     registry = ToolRegistry([WriteRuntimeTool(project_root=str(project_root))])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     records = asyncio.run(
         orchestrator.execute_tool_calls(
             session_id=session_id,
@@ -474,7 +474,7 @@ def test_canonical_write_tool_requires_approval_for_source_tree_writes():
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -518,7 +518,7 @@ def test_canonical_write_tool_allows_source_tree_write_when_guardrails_are_disab
     turn_id = store.open_turn(session_id, model_name="gpt-test")
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -569,7 +569,7 @@ def test_canonical_write_tool_allows_session_approved_source_tree_write():
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -618,7 +618,7 @@ def test_canonical_write_tool_requires_approval_before_overwriting_existing_arti
     existing_file.parent.mkdir(parents=True, exist_ok=True)
     existing_file.write_text("old", encoding="utf-8")
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     try:
         records = asyncio.run(
             orchestrator.execute_tool_calls(
@@ -671,7 +671,7 @@ def test_canonical_write_tool_consumes_single_use_source_write_approval_after_fi
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     session_ref = type(
         "SessionRef",
         (),
@@ -744,7 +744,7 @@ def test_canonical_write_tool_keeps_session_scope_source_write_approval_reusable
     store.replace_runtime_state(session_id, runtime_state)
     project_root = build_workspace_temp_dir()
     registry = ToolRegistry([WriteRuntimeTool(session_store=store)])
-    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="finding")
+    orchestrator = ToolOrchestrator(session_store=store, tool_registry=registry, agent_type="review:security")
     session_ref = type(
         "SessionRef",
         (),

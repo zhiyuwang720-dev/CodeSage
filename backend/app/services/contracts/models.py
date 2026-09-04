@@ -52,11 +52,7 @@ class RuntimeStopReason(StrEnum):
 
 
 class RuntimeTerminalAction(StrEnum):
-    FINALIZE_FINDING = "finalize_finding"
     FINALIZE_REVIEW = "finalize_review"  # 阶段 02: PR 审查终结工具
-    FINALIZE_VULNERABILITY_REPORTS = "finalize_vulnerability_reports"
-    FINALIZE_TRIAGE_BATCH = "finalize_triage_batch"
-    FINALIZE_TRIAGE = "finalize_triage"
     NATURAL_END_WITHOUT_TERMINAL_ACTION = "natural_end_without_terminal_action"
     HOOK_STOP = "hook_stop"
     MAX_TURNS = "max_turns"

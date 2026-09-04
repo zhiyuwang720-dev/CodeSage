@@ -1,6 +1,6 @@
 """spec §6 进度输出: RuntimeProgressSink 事件 → stderr 进度行。
 
-事件契约对齐 review_runtime/query_loop._emit_event:
+事件契约对齐 app/services/runtime/query_loop._emit_event:
 event_sink = Callable[[dict], Any], 同步或异步均可。
 """
 from __future__ import annotations

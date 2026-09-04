@@ -24,19 +24,19 @@ def build_store() -> AuditSessionStore:
 def test_session_runtime_state_tracks_progressive_skill_loading_per_agent():
     state = SessionRuntimeState(session_id="session-1")
 
-    finding_state = state.ensure_agent_state("finding")
-    assert finding_state.agent_type == "finding"
+    finding_state = state.ensure_agent_state("review:security")
+    assert finding_state.agent_type == "review:security"
     assert finding_state.invoked_skills == {}
 
     first = state.mark_skill_invoked(
-        agent_type="finding",
+        agent_type="review:security",
         skill_ref="code-audit-finding",
         skill_stage="body",
         invocation_id="inv-1",
         turn_id="turn-1",
     )
     second = state.mark_skill_invoked(
-        agent_type="finding",
+        agent_type="review:security",
         skill_ref="code-audit-finding",
         skill_stage="references",
         invocation_id="inv-2",
@@ -55,9 +55,9 @@ def test_session_runtime_state_tracks_progressive_skill_loading_per_agent():
     assert second.invocation_count == 2
     assert second.last_invocation_id == "inv-2"
     assert second.last_turn_id == "turn-2"
-    assert state.agent_states["finding"].invoked_skills["code-audit-finding"].skill_stage == "references"
+    assert state.agent_states["review:security"].invoked_skills["code-audit-finding"].skill_stage == "references"
     assert state.agent_states["verification"].invoked_skills["verification-skill"].skill_stage == "body"
-    assert state.list_invoked_skills("finding") == ["code-audit-finding"]
+    assert state.list_invoked_skills("review:security") == ["code-audit-finding"]
 
 
 def test_session_store_persists_and_reloads_runtime_state_round_trip():
@@ -70,8 +70,8 @@ def test_session_store_persists_and_reloads_runtime_state_round_trip():
         touched_paths=["backend/app/auth/service.py"],
         pending_questions=[{"id": "ask-1", "question": "Need approval?"}],
         agent_states={
-            "finding": AgentRuntimeState(
-                agent_type="finding",
+            "review:security": AgentRuntimeState(
+                agent_type="review:security",
                 invoked_skills={
                     "code-audit-finding": InvokedSkillState(
                         skill_ref="code-audit-finding",
@@ -96,8 +96,8 @@ def test_session_store_persists_and_reloads_runtime_state_round_trip():
     assert loaded.permission_mode == "plan"
     assert loaded.touched_paths == ["backend/app/auth/service.py"]
     assert loaded.pending_questions[0]["id"] == "ask-1"
-    assert loaded.agent_states["finding"].invoked_skills["code-audit-finding"].skill_stage == "references"
-    assert loaded.agent_states["finding"].invoked_skills["code-audit-finding"].invocation_count == 2
+    assert loaded.agent_states["review:security"].invoked_skills["code-audit-finding"].skill_stage == "references"
+    assert loaded.agent_states["review:security"].invoked_skills["code-audit-finding"].invocation_count == 2
 
 
 def test_legacy_session_runtime_adapter_round_trips_permissions_and_hooks():

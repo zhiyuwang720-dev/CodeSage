@@ -54,7 +54,7 @@ from app.services.runtime.query_stop_hooks import (
     evaluate_post_tool_hooks,
     evaluate_stop_hooks,
 )
-from app.services.runtime_core.hook_policy import collect_turn_hook_events
+from app.services.hooks.policy import collect_turn_hook_events
 from app.services.runtime.query_token_budget import evaluate_token_budget_continuation
 from app.services.runtime.query_transitions import (
     build_continue_state,
@@ -1540,13 +1540,6 @@ class QueryLoop:
                     return RuntimeTerminalAction(raw_action)
                 except ValueError:
                     pass
-            tool_name = str(getattr(getattr(record, "request", None), "name", "") or "")
-            if tool_name == "FinalizeTriageBatch":
-                return RuntimeTerminalAction.FINALIZE_TRIAGE_BATCH
-            if tool_name == "FinalizeTriage":
-                return RuntimeTerminalAction.FINALIZE_TRIAGE
-            if tool_name == "FinalizeVulnerabilityReports":
-                return RuntimeTerminalAction.FINALIZE_VULNERABILITY_REPORTS
         return RuntimeTerminalAction.FINALIZE_REVIEW
 
     def _should_issue_terminal_action_nudge(

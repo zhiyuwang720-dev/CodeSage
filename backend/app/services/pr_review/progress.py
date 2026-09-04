@@ -2,7 +2,7 @@
 
 CLI 的 runtime 路径原本全程静默: 三视角 LLM 编排(每视角多轮非流式调用)跑完后
 才在最后一次性 print JSON(cli.py), 端点不稳或重试时会长时间看不到任何反馈。
-此模块把 review_runtime 已存在但被丢弃的事件流(query_loop._emit_event 的
+此模块把运行时引擎已存在但被丢弃的事件流(app/services/runtime/query_loop._emit_event 的
 assistant_start / done / llm_retry / error)转成 stderr 上的粗粒度进度行。
 
 设计:

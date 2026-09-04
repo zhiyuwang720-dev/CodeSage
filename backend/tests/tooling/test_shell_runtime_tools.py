@@ -6,7 +6,7 @@ from app.services.session.store import AuditSessionStore
 from app.db.base import Base
 from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
 from app.services.tooling.registry import build_runtime_tool_registry
-from app.services.runtime_core.runtime_guardrails import register_shell_approval
+from app.services.permission.guardrails import register_shell_approval
 from app.services.tooling.shell import (
     BashRuntimeTool,
     BashToolInput,
@@ -139,7 +139,7 @@ def test_runtime_tool_registry_adds_shell_tools_when_shell_backends_are_availabl
     registry = build_runtime_tool_registry(
         session_store=_store(),
         file_tools=_file_tools("D:/repo"),
-        agent_type="finding",
+        agent_type="review:security",
         user_id=None,
     )
 

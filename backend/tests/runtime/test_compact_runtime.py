@@ -219,7 +219,7 @@ def test_compact_conversation_rebuilds_post_compact_attachments_and_hook_results
                 ],
                 "plan_mode": {"active": True, "steps": ["collect sinks", "trace sources"]},
                 "deferred_tools": ["Read", "Bash"],
-                "agent_listing": ["finding", "verification"],
+                "agent_listing": ["review:security", "review:quality"],
                 "mcp_servers": ["filesystem", "github"],
                 "session_start_hooks": [
                     {"event": "compact", "message": "Session hooks reattached after compact."},
@@ -322,7 +322,7 @@ def test_post_compact_rebuild_skips_duplicate_skill_agent_mcp_and_tool_context_f
                     {"ref": "skills.finding", "title": "Finding skill", "path": "skills/finding.md", "content": "A" * 200},
                 ],
                 "deferred_tools": ["Read", "Bash"],
-                "agent_listing": ["finding", "verification"],
+                "agent_listing": ["review:security", "review:quality"],
                 "mcp_servers": ["filesystem", "github"],
             }
         }
@@ -343,7 +343,7 @@ def test_post_compact_rebuild_skips_duplicate_skill_agent_mcp_and_tool_context_f
         TranscriptItem(
             role=RuntimeMessageRole.USER,
             content="kept agents",
-            metadata={"attachment_kind": "agent_listing", "agents": ["finding", "verification"]},
+            metadata={"attachment_kind": "agent_listing", "agents": ["review:security", "review:quality"]},
         ),
         TranscriptItem(
             role=RuntimeMessageRole.USER,

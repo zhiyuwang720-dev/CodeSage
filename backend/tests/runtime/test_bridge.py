@@ -438,7 +438,7 @@ def test_bridge_skips_system_transcript_messages_when_building_model_payload():
                 TranscriptItem(role=RuntimeMessageRole.SYSTEM, content="should be skipped"),
                 TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"),
             ],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[],
         )
     )
@@ -523,7 +523,7 @@ def test_runtime_model_client_complete_stream_emits_tokens_and_returns_tool_call
             system_prompt="system",
             recon_payload={"repo": "demo"},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[
                 {
                     "name": "Read",
@@ -759,7 +759,7 @@ def test_runtime_model_client_classifies_max_output_tokens_responses():
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[],
         )
     )
@@ -788,7 +788,7 @@ def test_runtime_model_client_classifies_prompt_too_long_errors():
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[],
         )
     )
@@ -867,7 +867,7 @@ def test_runtime_model_client_passes_max_output_tokens_override_to_llm_service()
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[],
             max_output_tokens_override=64000,
         )
@@ -952,7 +952,7 @@ def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[{"name": "Read", "description": "read", "input_schema": {"type": "object"}}],
         ):
             events.append(event)
@@ -993,7 +993,7 @@ def test_runtime_model_client_stream_complete_does_not_reemit_done_tool_calls():
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[{"name": "Read", "description": "read", "input_schema": {"type": "object"}}],
         ):
             events.append(event)
@@ -1031,7 +1031,7 @@ def test_runtime_model_client_stream_complete_passthroughs_llm_retry_events():
             system_prompt="system",
             recon_payload={},
             transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
-            model_name="finding",
+            model_name="review-runtime",
             tool_definitions=[{"name": "Read", "description": "read", "input_schema": {"type": "object"}}],
         ):
             events.append(event)

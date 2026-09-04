@@ -182,11 +182,11 @@ def test_create_handoff_persists_record_and_appends_transcript_message():
 
     handoff_id = store.create_handoff(
         session_id=session_id,
-        target="verification",
+        target="review:quality",
         status="pending",
         payload={
-            "from_agent": "finding",
-            "to_agent": "verification",
+            "from_agent": "review:security",
+            "to_agent": "review:quality",
             "summary": "Need dynamic proof for exploit chain.",
         },
     )
@@ -196,8 +196,8 @@ def test_create_handoff_persists_record_and_appends_transcript_message():
 
     assert handoff_id
     assert len(handoffs) == 1
-    assert handoffs[0].target == "verification"
+    assert handoffs[0].target == "review:quality"
     assert len(snapshot.messages) == 1
     assert snapshot.messages[0].role == "handoff"
     assert snapshot.messages[0].message_metadata["kind"] == "handoff"
-    assert snapshot.messages[0].payload["target"] == "verification"
+    assert snapshot.messages[0].payload["target"] == "review:quality"

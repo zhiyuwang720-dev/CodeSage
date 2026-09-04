@@ -1,4 +1,4 @@
-"""契约层 tools(06-P2 自 runtime_core.tool_runtime 抽出): RuntimeTool ABC + ToolExecutionContext。
+"""契约层 tools(06-P2): RuntimeTool ABC + ToolExecutionContext, 引擎 tool 契约基础。
 
 契约层只依赖 contracts.models 与标准库, 不反向 import permission/session/runtime ——
 RuntimeTool.check_permission 默认实现采用调用期惰性装载 ToolPermissionDecision
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from app.services.runtime_core.permission_runtime import ToolPermissionDecision
+    from app.services.permission.runtime import ToolPermissionDecision
 
 from app.services.contracts.models import ToolExecutionPayload
 
@@ -88,7 +88,7 @@ class RuntimeTool:
     ) -> ToolPermissionDecision:
         del parsed_input, context
         # 契约层静态不依赖 permission(层级在 contracts 之上); 默认放行在调用期惰性装载。
-        from app.services.runtime_core.permission_runtime import ToolPermissionDecision
+        from app.services.permission.runtime import ToolPermissionDecision
 
         return ToolPermissionDecision(allowed=True)
 

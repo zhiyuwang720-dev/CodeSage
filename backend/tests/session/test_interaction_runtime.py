@@ -22,13 +22,13 @@ def test_interaction_runtime_tracks_todos_questions_and_plan_mode_per_agent():
 
     todo = runtime.create_todo(
         state,
-        agent_type="finding",
+        agent_type="review:security",
         title="Review authz path",
         details="Trace owner check before approval sink",
     )
     question = runtime.ask_user(
         state,
-        agent_type="finding",
+        agent_type="review:security",
         question="Need production config snapshot?",
         context={"candidate_id": "cand-1"},
     )
@@ -39,12 +39,12 @@ def test_interaction_runtime_tracks_todos_questions_and_plan_mode_per_agent():
     )
     runtime.complete_todo(
         state,
-        agent_type="finding",
+        agent_type="review:security",
         todo_id=todo["id"],
     )
     runtime.resolve_question(
         state,
-        agent_type="finding",
+        agent_type="review:security",
         question_id=question["id"],
         answer="No",
     )
@@ -54,7 +54,7 @@ def test_interaction_runtime_tracks_todos_questions_and_plan_mode_per_agent():
         reason="Plan approved",
     )
 
-    finding_state = state.agent_states["finding"]
+    finding_state = state.agent_states["review:security"]
 
     assert finding_state.pending_todos[0]["status"] == "completed"
     assert finding_state.pending_todos[0]["title"] == "Review authz path"

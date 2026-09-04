@@ -7,8 +7,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.services.contracts.models import ToolExecutionPayload
-from app.services.runtime_core.permission_runtime import ToolPermissionDecision
-from app.services.runtime_core.runtime_guardrails import (
+from app.services.permission.runtime import ToolPermissionDecision
+from app.services.permission.guardrails import (
     APPROVAL_SCOPE_SINGLE_USE,
     consume_write_approval,
     has_write_approval,

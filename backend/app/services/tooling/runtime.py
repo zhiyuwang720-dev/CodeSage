@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Literal
 from pydantic import BaseModel, ValidationError
 
 from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
-from app.services.runtime_core.permission_runtime import RuntimePermissionRuntime, ToolPermissionDecision
+from app.services.permission.runtime import RuntimePermissionRuntime, ToolPermissionDecision
 from app.services.contracts.models import (
     ToolCallRequest,
     ToolExecutionPayload,

@@ -64,7 +64,7 @@ def test_runtime_tool_descriptions_explain_audit_usage_and_continue_contract():
     registry = build_runtime_tool_registry(
         session_store=store,
         file_tools=build_file_tools(),
-        agent_type="finding",
+        agent_type="review:security",
         user_id="user-1",
     )
 

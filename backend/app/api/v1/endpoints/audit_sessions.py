@@ -37,7 +37,7 @@ from app.models.project import Project
 from app.models.user import User
 from app.services.runtime.bridge import RuntimeBridge
 from app.services.llm.service import LLMService
-from app.services.runtime_core.runtime_guardrails import is_guardrails_enabled
+from app.services.permission.guardrails import is_guardrails_enabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -368,7 +368,7 @@ def _schedule_inline_session_resume(session_id: str, resume_token: str) -> None:
     """arq resume 消费链已剪断: resume 改走进程内内联, runner 自身会把 session.state 收敛。
 
     continue_dialogue_session 会先追加 runtime_resume 指令再 run_once;
-    runner 结束把 session.state 写为 completed/failed(见 review_runtime/runner.py)。
+    runner 结束把 session.state 写为 completed/failed(见 app/services/runtime/runner.py)。
     """
 
     async def _run() -> None:

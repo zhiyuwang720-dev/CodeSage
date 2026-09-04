@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.services.runtime_core.hook_runtime import HookExecutorRuntime
+from app.services.hooks.runtime import HookExecutorRuntime
 
 
 class FakeHookRunner:
