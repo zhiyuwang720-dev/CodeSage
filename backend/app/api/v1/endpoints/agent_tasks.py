@@ -1587,6 +1587,7 @@ def build_debug_trace_payload(
     }
 
 
+@router.post("/", response_model=AgentTaskResponse)
 async def create_agent_task(
     request: AgentTaskCreate,
     background_tasks: BackgroundTasks,
