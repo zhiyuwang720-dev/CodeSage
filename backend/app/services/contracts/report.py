@@ -59,6 +59,7 @@ class ReportSummary(BaseModel):
     total_iterations: int = 0
     tool_calls_count: int = 0
     tokens_used: int = 0
+    cache_hit_ratio: float | None = None  # 07-P2: 前缀缓存命中率(来自 agent_config["token_stats"])
     max_iterations: int | None = None
     token_budget: int | None = None
     duration_ms: int | None = None

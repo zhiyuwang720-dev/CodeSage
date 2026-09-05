@@ -69,6 +69,7 @@ def test_render_report_default_audit_wording_and_pr_block():
             "total_iterations": 5,
             "tool_calls_count": 12,
             "tokens_used": 3456,
+            "cache_hit_ratio": None,
             "max_iterations": 50,
             "token_budget": 100000,
             "duration_ms": 1200,
@@ -103,6 +104,7 @@ def test_render_report_default_audit_wording_and_pr_block():
     assert "总迭代数: 5" in rendered
     assert "工具调用数: 12" in rendered
     assert "Token 用量: 3456" in rendered
+    assert "缓存命中率: N/A%" in rendered
     assert "最大迭代数: 50" in rendered
     assert "Token 预算: 100000" in rendered
     assert "总耗时(ms): 1200" in rendered

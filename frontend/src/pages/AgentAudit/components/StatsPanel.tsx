@@ -75,13 +75,14 @@ function CircularProgress({ value, size = 52, strokeWidth = 4, color = "primary"
 }
 
 // Enhanced Metric card component with premium styling
-function MetricCard({ icon, label, value, suffix = "", colorClass = "text-muted-foreground", bgClass = "" }: {
+function MetricCard({ icon, label, value, suffix = "", colorClass = "text-muted-foreground", bgClass = "", sub }: {
   icon: React.ReactNode;
   label: string;
   value: string | number;
   suffix?: string;
   colorClass?: string;
   bgClass?: string;
+  sub?: React.ReactNode;
 }) {
   return (
     <div className={`
@@ -102,6 +103,7 @@ function MetricCard({ icon, label, value, suffix = "", colorClass = "text-muted-
         <div className="text-lg text-foreground font-mono font-bold leading-tight">
           {value}<span className="text-muted-foreground text-sm ml-0.5">{suffix}</span>
         </div>
+        {sub}
       </div>
     </div>
   );
@@ -122,6 +124,14 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
   const recoveredCandidates = task.recovered_candidates_count ?? 0;
   const totalFindings = finalizedFindings;
   const progressPercent = task.progress_percentage || 0;
+  // 07-P2: 前缀缓存命中率(后端 agent_config["token_stats"] 按前缀复用估算, 每视角最新一轮)
+  const tokenStats = (task.token_stats ?? undefined) as { cache_hit_ratio?: number } | undefined;
+  const cacheHitSub =
+    tokenStats?.cache_hit_ratio != null ? (
+      <div className="text-[10px] text-muted-foreground mt-0.5">
+        缓存命中 ~{(tokenStats.cache_hit_ratio * 100).toFixed(0)}%
+      </div>
+    ) : undefined;
   const topFindings = [...(findings || [])]
     .sort((a, b) => {
       const statusRank = { confirmed: 0, candidate: 1, false_positive: 2 } as const;
@@ -294,6 +304,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
           value={((task.tokens_used || 0) / 1000).toFixed(1)}
           suffix="k"
           colorClass="text-violet-500"
+          sub={cacheHitSub}
         />
         <MetricCard
           icon={<Bug className="w-4 h-4" />}

@@ -113,6 +113,8 @@ class AgentTaskResponse(BaseModel):
     total_iterations: int = 0
     tool_calls_count: int = 0
     tokens_used: int = 0
+    # 07-P2: 每视角 token 明细 + 缓存命中率(来自 agent_config["token_stats"], 供前端实时展示)
+    token_stats: Optional[Dict[str, Any]] = None
     
     findings_count: int = 0
     total_findings: int = 0
@@ -464,23 +466,36 @@ async def _load_runtime_task_stats(db: AsyncSession, task_ids: List[str]) -> Dic
             AgentEvent.task_id,
             func.sum(case((AgentEvent.event_type == "llm_action", 1), else_=0)),
             func.sum(case((AgentEvent.event_type == "tool_call", 1), else_=0)),
-            func.sum(case((AgentEvent.event_type == "llm_usage", AgentEvent.tokens_used), else_=0)),
-            func.max(AgentEvent.tokens_used),
         )
         .where(AgentEvent.task_id.in_(task_ids))
         .group_by(AgentEvent.task_id)
     )
-    for task_id, llm_actions, tool_calls, usage_tokens, max_tokens in event_rows.all():
+    for task_id, llm_actions, tool_calls in event_rows.all():
         if not task_id:
             continue
         task_stats = stats.setdefault(str(task_id), {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0})
         task_stats["total_iterations"] = max(int(task_stats["total_iterations"] or 0), int(llm_actions or 0))
         task_stats["tool_calls_count"] = max(int(task_stats["tool_calls_count"] or 0), int(tool_calls or 0))
-        task_stats["tokens_used"] = max(
-            int(task_stats["tokens_used"] or 0),
-            int(usage_tokens or 0),
-            int(max_tokens or 0),
+
+    # 07-P2: tokens_used = Σ 各 Agent 最新一轮 total(与 sink 运行中语义一致)。
+    # llm_usage 事件带 phase=视角, 按 (task, phase) 取每视角最新一轮 MAX, 再跨视角求和。
+    phase_max = (
+        select(
+            AgentEvent.task_id.label("task_id"),
+            AgentEvent.phase.label("phase"),
+            func.max(AgentEvent.tokens_used).label("phase_max_tokens"),
         )
+        .where(AgentEvent.event_type == "llm_usage", AgentEvent.task_id.in_(task_ids))
+        .group_by(AgentEvent.task_id, AgentEvent.phase)
+        .subquery()
+    )
+    token_rows = await db.execute(
+        select(phase_max.c.task_id, func.sum(phase_max.c.phase_max_tokens))
+        .group_by(phase_max.c.task_id)
+    )
+    for task_id, tokens in token_rows.all():
+        if task_id:
+            stats.setdefault(str(task_id), {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0})["tokens_used"] = int(tokens or 0)
     return stats
 
 
@@ -519,10 +534,13 @@ def _build_pr_review_event_sink(
     生命周期 + token 放 metadata; done → task_complete(触发前端 onComplete 与 /stream 终止);
     message/assistant_* 的 dict 只取 content, 不整 dump。
 
-    07-P1(可观测): 进程内累计迭代/token/工具调用, 每视角完成(perspective_done)flush 增量
+    07-P1(可观测): 进程内累计迭代/工具调用, 每视角完成(perspective_done)flush 增量
     回写 AgentTask 列供前端实时展示, 并作为 Plan B 外层 CheckPoint 的统计来源。
     07-P1.1(实时修复): 迭代按 done 事件逐轮累计(非等视角结束), token 解析多键兜底,
     flush 加 ~2s 节流使运行中前端能看到非 0 实时值。
+    07-P2(token 语义): tokens_used = Σ 各 Agent 最新一轮 total(非累计历史轮次, 避免
+    DeepSeek 前缀缓存使 input 越滚越大而虚高); 每视角 token 明细 + 缓存命中率存
+    agent_config["token_stats"](JSON, 供前端/报告展示, 不动表结构)。
     """
     sequence = 0
     # per-perspective 思考生命周期跟踪
@@ -530,16 +548,24 @@ def _build_pr_review_event_sink(
     _accumulated: dict[str, list[str]] = {}
     # 07-P1: 进程内统计累计; flush 用 max 合并, 使跨 resume 恢复续加幂等
     _stats = {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0}
+    # 07-P2: 每视角(Agent)最新一轮 token 用量(非累计历史轮次);
+    # tokens_used = Σ 各 Agent 最新一轮 total; 缓存命中率存 agent_config["token_stats"]。
+    _per_agent_tokens: dict[str, dict] = {}
     # 07-P1.1: flush 节流(last flush 时刻, 按单调钟)
     _last_flush_at = 0.0
 
     async def _flush_stats() -> None:
-        """增量回写 AgentTask 统计列并 commit(节流 + 关键节点 force, 不每事件 commit 避免频繁写主库)。"""
+        """增量回写 AgentTask 统计列并 commit(节流 + 关键节点 force, 不每事件 commit 避免频繁写主库)。
+
+        07-P2: tokens_used 直接写 Σ 各 Agent 最新一轮(实时重算, 非 max 合并),
+        并把每视角 token 明细 + 缓存命中率持久化到 agent_config["token_stats"](JSON, 不动表结构)。
+        """
         if task is None or db is None:
             return
         task.total_iterations = max(task.total_iterations or 0, _stats["total_iterations"])
         task.tool_calls_count = max(task.tool_calls_count or 0, _stats["tool_calls_count"])
-        task.tokens_used = max(task.tokens_used or 0, _stats["tokens_used"])
+        task.tokens_used = _stats["tokens_used"]
+        _persist_token_stats()
         try:
             await db.commit()
         except Exception:
@@ -555,6 +581,62 @@ def _build_pr_review_event_sink(
             return
         _last_flush_at = now
         await _flush_stats()
+
+    def _normalize_usage(usage: dict) -> dict:
+        """归一化网关 usage(键名多态)为 {total, input, output, cached}。
+
+        cached 优先取真实缓存值(prompt_tokens_details.cached_tokens / prompt_cache_hit_tokens,
+        OpenAI/DeepSeek 缓存 API 可能回传); 缺失时 None, 由调用方按前缀复用估算。
+        """
+        total = int(usage.get("total_tokens") or 0)
+        if not total:
+            total = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+        if not total:
+            total = int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
+        input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        cached = None
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict) and details.get("cached_tokens"):
+            cached = int(details["cached_tokens"])
+        elif usage.get("prompt_cache_hit_tokens"):
+            cached = int(usage["prompt_cache_hit_tokens"])
+        return {"total": total, "input": input_tokens, "output": output_tokens, "cached": cached}
+
+    def _latest_token_total() -> int:
+        """Σ 各 Agent 最新一轮 total(07-P2 语义: 不累计历史轮次, 后续 Critic 视角加入自动 +1 项)。"""
+        return sum(entry["total"] for entry in _per_agent_tokens.values())
+
+    def _persist_token_stats() -> None:
+        """把每视角最新一轮 token 明细 + 缓存命中率写进 agent_config["token_stats"](JSON, 不动表结构)。
+
+        前缀缓存原理(DeepSeek 自动前缀缓存): 第 N 轮 input ⊇ 第 N-1 轮 input,
+        故估算 cached ≈ min(本轮 input, 上轮 input); 网关回传真实 cached_tokens 时优先取真值。
+        """
+        if task is None or not _per_agent_tokens:
+            return
+        cfg = dict(task.agent_config or {})
+        per_agent = {}
+        total_input = 0
+        total_cached = 0
+        for perspective, entry in _per_agent_tokens.items():
+            per_agent[perspective] = {
+                "latest_total": entry["total"],
+                "latest_input": entry["input"],
+                "latest_output": entry["output"],
+                "cached": entry["cached"],
+                "hit_ratio": round(entry["cached"] / entry["input"], 4) if entry["input"] else 0.0,
+            }
+            total_input += entry["input"]
+            total_cached += entry["cached"]
+        cfg["token_stats"] = {
+            "per_agent": per_agent,
+            "total_input": total_input,
+            "total_cached": total_cached,
+            "cache_hit_ratio": round(total_cached / total_input, 4) if total_input else 0.0,
+            "tokens_used": _latest_token_total(),
+        }
+        task.agent_config = cfg
 
     def _extract_text(value) -> str:
         """事件 message 可能是 dict(query_loop.py:1026-1047 把整条消息 dict 放进来):
@@ -656,22 +738,28 @@ def _build_pr_review_event_sink(
             # 仅统计运行时事件(perspective 非空): 排除执行器收尾补发的 task_complete done。
             if perspective is not None:
                 _stats["total_iterations"] += 1
-            # 07-P1: done 事件带 usage(query_loop.py:1130/1395), 累计 token 并补 llm_usage
-            # 事件(全仓唯一生产者, 供 _load_runtime_task_stats 的明细查询)。
+            # 07-P1: done 事件带 usage(query_loop.py:1130/1395); 07-P2 起按每视角最新一轮记录,
+            # 并补 llm_usage 事件(全仓唯一生产者, 供 _load_runtime_task_stats 的明细查询)。
             usage = event.get("usage") or {}
-            used = 0
-            try:
-                if usage.get("total_tokens"):
-                    used = int(usage["total_tokens"])
-                else:
-                    # 多键兜底: 部分网关回传 input/output 或 prompt/completion
-                    used = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
-                    if not used:
-                        used = int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
-            except (TypeError, ValueError):
-                used = 0
-            if used:
-                _stats["tokens_used"] += used
+            # 07-P2: 键名多态归一化(total/input/output/cached), 缺失缓存值时按前缀复用估算。
+            # 仅统计运行时事件(perspective 非空): 排除执行器收尾补发的 task_complete done。
+            norm = _normalize_usage(usage)
+            used = norm["total"]
+            if used and perspective is not None:
+                # 07-P2: 每视角(Agent)最新一轮取代累计历史轮次;
+                # cached 估算 = 本轮 input 中复用上轮 input 的部分(前缀缓存), 有真实缓存值优先。
+                prev = _per_agent_tokens.get(perspective)
+                prev_input = prev["input"] if prev else 0
+                cached = norm["cached"]
+                if cached is None and prev_input and norm["input"]:
+                    cached = min(prev_input, norm["input"])
+                _per_agent_tokens[perspective] = {
+                    "total": used,
+                    "input": norm["input"],
+                    "output": norm["output"],
+                    "cached": cached or 0,
+                }
+                _stats["tokens_used"] = _latest_token_total()
                 await event_manager.add_event(
                     task_id, "llm_usage", sequence=sequence, phase=perspective,
                     message=f"LLM 用量 +{used} tokens", tokens_used=used,
@@ -1776,6 +1864,7 @@ async def get_agent_task(
         "total_iterations": total_iterations,
         "tool_calls_count": tool_calls_count,
         "tokens_used": tokens_used,
+        "token_stats": (task.agent_config or {}).get("token_stats"),
         "findings_count": task.findings_count or 0,
         "total_findings": task.findings_count or 0,
         "verified_count": task.verified_count or 0,

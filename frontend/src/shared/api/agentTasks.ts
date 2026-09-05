@@ -38,6 +38,8 @@ export interface AgentTask {
   total_iterations: number;
   tool_calls_count: number;
   tokens_used: number;
+  // 07-P2: per-agent token breakdown + cache hit ratio (backend agent_config["token_stats"])
+  token_stats?: Record<string, unknown>;
 
   // 涓ラ噸绋嬪害缁熻
   critical_count: number;

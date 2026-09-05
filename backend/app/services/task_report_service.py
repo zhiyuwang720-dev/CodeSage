@@ -60,6 +60,7 @@ DEFAULT_REPORT_TEMPLATE = """# CodeSage PR 审计报告
 - 总迭代数: {{ summary.total_iterations }}
 - 工具调用数: {{ summary.tool_calls_count }}
 - Token 用量: {{ summary.tokens_used }}
+- 缓存命中率: {{ (summary.cache_hit_ratio * 100)|round(1) if summary.cache_hit_ratio is not none else 'N/A' }}%
 - 最大迭代数: {{ summary.max_iterations if summary.max_iterations is not none else 'N/A' }}
 - Token 预算: {{ summary.token_budget if summary.token_budget is not none else 'N/A' }}
 - 总耗时(ms): {{ summary.duration_ms if summary.duration_ms is not none else 'N/A' }}
@@ -270,6 +271,8 @@ async def build_report_payload(
             total_iterations=task.total_iterations or 0,
             tool_calls_count=task.tool_calls_count or 0,
             tokens_used=task.tokens_used or 0,
+            # 07-P2: 前缀缓存命中率(每视角最新一轮估算, 来自运行中 sink 持久化的 token_stats)
+            cache_hit_ratio=((task.agent_config or {}).get("token_stats") or {}).get("cache_hit_ratio"),
             max_iterations=task.max_iterations,
             token_budget=task.token_budget,
             duration_ms=duration_ms,

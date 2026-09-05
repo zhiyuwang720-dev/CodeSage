@@ -36,6 +36,13 @@ def _mk_em(task_id: str) -> EventManager:
     return em
 
 
+class _FakeDB:
+    """sink flush 用假 DB: 只提供 commit, 不落库。"""
+
+    async def commit(self):
+        pass
+
+
 def test_sink_thinking_lifecycle_and_token_metadata():
     em = _mk_em("t-1")
     sink = _build_pr_review_event_sink("t-1", em)
@@ -152,18 +159,15 @@ def test_stream_terminates_on_task_complete():
 
 
 def test_sink_usage_accumulation_and_flush():
-    """07-P1: done 带 usage → llm_usage 事件 + token 累计; 07-P1.1: 迭代按 done 逐轮累计,
-    flush 增量回写 AgentTask 统计列(实时可观测 + Plan B checkpoint 统计源)。"""
+    """07-P1: done 带 usage → llm_usage 事件; 07-P1.1: 迭代按 done 逐轮累计,
+    flush 增量回写 AgentTask 统计列(实时可观测 + Plan B checkpoint 统计源)。
+    07-P2: tokens_used = Σ 各 Agent 最新一轮 total(同一视角两轮取最新一轮 30, 非累计 150)。"""
     from types import SimpleNamespace
 
     em = _mk_em("t-5")
 
-    class FakeDB:
-        async def commit(self):
-            pass
-
-    task = SimpleNamespace(total_iterations=0, tool_calls_count=0, tokens_used=0)
-    sink = _build_pr_review_event_sink("t-5", em, task=task, db=FakeDB())
+    task = SimpleNamespace(total_iterations=0, tool_calls_count=0, tokens_used=0, agent_config={})
+    sink = _build_pr_review_event_sink("t-5", em, task=task, db=_FakeDB())
     drained = _push_and_drain(
         sink, em, "t-5",
         [
@@ -174,7 +178,7 @@ def test_sink_usage_accumulation_and_flush():
             {"type": "done", "task_complete": True, "message": "完成"},
         ],
     )
-    # llm_usage 事件: 每轮 done 带 usage 产生一条, 携带 tokens_used
+    # llm_usage 事件: 每轮 done 带 usage 产生一条, 携带 tokens_used(逐轮明细, 语义不变)
     llm = [e for e in drained if e["event_type"] == "llm_usage"]
     assert [e["tokens_used"] for e in llm] == [120, 30]
     assert all(e["phase"] == "security" for e in llm)
@@ -183,9 +187,52 @@ def test_sink_usage_accumulation_and_flush():
     # 执行器收尾补发的 task_complete done 无 perspective 不计)。
     assert task.total_iterations == 2
     assert task.tool_calls_count == 1
-    assert task.tokens_used == 150
+    # 07-P2: 同一视角两轮 → 取最新一轮(30), 不再累计(150)
+    assert task.tokens_used == 30
     # 无 usage 的 done 不产生 llm_usage(零 token 不刷屏)
     assert len([e for e in drained if e["event_type"] == "task_complete"]) == 1
+
+
+def test_sink_per_agent_latest_token_and_cache_estimate():
+    """07-P2: tokens_used = Σ 各 Agent 最新一轮 total(非累计); 前缀缓存命中率按
+    min(本轮 input, 上轮 input) 估算并持久化到 agent_config["token_stats"]。"""
+    from types import SimpleNamespace
+
+    em = _mk_em("t-7")
+    task = SimpleNamespace(total_iterations=0, tool_calls_count=0, tokens_used=0, agent_config={})
+    sink = _build_pr_review_event_sink("t-7", em, task=task, db=_FakeDB())
+    _push_and_drain(
+        sink, em, "t-7",
+        [
+            # security 两轮: 第 2 轮 input 130 ⊇ 第 1 轮 input 100 → cached 估算 = min(100, 130) = 100
+            {"type": "done", "perspective": "security", "usage": {"input_tokens": 100, "output_tokens": 20}},
+            {"type": "done", "perspective": "security", "usage": {"input_tokens": 130, "output_tokens": 10}},
+            # quality 单轮: 无上一轮 → cached = 0; architecture 单轮: 无 input 键 → cached = 0
+            {"type": "done", "perspective": "quality", "usage": {"prompt_tokens": 35, "completion_tokens": 5}},
+            {"type": "done", "perspective": "architecture", "usage": {"total_tokens": 50}},
+            # 各视角完成 force flush
+            {"type": "perspective_done", "perspective": "security", "turn_count": 2, "findings": 1},
+            {"type": "perspective_done", "perspective": "quality", "turn_count": 1, "findings": 0},
+            {"type": "perspective_done", "perspective": "architecture", "turn_count": 1, "findings": 0},
+            {"type": "done", "task_complete": True, "message": "完成"},
+        ],
+    )
+    # Σ 各 Agent 最新一轮: security 140(130+10) + quality 40(35+5) + architecture 50 = 230
+    assert task.tokens_used == 230
+    ts = task.agent_config["token_stats"]
+    assert ts["tokens_used"] == 230
+    # security 最新一轮: total 140, input 130, cached = min(100, 130) = 100
+    sec = ts["per_agent"]["security"]
+    assert sec["latest_total"] == 140
+    assert sec["latest_input"] == 130
+    assert sec["cached"] == 100
+    assert sec["hit_ratio"] == round(100 / 130, 4)
+    # quality 单轮无前缀 → cached 0
+    assert ts["per_agent"]["quality"]["cached"] == 0
+    # 聚合: input = 130+35+0 = 165, cached = 100
+    assert ts["total_input"] == 165
+    assert ts["total_cached"] == 100
+    assert ts["cache_hit_ratio"] == round(100 / 165, 4)
 
 
 def test_sink_usage_fallback_input_output_tokens():
