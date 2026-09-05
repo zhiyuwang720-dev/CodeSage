@@ -497,7 +497,13 @@ def _count_diff_changed_files(diff_text: str) -> int:
     return len(files)
 
 
-def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progress_cb=None):
+def _build_pr_review_event_sink(
+    task_id: str,
+    event_manager: EventManager,
+    progress_cb=None,
+    task: AgentTask | None = None,
+    db: AsyncSession | None = None,
+):
     """PR review 运行时事件 → AgentEvent 流。
 
     复用 EventManager.add_event: 统一落库 agent_events + 内存队列实时(/stream) + Redis。
@@ -507,11 +513,28 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progr
     事件映射对齐 AutoCVE 契约(base.py:480-490): thinking_start/thinking_token/thinking_end
     生命周期 + token 放 metadata; done → task_complete(触发前端 onComplete 与 /stream 终止);
     message/assistant_* 的 dict 只取 content, 不整 dump。
+
+    07-P1(可观测): 进程内累计迭代/token/工具调用, 每视角完成(perspective_done)flush 增量
+    回写 AgentTask 列供前端实时展示, 并作为 Plan B 外层 CheckPoint 的统计来源。
     """
     sequence = 0
     # per-perspective 思考生命周期跟踪
     _thinking_open: set[str] = set()
     _accumulated: dict[str, list[str]] = {}
+    # 07-P1: 进程内统计累计; flush 用 max 合并, 使跨 resume 恢复续加幂等
+    _stats = {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0}
+
+    async def _flush_stats() -> None:
+        """增量回写 AgentTask 统计列并 commit(每视角一次, 不每事件 commit 避免频繁写主库)。"""
+        if task is None or db is None:
+            return
+        task.total_iterations = max(task.total_iterations or 0, _stats["total_iterations"])
+        task.tool_calls_count = max(task.tool_calls_count or 0, _stats["tool_calls_count"])
+        task.tokens_used = max(task.tokens_used or 0, _stats["tokens_used"])
+        try:
+            await db.commit()
+        except Exception:
+            logger.debug("pr_review stats flush failed", exc_info=True)
 
     def _extract_text(value) -> str:
         """事件 message 可能是 dict(query_loop.py:1026-1047 把整条消息 dict 放进来):
@@ -595,6 +618,7 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progr
                 },
             )
         elif ev_type == "tool_call":
+            _stats["tool_calls_count"] += 1
             tool = event.get("tool_call") or {}
             tool_name = str(tool.get("name") or event.get("tool_name") or "?")
             tool_input = tool.get("input") or tool.get("arguments") or event.get("tool_input")
@@ -606,6 +630,20 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progr
             )
         elif ev_type == "done":
             await _close_thinking(perspective)
+            # 07-P1: done 事件带 usage(query_loop.py:1130/1395), 累计 token 并补 llm_usage
+            # 事件(全仓唯一生产者, 供 _load_runtime_task_stats 的明细查询)。
+            usage = event.get("usage") or {}
+            try:
+                used = int(usage.get("total_tokens") or 0)
+            except (TypeError, ValueError):
+                used = 0
+            if used:
+                _stats["tokens_used"] += used
+                await event_manager.add_event(
+                    task_id, "llm_usage", sequence=sequence, phase=perspective,
+                    message=f"LLM 用量 +{used} tokens", tokens_used=used,
+                    metadata={**metadata, "usage": dict(usage)},
+                )
             if event.get("task_complete"):
                 # 审查结束: 触发前端 onComplete 与 /stream 内存路径终止
                 await event_manager.add_event(
@@ -619,14 +657,21 @@ def _build_pr_review_event_sink(task_id: str, event_manager: EventManager, progr
                     message=_message(event, f"{perspective} 视角: 本轮完成"), metadata=metadata,
                 )
         elif ev_type == "perspective_done":
-            findings = int(event.get("findings") or 0)
             turns = event.get("turn_count")
+            if turns is not None:
+                try:
+                    _stats["total_iterations"] += int(turns)
+                except (TypeError, ValueError):
+                    pass
+            findings = int(event.get("findings") or 0)
             tail = f"({turns} 轮" if turns is not None else "("
             tail += f", {findings} 发现)" if findings else ")"
             await event_manager.add_event(
                 task_id, "review_perspective_done", sequence=sequence, phase=perspective,
                 message=f"完成 {perspective} 视角审查 {tail}", metadata=metadata,
             )
+            # 07-P1: 视角完成 flush 统计回写 AgentTask 列(实时可观测)
+            await _flush_stats()
             if progress_cb is not None and perspective:
                 try:
                     await progress_cb(perspective)
@@ -725,7 +770,9 @@ async def _execute_pr_review_task_impl(
             },
         )
 
-    sink = _build_pr_review_event_sink(task.id, event_manager, progress_cb=_progress_done)
+    sink = _build_pr_review_event_sink(
+        task.id, event_manager, progress_cb=_progress_done, task=task, db=db
+    )
     await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
 
     result = await run_review_pipeline_async(

@@ -149,3 +149,38 @@ def test_stream_terminates_on_task_complete():
     collected = asyncio.run(run())
     assert collected[-1] == "task_complete"
     assert "heartbeat" not in collected
+
+
+def test_sink_usage_accumulation_and_flush():
+    """07-P1: done 带 usage → llm_usage 事件 + token 累计; perspective_done 累计迭代 +
+    flush 增量回写 AgentTask 统计列(实时可观测 + Plan B checkpoint 统计源)。"""
+    from types import SimpleNamespace
+
+    em = _mk_em("t-5")
+
+    class FakeDB:
+        async def commit(self):
+            pass
+
+    task = SimpleNamespace(total_iterations=0, tool_calls_count=0, tokens_used=0)
+    sink = _build_pr_review_event_sink("t-5", em, task=task, db=FakeDB())
+    drained = _push_and_drain(
+        sink, em, "t-5",
+        [
+            {"type": "tool_call", "perspective": "security", "tool_call": {"name": "search_code"}},
+            {"type": "done", "perspective": "security", "usage": {"total_tokens": 120}},
+            {"type": "done", "perspective": "security", "usage": {"total_tokens": 30}},
+            {"type": "perspective_done", "perspective": "security", "turn_count": 4, "findings": 2},
+            {"type": "done", "task_complete": True, "message": "完成"},
+        ],
+    )
+    # llm_usage 事件: 每轮 done 带 usage 产生一条, 携带 tokens_used
+    llm = [e for e in drained if e["event_type"] == "llm_usage"]
+    assert [e["tokens_used"] for e in llm] == [120, 30]
+    assert all(e["phase"] == "security" for e in llm)
+    # perspective_done 时 flush: 统计列被增量回写
+    assert task.total_iterations == 4
+    assert task.tool_calls_count == 1
+    assert task.tokens_used == 150
+    # 无 usage 的 done 不产生 llm_usage(零 token 不刷屏)
+    assert len([e for e in drained if e["event_type"] == "task_complete"]) == 1
