@@ -152,7 +152,7 @@ def test_stream_terminates_on_task_complete():
 
 
 def test_sink_usage_accumulation_and_flush():
-    """07-P1: done 带 usage → llm_usage 事件 + token 累计; perspective_done 累计迭代 +
+    """07-P1: done 带 usage → llm_usage 事件 + token 累计; 07-P1.1: 迭代按 done 逐轮累计,
     flush 增量回写 AgentTask 统计列(实时可观测 + Plan B checkpoint 统计源)。"""
     from types import SimpleNamespace
 
@@ -178,9 +178,29 @@ def test_sink_usage_accumulation_and_flush():
     llm = [e for e in drained if e["event_type"] == "llm_usage"]
     assert [e["tokens_used"] for e in llm] == [120, 30]
     assert all(e["phase"] == "security" for e in llm)
-    # perspective_done 时 flush: 统计列被增量回写
-    assert task.total_iterations == 4
+    # 07-P1.1: 迭代按运行时 done 逐轮累计(2 个带 perspective 的 done = 2 轮;
+    # perspective_done 的 turn_count 仅用于日志措辞不再累计, 避免双计;
+    # 执行器收尾补发的 task_complete done 无 perspective 不计)。
+    assert task.total_iterations == 2
     assert task.tool_calls_count == 1
     assert task.tokens_used == 150
     # 无 usage 的 done 不产生 llm_usage(零 token 不刷屏)
     assert len([e for e in drained if e["event_type"] == "task_complete"]) == 1
+
+
+def test_sink_usage_fallback_input_output_tokens():
+    """07-P1.1: usage 无 total_tokens 时回退 input/output, 再回退 prompt/completion。"""
+    em = _mk_em("t-6")
+    drained = _push_and_drain(
+        _build_pr_review_event_sink("t-6", em),
+        em, "t-6",
+        [
+            {"type": "done", "perspective": "security", "usage": {"input_tokens": 11, "output_tokens": 22}},
+            {"type": "done", "perspective": "quality", "usage": {"prompt_tokens": 3, "completion_tokens": 4}},
+            {"type": "done", "perspective": "architecture", "usage": {"total_tokens": 100}},
+            {"type": "done", "task_complete": True, "message": "完成"},
+        ],
+    )
+    llm = [e for e in drained if e["event_type"] == "llm_usage"]
+    # input/output 兜底 → 33; prompt/completion 兜底 → 7; total_tokens 直取 → 100
+    assert [e["tokens_used"] for e in llm] == [33, 7, 100]

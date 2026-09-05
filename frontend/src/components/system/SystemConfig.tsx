@@ -71,7 +71,7 @@ const AGENT_META: Record<AgentType, { label: string; description: string }> = {
   recon: { label: 'Recon', description: '负责信息收集和入口发现' },
   scan: { label: 'Scan', description: '负责调用扫描工具' },
   triage: { label: 'Triage', description: '负责误报过滤和风险收束' },
-  finding: { label: 'Finding', description: '负责漏洞深挖与报告生成' },
+  finding: { label: 'Finding', description: '负责审计深挖与报告生成' },
   verification: { label: 'Verification', description: '负责问题验证与闭环确认' },
 };
 

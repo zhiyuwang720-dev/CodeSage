@@ -168,7 +168,7 @@ export default function AgentModeSelector({
 						<AlertTriangle className="h-4 w-4" />
 					</div>
 					<div>
-						<p className="text-sm font-medium text-foreground">动态漏洞验证</p>
+						<p className="text-sm font-medium text-foreground">动态验证</p>
 						<p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
 							开启后会执行动态验证，时间成本和token消耗都会增加，且动态验证涉及网络、环境部署、权限等多方面因素，当前版本并未做过多测试和优化，效果可能不够稳定，建议仅在需要时开启。
 						</p>

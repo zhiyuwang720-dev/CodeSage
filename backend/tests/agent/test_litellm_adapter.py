@@ -102,6 +102,69 @@ def test_litellm_sampling_parameters_omit_temperature_for_opus_4_8():
     assert adapter._sampling_kwargs(request) == {}
 
 
+class _NonStreamMsg:
+    def __init__(self, *, content, tool_calls=None, reasoning_content=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+        self.reasoning_content = reasoning_content
+
+
+class _NonStreamChoice:
+    def __init__(self, *, content, finish_reason='stop', reasoning_content=None):
+        self.message = _NonStreamMsg(content=content, reasoning_content=reasoning_content)
+        self.finish_reason = finish_reason
+
+
+class _NonStreamResponse:
+    """litellm.acompletion 非流式返回; usage=None 时相当于网关未回传用量。"""
+
+    def __init__(self, *, choices, model='gpt-4o-mini', usage=None):
+        self.choices = choices
+        self.model = model
+        if usage is not None:
+            self.usage = usage
+
+
+@pytest.mark.asyncio
+async def test_litellm_adapter_complete_estimates_usage_when_gateway_missing(monkeypatch):
+    """07-P1.1: 网关不返回 usage(如 llmapi.paratera.com)时, 非流式 complete 用
+    estimate_tokens 兜底(与流式路径一致), 保证 token 统计非 0 可进入 llm_usage 事件。"""
+    async def fake_acompletion(**kwargs):
+        assert kwargs.get('stream') is not True
+        return _NonStreamResponse(
+            choices=[_NonStreamChoice(content='hello world')],
+            usage=None,  # 网关未回传 usage
+        )
+
+    fake_litellm = types.SimpleNamespace(
+        acompletion=fake_acompletion,
+        cache=None,
+        drop_params=False,
+        exceptions=types.SimpleNamespace(
+            AuthenticationError=Exception,
+            RateLimitError=Exception,
+            APIConnectionError=Exception,
+            APIError=Exception,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, 'litellm', fake_litellm)
+
+    adapter = LiteLLMAdapter(
+        LLMConfig(
+            provider=LLMProvider.OPENAI,
+            api_key='test-key',
+            model='gpt-4o-mini',
+        )
+    )
+    request = LLMRequest(messages=[LLMMessage(role='user', content='inspect this codebase')])
+    resp = await adapter.complete(request)
+
+    assert resp.usage is not None
+    assert resp.usage.prompt_tokens > 0
+    assert resp.usage.completion_tokens > 0
+    assert resp.usage.total_tokens == resp.usage.prompt_tokens + resp.usage.completion_tokens
+
+
 @pytest.mark.asyncio
 async def test_litellm_adapter_stream_complete_emits_tool_call_before_done(monkeypatch):
     async def fake_acompletion(**kwargs):

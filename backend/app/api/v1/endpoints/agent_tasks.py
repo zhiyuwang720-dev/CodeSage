@@ -8,6 +8,7 @@ import logging
 import copy
 import os
 import re
+import time
 import zipfile
 import shutil
 import hashlib
@@ -497,6 +498,10 @@ def _count_diff_changed_files(diff_text: str) -> int:
     return len(files)
 
 
+# 07-P1.1: 运行中统计回写主库的最小节流间隔(s), 保证前端实时非 0 又不频繁 commit。
+FLUSH_INTERVAL_S = 2.0
+
+
 def _build_pr_review_event_sink(
     task_id: str,
     event_manager: EventManager,
@@ -516,6 +521,8 @@ def _build_pr_review_event_sink(
 
     07-P1(可观测): 进程内累计迭代/token/工具调用, 每视角完成(perspective_done)flush 增量
     回写 AgentTask 列供前端实时展示, 并作为 Plan B 外层 CheckPoint 的统计来源。
+    07-P1.1(实时修复): 迭代按 done 事件逐轮累计(非等视角结束), token 解析多键兜底,
+    flush 加 ~2s 节流使运行中前端能看到非 0 实时值。
     """
     sequence = 0
     # per-perspective 思考生命周期跟踪
@@ -523,9 +530,11 @@ def _build_pr_review_event_sink(
     _accumulated: dict[str, list[str]] = {}
     # 07-P1: 进程内统计累计; flush 用 max 合并, 使跨 resume 恢复续加幂等
     _stats = {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0}
+    # 07-P1.1: flush 节流(last flush 时刻, 按单调钟)
+    _last_flush_at = 0.0
 
     async def _flush_stats() -> None:
-        """增量回写 AgentTask 统计列并 commit(每视角一次, 不每事件 commit 避免频繁写主库)。"""
+        """增量回写 AgentTask 统计列并 commit(节流 + 关键节点 force, 不每事件 commit 避免频繁写主库)。"""
         if task is None or db is None:
             return
         task.total_iterations = max(task.total_iterations or 0, _stats["total_iterations"])
@@ -535,6 +544,17 @@ def _build_pr_review_event_sink(
             await db.commit()
         except Exception:
             logger.debug("pr_review stats flush failed", exc_info=True)
+
+    async def _maybe_flush_stats(force: bool = False) -> None:
+        """节流 flush: 至少每 FLUSH_INTERVAL_S 一次(前端实时非 0), force 用于关键节点兜底。"""
+        nonlocal _last_flush_at
+        if task is None or db is None:
+            return
+        now = time.monotonic()
+        if not force and now - _last_flush_at < FLUSH_INTERVAL_S:
+            return
+        _last_flush_at = now
+        await _flush_stats()
 
     def _extract_text(value) -> str:
         """事件 message 可能是 dict(query_loop.py:1026-1047 把整条消息 dict 放进来):
@@ -628,13 +648,26 @@ def _build_pr_review_event_sink(
                 tool_input=tool_input if isinstance(tool_input, dict) else None,
                 metadata=metadata,
             )
+            # 07-P1.1: 工具调用也触发节流回写(工具数实时展示)
+            await _maybe_flush_stats()
         elif ev_type == "done":
             await _close_thinking(perspective)
+            # 07-P1.1: 每个运行时 done = 一轮模型迭代(实时累计, 不等视角结束)。
+            # 仅统计运行时事件(perspective 非空): 排除执行器收尾补发的 task_complete done。
+            if perspective is not None:
+                _stats["total_iterations"] += 1
             # 07-P1: done 事件带 usage(query_loop.py:1130/1395), 累计 token 并补 llm_usage
             # 事件(全仓唯一生产者, 供 _load_runtime_task_stats 的明细查询)。
             usage = event.get("usage") or {}
+            used = 0
             try:
-                used = int(usage.get("total_tokens") or 0)
+                if usage.get("total_tokens"):
+                    used = int(usage["total_tokens"])
+                else:
+                    # 多键兜底: 部分网关回传 input/output 或 prompt/completion
+                    used = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+                    if not used:
+                        used = int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
             except (TypeError, ValueError):
                 used = 0
             if used:
@@ -645,7 +678,8 @@ def _build_pr_review_event_sink(
                     metadata={**metadata, "usage": dict(usage)},
                 )
             if event.get("task_complete"):
-                # 审查结束: 触发前端 onComplete 与 /stream 内存路径终止
+                # 审查结束: 触发前端 onComplete 与 /stream 内存路径终止; force flush 兜底终值
+                await _maybe_flush_stats(force=True)
                 await event_manager.add_event(
                     task_id, "task_complete", sequence=sequence, phase=perspective,
                     message=_message(event, "PR 审查完成"), metadata=metadata,
@@ -656,13 +690,11 @@ def _build_pr_review_event_sink(
                     task_id, "assistant_done", sequence=sequence, phase=perspective,
                     message=_message(event, f"{perspective} 视角: 本轮完成"), metadata=metadata,
                 )
+                # 07-P1.1: 节流回写, 使运行中前端能看到实时迭代/token 值
+                await _maybe_flush_stats()
         elif ev_type == "perspective_done":
+            # 07-P1.1: 迭代已按 done 逐轮累计, turn_count 仅用于日志措辞(避免双计)。
             turns = event.get("turn_count")
-            if turns is not None:
-                try:
-                    _stats["total_iterations"] += int(turns)
-                except (TypeError, ValueError):
-                    pass
             findings = int(event.get("findings") or 0)
             tail = f"({turns} 轮" if turns is not None else "("
             tail += f", {findings} 发现)" if findings else ")"
@@ -670,8 +702,8 @@ def _build_pr_review_event_sink(
                 task_id, "review_perspective_done", sequence=sequence, phase=perspective,
                 message=f"完成 {perspective} 视角审查 {tail}", metadata=metadata,
             )
-            # 07-P1: 视角完成 flush 统计回写 AgentTask 列(实时可观测)
-            await _flush_stats()
+            # 07-P1: 视角完成 force flush 统计回写 AgentTask 列(实时可观测)
+            await _maybe_flush_stats(force=True)
             if progress_cb is not None and perspective:
                 try:
                     await progress_cb(perspective)
@@ -686,6 +718,7 @@ def _build_pr_review_event_sink(
                 message=label, metadata=metadata,
             )
         elif ev_type == "error":
+            await _maybe_flush_stats(force=True)
             await event_manager.add_event(
                 task_id, "task_error", sequence=sequence, phase=perspective,
                 message=_message(event, str(event.get("error") or "审查出错")), metadata=metadata,

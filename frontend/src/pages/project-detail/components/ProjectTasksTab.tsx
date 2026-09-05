@@ -78,7 +78,7 @@ export function ProjectTasksTab(props: {
                   </div>
                   <div className="text-center p-3 bg-muted rounded-lg border border-border">
                     <p className="text-2xl font-bold text-amber-400">{findingsCount}</p>
-                    <p className="text-xs text-muted-foreground uppercase">漏洞发现</p>
+                    <p className="text-xs text-muted-foreground uppercase">审计发现</p>
                   </div>
                   <div className="text-center p-3 bg-muted rounded-lg border border-border">
                     <p className="text-2xl font-bold text-primary">{qualityScore.toFixed(1)}</p>

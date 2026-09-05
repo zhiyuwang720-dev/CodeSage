@@ -55,13 +55,13 @@ export function ProjectIssuesTab(props: {
       <div className="flex items-center justify-between">
         <div className="section-header mb-0 pb-0 border-0">
           <AlertTriangle className="w-5 h-5 text-amber-400" />
-          <h3 className="section-title">最新发现的漏洞</h3>
+          <h3 className="section-title">最新发现的审计问题</h3>
         </div>
         {hasAnyTasks && (
           <p className="text-sm text-muted-foreground font-mono">
             已完成审查任务：{issuesSummary.completedAgentTasksCount} 次
             {issuesSummary.isLimited ? `（仅展示最近 ${issuesSummary.maxTasks} 次）` : ""}
-            ，共 {latestProblems.length} 条漏洞
+            ，共 {latestProblems.length} 条审计发现
           </p>
         )}
       </div>

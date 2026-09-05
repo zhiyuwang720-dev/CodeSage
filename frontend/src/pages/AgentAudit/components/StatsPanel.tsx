@@ -151,17 +151,17 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
     recovered_only: {
       label: '仅恢复候选',
       badgeClass: 'bg-sky-500/15 text-sky-700 border border-sky-500/30',
-      description: '当前仅有从运行记录中恢复的候选漏洞。',
+      description: '当前仅有从运行记录中恢复的候选审计发现。',
     },
     incomplete: {
       label: '未完成',
       badgeClass: 'bg-amber-500/15 text-amber-700 border border-amber-500/30',
-      description: '运行已停止，但尚未形成终态动作或确认漏洞。',
+      description: '运行已停止，但尚未形成终态动作或确认审计发现。',
     },
     none: {
-      label: '暂无漏洞',
+      label: '暂无审计发现',
       badgeClass: 'bg-slate-500/15 text-slate-700 border border-slate-500/30',
-      description: '当前没有确认漏洞或恢复候选漏洞。',
+      description: '当前没有已确认的审计发现或恢复候选。',
     },
   }[task.finding_outcome || 'none'];
 
@@ -225,7 +225,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
             <div className="flex items-center justify-between mt-2 text-sm">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <AlertTriangle className="w-4 h-4 text-rose-500" />
-                <span className="font-medium">涉及漏洞文件</span>
+                <span className="font-medium">涉及发现文件</span>
               </div>
               <span className="text-rose-500 font-mono font-bold">
                 {task.files_with_findings}
@@ -242,7 +242,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
               <Shield className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <div className="text-sm font-semibold text-foreground">漏洞结果</div>
+              <div className="text-sm font-semibold text-foreground">审计发现结果</div>
               {outcomeConfig.description ? (
                 <div className="text-xs text-muted-foreground">{outcomeConfig.description}</div>
               ) : null}
@@ -297,7 +297,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
         />
         <MetricCard
           icon={<Bug className="w-4 h-4" />}
-          label="已入库漏洞"
+          label="已入库审计发现"
           value={totalFindings}
           colorClass={totalFindings > 0 ? "text-rose-500" : "text-muted-foreground"}
           bgClass={totalFindings > 0 ? "border-rose-500/20" : ""}
@@ -352,7 +352,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
               <div className="p-1.5 rounded-md bg-primary/15 border border-primary/30">
                 <Bug className="w-4 h-4 text-primary" />
               </div>
-              <span className="text-sm text-foreground font-semibold">已确认漏洞预览</span>
+              <span className="text-sm text-foreground font-semibold">已确认审计发现预览</span>
             </div>
             <div className="space-y-2.5">
               {topFindings.map((finding) => {
@@ -372,7 +372,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
                       </Badge>
                     </div>
                     <div className="mt-1 text-[11px] font-mono text-muted-foreground">
-                      {finding.severity?.toUpperCase()} · {(finding as any).finding_type ?? (finding as any).vulnerability_type}
+                      {finding.severity?.toUpperCase()} · {(finding as any).finding_type ?? '—'}
                     </div>
                     {finding.file_path && (
                       <div className="mt-1 text-xs text-muted-foreground break-all">

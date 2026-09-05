@@ -574,7 +574,7 @@ function AgentAuditPageContent() {
               type: 'ADD_LOG',
               payload: {
                 type: 'finding',
-                title: event.message || (event.metadata?.title as string) || 'Vulnerability found',
+                title: event.message || (event.metadata?.title as string) || 'Audit finding found',
                 severity: (event.metadata?.severity as string) || 'medium',
                 agentName,
               }
@@ -846,7 +846,7 @@ function AgentAuditPageContent() {
           case 'finding_verified':
             pushLog({
               type: 'finding',
-              title: message || (metadata.title as string) || 'Vulnerability found',
+              title: message || (metadata.title as string) || 'Audit finding found',
               severity: (metadata.severity as string) || 'medium',
               agentName,
             });
@@ -1038,7 +1038,7 @@ function AgentAuditPageContent() {
           case 'finding_verified':
             pushLog({
               type: 'finding',
-              title: message || (metadata.title as string) || 'Vulnerability found',
+              title: message || (metadata.title as string) || 'Audit finding found',
               severity: (metadata.severity as string) || 'medium',
               agentName,
             });
@@ -1340,7 +1340,7 @@ function AgentAuditPageContent() {
         type: 'ADD_LOG',
         payload: {
           type: 'finding',
-          title: (finding.title as string) || 'Vulnerability found',
+          title: (finding.title as string) || 'Audit finding found',
           severity: (finding.severity as string) || 'medium',
           agentName: getCurrentAgentName() || undefined,
         }
@@ -1350,9 +1350,9 @@ function AgentAuditPageContent() {
         type: 'ADD_FINDING',
         payload: {
           id: (finding.id as string) || `finding-${Date.now()}`,
-          title: (finding.title as string) || 'Vulnerability found',
+          title: (finding.title as string) || 'Audit finding found',
           severity: (finding.severity as string) || 'medium',
-          vulnerability_type: (finding.finding_type ?? finding.vulnerability_type) || 'unknown',
+          finding_type: (finding.finding_type as string) || 'unknown',
           file_path: finding.file_path as string,
           line_start: finding.line_start as number,
           description: finding.description as string,
@@ -1626,7 +1626,7 @@ function AgentAuditPageContent() {
                     <FileText className="w-4 h-4 text-primary" />
                   )}
                   <span className="uppercase font-bold tracking-wider text-foreground text-sm">
-                    {activeDetailView === 'activity' ? '活动日志' : '漏洞报告'}
+                    {activeDetailView === 'activity' ? '活动日志' : '审计报告'}
                   </span>
                 </div>
                 {activeDetailView === 'activity' && isConnected && (
@@ -1638,7 +1638,7 @@ function AgentAuditPageContent() {
                 <Badge variant="outline" className="h-6 px-2 text-xs border-border text-muted-foreground font-mono bg-muted">
                   {activeDetailView === 'activity'
                     ? `${filteredLogs.length}${!showAllLogs && logs.length !== filteredLogs.length ? ` / ${logs.length}` : ''} 条记录`
-                    : `${findings.length} 个漏洞`}
+                    : `${findings.length} 个审计发现`}
                 </Badge>
               </div>
 
@@ -1742,7 +1742,7 @@ function AgentAuditPageContent() {
               <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">
                 <div>
                   <FileText className="mx-auto mb-3 h-8 w-8 text-muted-foreground/60" />
-                    <p className="text-sm font-medium">当前任务还没有可展示的初步漏洞报告</p>
+                    <p className="text-sm font-medium">当前任务还没有可展示的初步审计报告</p>
                   <p className="mt-2 text-xs">完成 verification 并产出 findings 后，这里会展示初步报告。</p>
                 </div>
               </div>

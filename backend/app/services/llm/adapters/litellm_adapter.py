@@ -329,6 +329,19 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0),
                     total_input_tokens=response.usage.prompt_tokens or 0,
                 )
+        else:
+            # 网关未回传 usage(OpenAI 兼容网关常见, 如 llmapi.paratera.com):
+            # 用输入+输出 token 估算兜底, 与流式路径的 estimate_tokens 兜底一致,
+            # 保证 token 统计非 0 可进入 sink 的 llm_usage 事件。
+            input_tokens_estimate = sum(
+                estimate_tokens(_token_text(msg.get("content", "")), self.config.model) for msg in messages
+            )
+            output_tokens_estimate = estimate_tokens(choice.message.content or "", self.config.model)
+            usage = LLMUsage(
+                prompt_tokens=input_tokens_estimate,
+                completion_tokens=output_tokens_estimate,
+                total_tokens=input_tokens_estimate + output_tokens_estimate,
+            )
 
         tool_calls = []
         raw_tool_calls = getattr(choice.message, "tool_calls", None) or []

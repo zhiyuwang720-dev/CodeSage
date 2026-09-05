@@ -204,7 +204,7 @@ export default function ReportTemplatesPage() {
               </div>
               <h1 className="text-4xl font-black tracking-tight text-[#2d241a]">报告模板</h1>
               <p className="text-sm leading-7 text-[#705d4b]">
-                最终漏洞报告模板已经独立成单独菜单。每个模板都会在 `report_template_library` 下生成独立文件夹，你可以直接查看路径、打开目录并编辑模板内容。
+                最终审计报告模板已经独立成单独菜单。每个模板都会在 `report_template_library` 下生成独立文件夹，你可以直接查看路径、打开目录并编辑模板内容。
               </p>
             </div>
             <div className="flex flex-wrap gap-3">

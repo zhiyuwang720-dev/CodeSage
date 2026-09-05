@@ -498,7 +498,7 @@ export const ReportExportDialog = memo(function ReportExportDialog({
             </div>
             <div className="grid grid-cols-2 gap-2 sm:flex">
               <StatCard label="安全评分" value={score.toFixed(0)} tone={score >= 70 ? "success" : "danger"} />
-              <StatCard label="漏洞总数" value={totalFindings} />
+              <StatCard label="审计发现总数" value={totalFindings} />
               <StatCard label="高危以上" value={criticalAndHigh} tone={criticalAndHigh > 0 ? "danger" : "default"} />
               <StatCard label="已验证" value={verifiedCount} tone="success" />
             </div>

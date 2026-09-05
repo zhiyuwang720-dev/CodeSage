@@ -119,7 +119,7 @@ export const FinalReportPanel = memo(function FinalReportPanel({
                     <h3 className="text-base font-semibold text-foreground">{finding.title}</h3>
                     <Badge className={statusBadgeClass(reportStatus)}>{statusLabel(reportStatus)}</Badge>
                     <Badge variant="outline" className="font-mono uppercase">{finding.severity}</Badge>
-                    <Badge variant="outline" className="font-mono">{(finding as any).finding_type ?? (finding as any).vulnerability_type}</Badge>
+                    <Badge variant="outline" className="font-mono">{(finding as any).finding_type ?? '—'}</Badge>
                   </div>
                   {(finding.file_path || finding.line_start) && (
                     <div className="flex items-center gap-2 break-all text-sm text-muted-foreground">

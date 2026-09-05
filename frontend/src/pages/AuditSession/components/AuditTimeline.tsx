@@ -400,7 +400,7 @@ export function AuditTimeline({
             </span>
             <div className="min-w-0">
               <CardTitle className="text-2xl font-semibold tracking-tight text-slate-950">审计会话</CardTitle>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">将审计流程作为会话上下文后，可围绕流程步骤、漏洞发现、利用方式、部署验证等内容继续灵活提问。</p>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">将审计流程作为会话上下文后，可围绕流程步骤、审计发现、风险确认、修复验证等内容继续灵活提问。</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

@@ -94,8 +94,8 @@ const AGENT_META: Record<
   },
   finding: {
     title: 'Finding',
-    label: '漏洞深挖',
-    description: '漏洞深挖和报告生成',
+    label: '审计深挖',
+    description: '审计深挖和报告生成',
     icon: Sparkles,
     x: 702,
     y: 324,
