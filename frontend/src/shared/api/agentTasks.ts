@@ -274,6 +274,16 @@ export async function cancelAgentTask(taskId: string): Promise<{ message: string
 }
 
 /**
+ * 从最新检查点继续审计任务(09: 后端真正续跑 — 已完成 stage 直接读快照零 LLM 重跑)
+ */
+export async function resumeAgentTask(
+  taskId: string
+): Promise<{ message: string; task_id: string; status: string; current_phase: string }> {
+  const response = await apiClient.post(`/agent-tasks/${taskId}/resume`);
+  return response.data;
+}
+
+/**
  * 鑾峰彇 Agent 浠诲姟浜嬩欢鍒楄〃
  */
 export async function getAgentEvents(

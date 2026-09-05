@@ -35,9 +35,11 @@ from app.models.audit_session import (
 )
 from app.models.project import Project
 from app.models.user import User
+from app.services.contracts.checkpoint import StageStatus
 from app.services.runtime.bridge import RuntimeBridge
 from app.services.llm.service import LLMService
 from app.services.permission.guardrails import is_guardrails_enabled
+from app.services.session.stage_store import audit_stage_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -425,11 +427,23 @@ async def queue_runtime_session_resume(
     resume_token = str(uuid.uuid4())
     runtime_state = dict(session.runtime_state_json or {})
     metadata = dict(runtime_state.get("metadata") or {})
+    # 09-P3: can_resume 不再写死 False — 按该任务是否有 checkpoint 进度(completed/running
+    # stage)判真; 无任何 stage 进度时 resume 无从续起, 保持 False。GET 端点另有
+    # checkpoint_payload.resumable / checkpoint_kind 兜底, 此处让 resume_job 自述真实状态。
+    has_stage_progress = False
+    if task is not None:
+        try:
+            stages = await audit_stage_store.list(db, task.id)
+            has_stage_progress = any(
+                s.status in (StageStatus.completed, StageStatus.running) for s in stages
+            )
+        except Exception:
+            logger.debug("audit_stages unavailable, can_resume falls back to False", exc_info=True)
     metadata["resume_job"] = {
         "token": resume_token,
         "status": "queued",
         "queued_at": datetime.now(timezone.utc).isoformat(),
-        "can_resume": False,
+        "can_resume": has_stage_progress,
         "error_kind": None,
     }
     runtime_state["metadata"] = metadata

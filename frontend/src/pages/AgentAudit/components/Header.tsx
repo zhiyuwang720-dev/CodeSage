@@ -93,7 +93,7 @@ export function Header({
           </Button>
         )}
 
-        {!isRunning && sessionHref && onResume && ["failed", "cancelled"].includes(task?.status || "") && (
+        {!isRunning && onResume && ["failed", "cancelled", "paused"].includes(task?.status || "") && (
           <Button
             variant="ghost"
             size="sm"

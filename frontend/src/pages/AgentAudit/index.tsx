@@ -15,6 +15,7 @@ import {
   getAgentTask,
   getAgentFindings,
   cancelAgentTask,
+  resumeAgentTask,
   getAgentTree,
   getAgentEvents,
   AgentEvent,
@@ -23,7 +24,6 @@ import {
   getAuditSession,
   getAuditSessionHandoffs,
   getAuditSessionMessages,
-  resumeAuditSession,
 } from "@/shared/api/auditSessions";
 import type { AuditSessionDetail, AuditSessionHandoff, AuditSessionMessage } from "@/pages/AuditSession/types";
 import CreateAgentTaskDialog from "@/components/agent/CreateAgentTaskDialog";
@@ -288,7 +288,6 @@ function AgentAuditPageContent() {
   const [afterSequence, setAfterSequence] = useState<number>(0);
   const [historicalEventsLoaded, setHistoricalEventsLoaded] = useState<boolean>(false);
   const [isResuming, setIsResuming] = useState(false);
-  const [runtimeSessionCanResume, setRuntimeSessionCanResume] = useState(false);
 
   // 馃敟 褰?taskId 鍙樺寲鏃剁珛鍗抽噸缃姸鎬侊紙鏂板缓浠诲姟鏃舵竻鐞嗘棫鏃ュ織锛?
   useEffect(() => {
@@ -374,7 +373,6 @@ function AgentAuditPageContent() {
 
   const loadRuntimeSessionSnapshot = useCallback(async (runtimeSessionId?: string | null): Promise<LogItem[]> => {
     if (!runtimeSessionId) {
-      setRuntimeSessionCanResume(false);
       return [];
     }
     try {
@@ -383,10 +381,8 @@ function AgentAuditPageContent() {
         getAuditSessionMessages(runtimeSessionId),
         getAuditSessionHandoffs(runtimeSessionId),
       ]);
-      setRuntimeSessionCanResume(Boolean(session.can_resume));
       return buildRuntimeSessionLogs(messages, handoffs, session);
     } catch (error) {
-      setRuntimeSessionCanResume(false);
       console.error('[AgentAudit] Failed to load runtime session trace:', error);
       return [];
     }
@@ -1552,13 +1548,15 @@ function AgentAuditPageContent() {
   };
 
   const handleResumeAudit = async () => {
-    const sessionId = task?.runtime_session_id;
-    if (!sessionId) return;
+    const taskId = task?.id;
+    if (!taskId) return;
     try {
       setIsResuming(true);
-      await resumeAuditSession(sessionId);
+      // 09-P3: 走任务级 POST /agent-tasks/{task_id}/resume — 后端真正续跑: 已完成 stage
+      // 直接读 audit_stages 快照跳过(零 LLM), 未完成视角续跑; 而非会话级单会话续聊。
+      await resumeAgentTask(taskId);
       await loadTask();
-      toast.success('已从上一个完整回合继续审计');
+      toast.success('已从检查点继续审计(已完成阶段不重跑)');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '继续审计失败');
     } finally {
@@ -1608,7 +1606,7 @@ function AgentAuditPageContent() {
         onCancel={handleCancel}
         onExport={handleExportReport}
         onNewAudit={() => setShowCreateDialog(true)}
-        onResume={runtimeSessionCanResume ? handleResumeAudit : undefined}
+        onResume={handleResumeAudit}
       />
 
       {/* Main content */}
