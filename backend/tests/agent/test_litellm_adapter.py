@@ -166,6 +166,44 @@ async def test_litellm_adapter_complete_estimates_usage_when_gateway_missing(mon
 
 
 @pytest.mark.asyncio
+async def test_litellm_adapter_complete_estimates_usage_when_gateway_returns_zeros(monkeypatch):
+    """07-P1.1: 网关回传"真值但全零"的 usage(OpenAI 兼容网关/litellm 合成的 ModelUsage)
+    时同样走估算兜底, 否则 token 统计仍恒 0。"""
+    async def fake_acompletion(**kwargs):
+        return _NonStreamResponse(
+            choices=[_NonStreamChoice(content='hello world')],
+            usage=types.SimpleNamespace(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+
+    fake_litellm = types.SimpleNamespace(
+        acompletion=fake_acompletion,
+        cache=None,
+        drop_params=False,
+        exceptions=types.SimpleNamespace(
+            AuthenticationError=Exception,
+            RateLimitError=Exception,
+            APIConnectionError=Exception,
+            APIError=Exception,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, 'litellm', fake_litellm)
+
+    adapter = LiteLLMAdapter(
+        LLMConfig(
+            provider=LLMProvider.OPENAI,
+            api_key='test-key',
+            model='gpt-4o-mini',
+        )
+    )
+    request = LLMRequest(messages=[LLMMessage(role='user', content='inspect this codebase')])
+    resp = await adapter.complete(request)
+
+    assert resp.usage is not None
+    assert resp.usage.total_tokens > 0
+    assert resp.usage.total_tokens == resp.usage.prompt_tokens + resp.usage.completion_tokens
+
+
+@pytest.mark.asyncio
 async def test_litellm_adapter_stream_complete_emits_tool_call_before_done(monkeypatch):
     async def fake_acompletion(**kwargs):
         assert kwargs['stream'] is True

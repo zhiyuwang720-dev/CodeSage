@@ -329,10 +329,12 @@ class LiteLLMAdapter(BaseLLMAdapter):
                     cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0),
                     total_input_tokens=response.usage.prompt_tokens or 0,
                 )
-        else:
-            # 网关未回传 usage(OpenAI 兼容网关常见, 如 llmapi.paratera.com):
-            # 用输入+输出 token 估算兜底, 与流式路径的 estimate_tokens 兜底一致,
-            # 保证 token 统计非 0 可进入 sink 的 llm_usage 事件。
+
+        # 07-P1.1: 网关缺 usage 或回传"真值但全零"的 usage(OpenAI 兼容网关常见,
+        # 如 llmapi.paratera.com; litellm 会把缺失 usage 合成全零 ModelUsage):
+        # 用输入+输出 token 估算兜底, 与流式路径的 estimate_tokens 兜底一致,
+        # 保证 token 统计非 0 可进入 sink 的 llm_usage 事件。
+        if usage is None or not usage.total_tokens:
             input_tokens_estimate = sum(
                 estimate_tokens(_token_text(msg.get("content", "")), self.config.model) for msg in messages
             )
@@ -517,12 +519,19 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 chunk_count += 1
 
                 if hasattr(chunk, "usage") and chunk.usage:
-                    final_usage = {
-                        "prompt_tokens": chunk.usage.prompt_tokens or 0,
-                        "completion_tokens": chunk.usage.completion_tokens or 0,
-                        "total_tokens": chunk.usage.total_tokens or 0,
-                    }
-                    logger.debug(f"Got usage from chunk: {final_usage}")
+                    # 07-P1.1: 忽略"真值但全零"的 usage(网关合成), 让估算兜底生效
+                    chunk_total = (
+                        (chunk.usage.total_tokens or 0)
+                        + (chunk.usage.prompt_tokens or 0)
+                        + (chunk.usage.completion_tokens or 0)
+                    )
+                    if chunk_total:
+                        final_usage = {
+                            "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                            "completion_tokens": chunk.usage.completion_tokens or 0,
+                            "total_tokens": chunk.usage.total_tokens or 0,
+                        }
+                        logger.debug(f"Got usage from chunk: {final_usage}")
 
                 if not getattr(chunk, "choices", None):
                     continue

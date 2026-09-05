@@ -1045,6 +1045,47 @@ def test_runtime_model_client_stream_complete_passthroughs_llm_retry_events():
     assert events[1]["content"] == "恢复完成"
 
 
+def test_runtime_model_client_stream_complete_nonstreaming_degrade_passthroughs_usage():
+    """07-P1.1: LLM_DISABLE_STREAMING=1 时 stream_complete 退化为非流式 complete,
+    合成的 done 事件必须透传 usage, 否则 query_loop 的 done 事件 usage 恒空
+    → sink 的 llm_usage 事件与 tokens_used 恒 0(导出报告 Token 恒 0 的根因)。"""
+    from app.core.config import settings as _cfg
+
+    original = _cfg.LLM_DISABLE_STREAMING
+    _cfg.LLM_DISABLE_STREAMING = True
+    try:
+        llm = FakeLLMService(
+            [
+                {
+                    "content": "Need tool",
+                    "finish_reason": "stop",
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33},
+                }
+            ]
+        )
+        llm_client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
+
+        async def collect_events():
+            events = []
+            async for event in llm_client.stream_complete(
+                system_prompt="system",
+                recon_payload={},
+                transcript=[TranscriptItem(role=RuntimeMessageRole.USER, content="inspect")],
+                model_name="review-runtime",
+                tool_definitions=[{"name": "Read", "description": "read", "input_schema": {"type": "object"}}],
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(collect_events())
+
+        assert [event["type"] for event in events] == ["content_delta", "done"]
+        assert events[-1]["type"] == "done"
+        assert events[-1]["usage"] == {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33}
+    finally:
+        _cfg.LLM_DISABLE_STREAMING = original
+
+
 def test_runtime_model_client_tool_use_history_is_mapped_as_user_context_note():
     mapped = RuntimeLLMModelClient._map_transcript_item(
         TranscriptItem(

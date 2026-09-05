@@ -207,6 +207,9 @@ class RuntimeLLMModelClient:
                 "recoverable_error_kind": response.recoverable_error_kind,
                 "recoverable_error_message": response.recoverable_error_message,
                 "tool_calls": [],
+                # 07-P1.1: 非流式退化的合成 done 必须透传 usage, 否则 query_loop 的
+                # done 事件 usage 恒空 → sink llm_usage 与 tokens_used 恒 0。
+                "usage": dict(response.usage or {}),
             }
             return
         messages = self._build_messages(
