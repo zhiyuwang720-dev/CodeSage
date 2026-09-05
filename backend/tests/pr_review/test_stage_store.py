@@ -117,6 +117,23 @@ def test_contract_validates_fields():
         AuditStage(stage_id="t:intake", task_id="t", stage_type="intake", status="bogus")
 
 
+def test_quick_stages_exclude_critic_and_deep_entries():
+    """P4 预留: quick 模式 5 项, 不含 critic/anatomy/planning(落地时插入即可, 框架零改动)。"""
+    from app.api.v1.endpoints.agent_tasks import QUICK_REVIEW_STAGES
+
+    assert set(QUICK_REVIEW_STAGES) == {
+        "intake", "review:security", "review:architecture", "review:quality", "report",
+    }
+    assert "critic" not in QUICK_REVIEW_STAGES
+    assert "anatomy" not in QUICK_REVIEW_STAGES and "planning" not in QUICK_REVIEW_STAGES
+
+
+def test_stage_type_accepts_reserved_deep_entries():
+    """AuditStage.stage_type 是自由字符串: 深度审计的动态维度/critic 都可登记。"""
+    for st in ("critic", "anatomy", "planning", "review:authz"):
+        AuditStage(stage_id=f"t:{st}", task_id="t", stage_type=st, status=StageStatus.pending)
+
+
 @pytest.mark.asyncio
 async def test_sink_writes_review_stage_on_perspective_done(db_session):
     """集成: sink 收到 session_start + perspective_done(findings 本体) → 写 review:* stage。"""

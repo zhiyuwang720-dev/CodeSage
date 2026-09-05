@@ -3,10 +3,26 @@
 AuditStage = 单条 stage 记录(每视角/每阶段一行, state_payload 存阶段产物快照);
 AuditStageStore = 读写契约(register/start/complete/fail/list/completed/get/touch_session)。
 
-stage_type 一套字面量兼容:
-- 快速: intake / review:security|architecture|quality / critic(预留) / report
-- 深度: intake / anatomy / planning / review:<dimension_id>(动态, planning 后登记) / critic / report
-critic 类型已定义但当前 quick 模式不登记不写入(planned_stages 仅 5 项)。
+stage_type 是一套自由字符串字面量, 兼容快速/深度两套序列(stage 框架与 stage 图无关,
+深度审计 planning 完成后按 ReviewPlan.dimensions 动态登记 review:<dim> 即可):
+- 快速(planned_stages 仅 5 项):
+  intake / review:security|architecture|quality / report   (critic 预留不登记)
+- 深度(plan 07 定义, 纯计划态):
+  intake / anatomy / planning / review:<dimension_id>×N / critic / report
+
+resume 消费按前缀约定工作:
+- completed 的 review:* stage → 读 state_payload["findings"] 快照零 LLM 预填;
+- pending/running/failed 且带 session_id → L3 会话续跑;
+- critic/report 完成 → 跳过重跑直接出终态。
+
+预留 payload schema(接口+字段落点, 不实现; 深度审计 / plan 10 Critic 落地时
+直接复用本契约, stage 框架零改动):
+- planning:  state_payload["review_plan"] = {"dimensions": [...], "strategy": {...}} —
+  深度审计 planning 完成后据此登记 review:<dim> 序列, resume 时重建维度。
+- critic:    state_payload = {
+      "session_id": str, "findings_count": int,
+      "verdicts": [{"finding_id": str, "action": str, "severity_delta": int, "reason": str}],
+  }
 """
 from __future__ import annotations
 
