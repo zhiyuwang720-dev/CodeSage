@@ -14,14 +14,17 @@ from app.services.session.state import (
 )
 from app.services.session.store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.session.interaction import InteractionRuntime
+from app.services.session.stage_store import AuditStageStoreImpl, audit_stage_store
 
 __all__ = [
     "AgentRuntimeState",
     "AuditSessionPersistenceError",
     "AuditSessionStore",
+    "AuditStageStoreImpl",
     "InteractionRuntime",
     "InvokedSkillState",
     "SessionRuntimeState",
+    "audit_stage_store",
     "build_legacy_agent_runtime_state",
     "sync_legacy_agent_metadata_from_runtime_state",
 ]

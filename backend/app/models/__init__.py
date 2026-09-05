@@ -12,6 +12,7 @@ from .project import Project, ProjectMember
 from .prompt_template import PromptTemplate
 from .audit_rule import AuditRule, AuditRuleSet
 from .report_template import AgentTaskReport
+from .checkpoint import AuditStageORM
 from .agent_task import (
     AgentEvent,
     AgentEventType,
@@ -49,6 +50,7 @@ __all__ = [
     "AuditRule",
     "AuditRuleSet",
     "AgentTaskReport",
+    "AuditStageORM",
     "AgentTask",
     "AgentEvent",
     "AgentFinding",

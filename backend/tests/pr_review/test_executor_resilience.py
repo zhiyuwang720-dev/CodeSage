@@ -4,8 +4,8 @@
 1. 整链异常不再冒泡致任务卡 RUNNING: 统一落 FAILED + error_message。
 2. 取消竞态门: 终态置 COMPLETED 前发现任务已取消 → 跳过覆写, 保持取消。
 
-用 fake db(仅 commit/rollback) + stub event_manager, 不触真库不触网。
-findings 走空列表路径(`_save_findings` 空输入直接 return 0), 绕开真实落库。
+用临时文件 async SQLite(create_all 全量表)承接 audit_stages 落库 + fake pipeline
+不触网。findings 走空列表路径(`_save_findings` 空输入直接 return 0), 绕开真实落库。
 """
 from __future__ import annotations
 
@@ -16,23 +16,13 @@ import pytest
 from app.models.agent_task import AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.services.agent.task_executor import (
     _cancelled_tasks,
+    _running_asyncio_tasks,
     clear_task_cancellation,
     request_agent_task_cancellation,
 )
+from app.services.contracts.checkpoint import StageStatus
+from app.services.session.stage_store import audit_stage_store
 from app.api.v1.endpoints import agent_tasks as agent_tasks_mod
-
-
-class FakeDB:
-    """仅需 commit/rollback 两个异步方法; 不承接真实查询。"""
-
-    def __init__(self) -> None:
-        self.commits = 0
-
-    async def commit(self) -> None:
-        self.commits += 1
-
-    async def rollback(self) -> None:
-        pass
 
 
 class StubEventManager:
@@ -41,6 +31,27 @@ class StubEventManager:
 
     async def add_event(self, *args, **kwargs) -> None:
         self.events.append(args)
+
+
+@pytest.fixture
+async def db_session(tmp_path):
+    """临时文件 async SQLite, 全量表建好(audit_stages 落库用)。"""
+    import app.models  # noqa: F401  # 注册全部模型到 Base.metadata
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'p0_test.db'}", echo=False
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
 
 
 def _make_task(task_id: str = "task-p0") -> AgentTask:
@@ -88,33 +99,37 @@ def _patch_pipeline(monkeypatch, *, exc: Exception | None = None, comments=None,
 
 
 @pytest.mark.asyncio
-async def test_executor_crash_sets_task_failed(monkeypatch):
+async def test_executor_crash_sets_task_failed(monkeypatch, db_session):
     """崩溃异常不再冒泡: 任务落 FAILED + error_message, 不卡 RUNNING。"""
     _patch_pipeline(monkeypatch, exc=RuntimeError("boom"))
     task = _make_task()
-    db = FakeDB()
     em = StubEventManager()
 
-    await agent_tasks_mod._execute_pr_review_task_impl(db, task, _make_project(), em)
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
 
     assert task.status == AgentTaskStatus.FAILED
     assert task.error_message == "boom"
     assert task.completed_at is not None
-    # 至少有一次 RUNNING 提交 + 一次 FAILED 提交
-    assert db.commits >= 2
+    # intake 已 completed(崩溃发生在 intake 之后); 其余未完成 stage 被置 failed
+    stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+    assert stages["intake"].status == StageStatus.completed
+    assert stages["report"].status == StageStatus.failed
+    assert all(
+        stages[f"review:{p}"].status == StageStatus.failed
+        for p in ("security", "architecture", "quality")
+    )
 
 
 @pytest.mark.asyncio
-async def test_executor_parse_failure_sets_task_failed(monkeypatch):
+async def test_executor_parse_failure_sets_task_failed(monkeypatch, db_session):
     """输入校验失败(既无 pr_url 又无 diff)同样走 FAILED 分支。"""
     _patch_pipeline(monkeypatch)
     task = _make_task()
     task.audit_scope = {"pr_review": {}}  # pr_url 取不到 → ValueError
-    db = FakeDB()
     em = StubEventManager()
 
     await agent_tasks_mod._execute_pr_review_task_impl(
-        db, task, SimpleNamespace(id="p", name="r", repository_url=None), em
+        db_session, task, SimpleNamespace(id="p", name="r", repository_url=None), em
     )
 
     assert task.status == AgentTaskStatus.FAILED
@@ -122,37 +137,40 @@ async def test_executor_parse_failure_sets_task_failed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_executor_success_sets_completed(monkeypatch):
+async def test_executor_success_sets_completed(monkeypatch, db_session):
     """回归: 无取消时正常完成 → COMPLETED(空 findings 走 _save_findings 早退)。"""
     _patch_pipeline(monkeypatch, comments=[], meta={"head_sha": "abc"})
     task = _make_task()
-    db = FakeDB()
     em = StubEventManager()
 
-    await agent_tasks_mod._execute_pr_review_task_impl(db, task, _make_project(), em)
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
 
     assert task.status == AgentTaskStatus.COMPLETED
     assert task.completed_at is not None
     assert task.findings_count == 0
     # pr_meta 快照进 agent_config
     assert (task.agent_config or {}).get("pr_meta", {}).get("head_sha") == "abc"
+    # intake/report stage 已 completed
+    stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+    assert stages["intake"].status == StageStatus.completed
+    assert stages["report"].status == StageStatus.completed
+    assert stages["intake"].state_payload.get("pr_url") == "https://github.com/o/r/pull/1"
 
 
 @pytest.mark.asyncio
-async def test_executor_cancel_race_keeps_cancelled(monkeypatch):
+async def test_executor_cancel_race_keeps_cancelled(monkeypatch, db_session):
     """取消竞态门: 取消信号在终态前到达 → COMPLETED 不被写入, 保持取消语义。"""
     task_id = "task-p0-cancel"
     _patch_pipeline(monkeypatch, comments=[], meta={})
     task = _make_task(task_id=task_id)
     task.status = AgentTaskStatus.RUNNING
-    db = FakeDB()
     em = StubEventManager()
 
     try:
         request_agent_task_cancellation(task_id)  # 模拟 cancel 端点 in-process 信号
         assert task_id in _cancelled_tasks
 
-        await agent_tasks_mod._execute_pr_review_task_impl(db, task, _make_project(), em)
+        await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
 
         # 取消后被跳过 COMPLETED 覆写: 状态停留 RUNNING(cancel 端点另一会话已置 CANCELLED),
         # completed_at 保持 None(不被晚到完成态写入)。
@@ -161,6 +179,9 @@ async def test_executor_cancel_race_keeps_cancelled(monkeypatch):
         assert task.current_step == "Cancelled during execution"
         # 收尾 done 事件不应发出(终态已跳过)
         assert not any(ev[1] == "task_complete" for ev in em.events)
+        # report stage 不应被标记 completed
+        stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+        assert stages["report"].status != StageStatus.completed
     finally:
         clear_task_cancellation(task_id)
 
@@ -168,8 +189,6 @@ async def test_executor_cancel_race_keeps_cancelled(monkeypatch):
 def test_cancel_registration_inner_wraps_execution(monkeypatch):
     """_execute_agent_task_impl 登记 running asyncio task, 供取消端点真正打断在飞流水线。"""
     import asyncio
-
-    from app.services.agent.task_executor import _running_asyncio_tasks
 
     observed: dict = {}
 

@@ -159,7 +159,9 @@ async def test_dispatcher_forwards_tagged_events_to_sink(monkeypatch):
     assert all(e.get("perspective") == "security" for e in recorder.events)
     done = recorder.events[-1]
     assert done["turn_count"] == 2
-    assert done["findings"] == 2
+    # 09-P1: perspective_done 带 findings 本体(快照)+ session_id, 非计数
+    assert isinstance(done["findings"], list) and len(done["findings"]) == 2
+    assert done["session_id"] == "sess-1"
     assert result["from_agent"] == "security"
     assert result["context_data"]["turn_count"] == 2
 

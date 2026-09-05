@@ -156,11 +156,14 @@ class RuntimePerspectiveDispatcher:
         final_payload = result.get("final_payload") or {}
         findings = [dict(item) for item in (final_payload.get("findings") or [])]
         if sink is not None:
+            # 09-P1: perspective_done 带 findings 本体(非计数)+ session_id,
+            # 供外层 sink 写 audit_stages 的 review:* stage 快照(resume 零 LLM 读取)。
             await sink(
                 {
                     "type": "perspective_done",
                     "turn_count": result.get("turn_count"),
-                    "findings": len(findings),
+                    "session_id": result.get("session_id"),
+                    "findings": findings,
                 }
             )
         confidences = [float(f.get("confidence", 0.5)) for f in findings if isinstance(f, dict)]

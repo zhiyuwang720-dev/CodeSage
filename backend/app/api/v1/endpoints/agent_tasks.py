@@ -52,6 +52,7 @@ from app.services.agent.task_executor import (
 )
 from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill.file_service import SkillFileService
+from app.services.session.stage_store import audit_stage_store
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -697,6 +698,17 @@ def _build_pr_review_event_sink(
                 task_id, "review_perspective_start", sequence=sequence, phase=perspective,
                 message=f"开始 {perspective} 视角审查", metadata=metadata,
             )
+        elif ev_type == "session_start":
+            # 09-P1: 记录正在运行的视角会话锚点 — 进程死在对话中途时, resume 靠它找到
+            # L3 会话做 continue_dialogue_session 续跑(而非新建)。
+            session_id = event.get("session_id")
+            if perspective and session_id:
+                try:
+                    await audit_stage_store.touch_session(
+                        db, task.id, f"review:{perspective}", str(session_id)
+                    )
+                except Exception:
+                    logger.debug("pr_review stage touch_session failed", exc_info=True)
         elif ev_type == "assistant_start":
             await event_manager.add_event(
                 task_id, "assistant_start", sequence=sequence, phase=perspective,
@@ -783,9 +795,15 @@ def _build_pr_review_event_sink(
         elif ev_type == "perspective_done":
             # 07-P1.1: 迭代已按 done 逐轮累计, turn_count 仅用于日志措辞(避免双计)。
             turns = event.get("turn_count")
-            findings = int(event.get("findings") or 0)
+            # 09-P1: perspective_done 带 findings 本体(dispatcher 改造); 兼容旧 int 计数。
+            findings_payload = event.get("findings") or []
+            findings_count = (
+                len(findings_payload)
+                if isinstance(findings_payload, list)
+                else int(findings_payload or 0)
+            )
             tail = f"({turns} 轮" if turns is not None else "("
-            tail += f", {findings} 发现)" if findings else ")"
+            tail += f", {findings_count} 发现)" if findings_count else ")"
             await event_manager.add_event(
                 task_id, "review_perspective_done", sequence=sequence, phase=perspective,
                 message=f"完成 {perspective} 视角审查 {tail}", metadata=metadata,
@@ -797,6 +815,24 @@ def _build_pr_review_event_sink(
                     await progress_cb(perspective)
                 except Exception:
                     logger.debug("pr_review progress callback failed", exc_info=True)
+            # 09-P1: per-perspective stage checkpoint — 完成即写 audit_stages 的 review:* 记录
+            # (findings 快照 + session_id + 统计), resume 时已完成视角直接读快照零 LLM 重跑。
+            if perspective:
+                try:
+                    per_agent = _per_agent_tokens.get(perspective) or {}
+                    await audit_stage_store.complete(
+                        db, task.id, f"review:{perspective}",
+                        session_id=str(event["session_id"]) if event.get("session_id") else None,
+                        stats={
+                            "turn_count": int(turns or 0),
+                            "token_usage": int(per_agent.get("total") or _stats["tokens_used"] or 0),
+                            "tool_calls": _stats["tool_calls_count"],
+                        },
+                        findings=findings_payload if isinstance(findings_payload, list) else None,
+                        payload={"perspective": perspective},
+                    )
+                except Exception:
+                    logger.debug("pr_review stage complete failed", exc_info=True)
         elif ev_type == "llm_retry":
             attempt = event.get("attempt")
             max_attempts = event.get("max_attempts")
@@ -829,6 +865,17 @@ def _build_pr_review_event_sink(
     return sink
 
 
+# 09-P1: quick 审计的 stage 序列(逻辑 4 阶段 / 物理 6 条: 每视角一条)。
+# Critic 预留: 类型已定义但当前 quick 模式不登记不写入(plan 10 落地时插入即可)。
+QUICK_REVIEW_STAGES = [
+    "intake",
+    "review:security",
+    "review:architecture",
+    "review:quality",
+    "report",
+]
+
+
 async def _execute_pr_review_task_impl(
     db: AsyncSession,
     task: AgentTask,
@@ -846,6 +893,9 @@ async def _execute_pr_review_task_impl(
 
     sink = None
     try:
+        # 09-P1: 任务启动登记 planned_stages(幂等; resume 时已完成 stage 保持 completed 不覆盖)。
+        await audit_stage_store.register(db, task.id, QUICK_REVIEW_STAGES)
+
         scope = (task.audit_scope or {}).get("pr_review") or {}
         pr_url = scope.get("pr_url") or project.repository_url
         diff_file_path = scope.get("diff_file_path")
@@ -881,6 +931,21 @@ async def _execute_pr_review_task_impl(
         task.current_phase = AgentTaskPhase.ANALYSIS
         task.status = AgentTaskStatus.RUNNING
         await db.commit()
+
+        # 09-P1: intake stage 完成快照 — resume 跳过 PR 解析/输入重读。
+        try:
+            await audit_stage_store.complete(
+                db, task.id, "intake",
+                payload={
+                    "pr_url": pr_url,
+                    "pr_number": scope.get("pr_number"),
+                    "diff_file_path": diff_file_path,
+                    "changed_files": changed_files,
+                    "clone_source": clone_source,
+                },
+            )
+        except Exception:
+            logger.debug("pr_review intake stage complete failed", exc_info=True)
 
         async def _progress_done(perspective: str) -> None:
             """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
@@ -963,6 +1028,15 @@ async def _execute_pr_review_task_impl(
             await db.commit()
             return
 
+        # 09-P1: report stage 完成快照 — resume 跳过重新组装报告直接出终态。
+        try:
+            await audit_stage_store.complete(
+                db, task.id, "report",
+                payload={"findings_count": len(findings), "pr_meta": pr_meta},
+            )
+        except Exception:
+            logger.debug("pr_review report stage complete failed", exc_info=True)
+
         task.status = AgentTaskStatus.COMPLETED
         task.current_phase = AgentTaskPhase.REPORTING
         task.completed_at = datetime.now(timezone.utc)
@@ -985,6 +1059,17 @@ async def _execute_pr_review_task_impl(
         task.error_message = str(exc)
         task.completed_at = datetime.now(timezone.utc)
         await db.commit()
+        # 09-P1: 崩溃时把已登记但未完成 stage 置 failed(观察面准确; resume 对非 completed
+        # 一律重跑/续跑, 不受影响)。
+        try:
+            from app.services.contracts.checkpoint import StageStatus as _StageStatus
+
+            stages = await audit_stage_store.list(db, task.id)
+            for st in stages:
+                if st.status in (_StageStatus.pending, _StageStatus.running):
+                    await audit_stage_store.fail(db, task.id, st.stage_type, str(exc))
+        except Exception:
+            logger.debug("pr_review stage fail marking skipped", exc_info=True)
         if sink is not None:
             try:
                 await sink({"type": "error", "error": str(exc), "message": f"PR 审查失败: {exc}"})
