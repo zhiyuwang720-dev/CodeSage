@@ -188,6 +188,10 @@ async def run_review_pipeline_async(
     workspace_root = options.pop("workspace_root", None)
     event_sink = event_sink if event_sink is not None else options.pop("event_sink", None)
     streaming = bool(options.pop("streaming", False))
+    # 09-P2: resume 执行指令(纯数据 dict/str, 但属运行时注入而非持久化审查配置,
+    # 随 dispatcher 一并从 options 抽出, 不落 build_review_context 的持久化 options)。
+    prefill_handoffs = options.pop("prefill_handoffs", None)
+    resume_sessions = options.pop("resume_sessions", None)
     engine = str(options.get("engine", "rules"))
     if engine != "runtime":
         return run_review_pipeline(
@@ -258,7 +262,11 @@ async def run_review_pipeline_async(
         _prev_disable_streaming = _cfg.LLM_DISABLE_STREAMING
         _cfg.LLM_DISABLE_STREAMING = False
     try:
-        review = await orchestrator.run(ctx)
+        review = await orchestrator.run(
+            ctx,
+            prefill_handoffs=prefill_handoffs,
+            resume_sessions=resume_sessions,
+        )
     finally:
         if _prev_disable_streaming is not None:
             from app.core.config import settings as _cfg

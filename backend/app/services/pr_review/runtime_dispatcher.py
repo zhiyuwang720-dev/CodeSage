@@ -109,7 +109,14 @@ class RuntimePerspectiveDispatcher:
         self._max_turns = max_turns
         self._session_ids: dict[str, str] = {}
 
-    async def __call__(self, perspective: str, ctx: Any, followup_findings: list[dict] | None = None) -> dict:
+    async def __call__(
+        self,
+        perspective: str,
+        ctx: Any,
+        followup_findings: list[dict] | None = None,
+        *,
+        resume_session_id: str | None = None,
+    ) -> dict:
         from app.services.runtime.bridge import RuntimeBridge
         from app.services.tooling.finalize_review import FinalizeReviewTool
 
@@ -129,30 +136,50 @@ class RuntimePerspectiveDispatcher:
         if sink is not None:
             await sink({"type": "perspective_start"})
 
-        # session 在 adapter.run 里创建, 创建瞬间即上报, 供头部显示每个视角的 sessionID。
-        # 无 sink 时回调为空操作(保持"未配置 sink 的空转"既有行为)。
-        async def on_session_created(session_id: str) -> None:
-            if sink is not None:
-                await sink({"type": "session_start", "session_id": session_id})
+        if resume_session_id:
+            # 09-P2: L3 会话续跑 — resume 时该视角已有会话锚点(session_start 早已上报,
+            # stage 里存了 session_id), 不新建 bridge.run, 而是 continue 已有会话并提取 final_payload。
+            # continue_session_until_payload: refresh 上下文 → run_once → _ensure_payload
+            # (先扫快照取先前已落定的 finalizer payload, 无则继续逼出 FinalizeReview)。
+            # 返回形状与 run 一致(final_payload/turn_count/tool_call_count), 下游共用。
+            result = await bridge.continue_session_until_payload(
+                session_id=resume_session_id,
+                payload_extractor=bridge.extract_final_payload,
+                finalizer_prompts=REVIEW_FINALIZER_PROMPTS,
+                model_name=spec.agent_type,
+                max_turns=self._max_turns,
+                fallback_payload_builder=bridge._default_fallback_payload,
+                finalizer_tools=[FinalizeReviewTool()],
+                terminal_action_nudge_message=(
+                    "审查尚未结构化终结：请调用 FinalizeReview 工具提交结构化评论集"
+                    "（findings+summary），不要只用自然语言结束。"
+                ),
+            )
+        else:
+            # session 在 adapter.run 里创建, 创建瞬间即上报, 供头部显示每个视角的 sessionID。
+            # 无 sink 时回调为空操作(保持"未配置 sink 的空转"既有行为)。
+            async def on_session_created(session_id: str) -> None:
+                if sink is not None:
+                    await sink({"type": "session_start", "session_id": session_id})
 
-        result = await bridge.run(
-            project_id=self._project_id,
-            task_id=self._task_id,
-            system_prompt=spec.system_prompt,
-            recon_payload=build_review_recon_payload(ctx),
-            user_message=user_message,
-            model_name=spec.agent_type,
-            max_turns=self._max_turns,
-            tool_allowlist=spec.tool_allowlist,
-            event_sink=sink,
-            finalizer_prompts=REVIEW_FINALIZER_PROMPTS,
-            finalizer_tools=[FinalizeReviewTool()],
-            terminal_action_nudge_message=(
-                "审查尚未结构化终结：请调用 FinalizeReview 工具提交结构化评论集"
-                "（findings+summary），不要只用自然语言结束。"
-            ),
-            on_session_created=on_session_created,
-        )
+            result = await bridge.run(
+                project_id=self._project_id,
+                task_id=self._task_id,
+                system_prompt=spec.system_prompt,
+                recon_payload=build_review_recon_payload(ctx),
+                user_message=user_message,
+                model_name=spec.agent_type,
+                max_turns=self._max_turns,
+                tool_allowlist=spec.tool_allowlist,
+                event_sink=sink,
+                finalizer_prompts=REVIEW_FINALIZER_PROMPTS,
+                finalizer_tools=[FinalizeReviewTool()],
+                terminal_action_nudge_message=(
+                    "审查尚未结构化终结：请调用 FinalizeReview 工具提交结构化评论集"
+                    "（findings+summary），不要只用自然语言结束。"
+                ),
+                on_session_created=on_session_created,
+            )
         final_payload = result.get("final_payload") or {}
         findings = [dict(item) for item in (final_payload.get("findings") or [])]
         if sink is not None:

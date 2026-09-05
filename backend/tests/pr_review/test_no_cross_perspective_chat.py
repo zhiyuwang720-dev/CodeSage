@@ -45,9 +45,13 @@ def test_followup_prompt_only_structured_facts():
 
 
 def test_orchestrator_never_routes_reasoning_between_perspectives():
-    """分发接口只接受 (perspective, ctx, 结构化事实); 无 '其他视角推理' 通道。"""
+    """分发接口只接受 (perspective, ctx, 结构化事实); 无 '其他视角推理' 通道。
+
+    resume_session_id 是 09-P2 加的关键字专用参数: 该视角自身 L3 会话锚点(续跑自己的会话),
+    不携带任何其他视角的推理内容, 不构成视角间通信。
+    """
     signature = inspect.signature(ReviewOrchestrator._dispatch)
     params = list(signature.parameters)
-    assert params == ["self", "perspective", "ctx", "followup_findings"]
+    assert params == ["self", "perspective", "ctx", "followup_findings", "resume_session_id"]
     source = inspect.getsource(ReviewOrchestrator)
     assert "reasoning" not in source.lower().replace("reasoning_content", "")

@@ -341,7 +341,8 @@ async def test_streaming_option_toggles_and_restores_setting(monkeypatch):
         def __init__(self, dispatcher, **kwargs) -> None:
             self.dispatcher = dispatcher
 
-        async def run(self, ctx):
+        async def run(self, ctx, **kwargs):
+            # 09-P2: command_router 恒传 prefill_handoffs/resume_sessions, fake 需吞掉
             captured["during"] = settings.LLM_DISABLE_STREAMING
             return FakeReview()
 

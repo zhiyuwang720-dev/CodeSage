@@ -25,7 +25,8 @@ def _make_orchestrator_fake(captured: dict, review_result=None):
             captured["min_severity"] = kwargs.get("min_severity")
             self.dispatcher = dispatcher
 
-        async def run(self, ctx):
+        async def run(self, ctx, **kwargs):
+            # 09-P2: command_router 恒传 prefill_handoffs/resume_sessions, fake 需吞掉
             return FakeReview()
 
     return FakeOrchestrator

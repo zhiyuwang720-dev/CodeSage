@@ -52,6 +52,8 @@ from app.services.agent.task_executor import (
 )
 from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill.file_service import SkillFileService
+from app.services.contracts.checkpoint import StageStatus
+from app.services.pr_review.orchestrator import PERSPECTIVES
 from app.services.session.stage_store import audit_stage_store
 from app.core.config import settings
 
@@ -947,6 +949,48 @@ async def _execute_pr_review_task_impl(
         except Exception:
             logger.debug("pr_review intake stage complete failed", exc_info=True)
 
+        # 09-P2: resume 消费 — 任务从检查点恢复时, 已完成 review:* stage 直接读 findings
+        # 快照零 LLM(prefill_handoffs, orchestrator 侧不进 gather); 未完成视角若有会话锚点
+        # 则 L3 续跑(resume_sessions, dispatcher 侧 continue 已有会话), 无则新建会话。
+        resume_from_checkpoint = bool((task.agent_config or {}).get("resume_from_checkpoint"))
+        prefill_handoffs: dict[str, dict] | None = None
+        resume_sessions: dict[str, str] | None = None
+        if resume_from_checkpoint:
+            stage_rows = {s.stage_type: s for s in await audit_stage_store.list(db, task.id)}
+            prefill_handoffs = {}
+            resume_sessions = {}
+            for perspective in PERSPECTIVES:
+                stage = stage_rows.get(f"review:{perspective}")
+                if stage is None or stage.status != StageStatus.completed:
+                    # 未完成视角: 有会话锚点 → L3 续跑; 无 → 新建会话(bridge.run 默认路径)
+                    if stage is not None and stage.session_id:
+                        resume_sessions[perspective] = stage.session_id
+                    continue
+                snap = stage.state_payload or {}
+                findings = [dict(f) for f in (snap.get("findings") or [])]
+                confidences = [
+                    float(f.get("confidence", 0.5))
+                    for f in findings
+                    if isinstance(f, dict)
+                ]
+                confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.8
+                prefill_handoffs[perspective] = {
+                    "from_agent": perspective,
+                    "to_agent": "orchestrator",
+                    "summary": f"(resume: 检查点恢复, {len(findings)} 条发现)",
+                    "key_findings": findings,
+                    "priority_areas": sorted({
+                        str(f.get("file_path")) for f in findings
+                        if isinstance(f, dict) and f.get("file_path")
+                    }),
+                    "context_data": {
+                        "resumed": True,
+                        "session_id": stage.session_id,
+                        "turn_count": stage.turn_count,
+                    },
+                    "confidence": confidence,
+                }
+
         async def _progress_done(perspective: str) -> None:
             """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
             task.analyzed_files = (task.analyzed_files or 0) + 1
@@ -985,6 +1029,9 @@ async def _execute_pr_review_task_impl(
                 # 工具 root: 克隆源码(source_dir)优先, 否则回退项目工作区(含 review.diff)。
                 "workspace_root": workspace_root,
                 "clone_source": clone_source,
+                # 09-P2: resume 执行指令(command_router 从 options 抽出, 不进持久化 options)
+                "prefill_handoffs": prefill_handoffs,
+                "resume_sessions": resume_sessions,
             },
             event_sink=sink,
         )
@@ -1018,6 +1065,10 @@ async def _execute_pr_review_task_impl(
         }
         agent_config = dict(task.agent_config or {})
         agent_config["pr_meta"] = pr_meta
+        # 09-P2: 恢复完成, 清 resume 标志 — 下次正常执行不再走恢复分支;
+        # 若本轮中途又崩, 异常分支保留该标志以便再次续跑。
+        if "resume_from_checkpoint" in agent_config:
+            del agent_config["resume_from_checkpoint"]
         task.agent_config = agent_config
 
         # 09-P0 取消竞态门: cancel 端点已置 CANCELLED(DB 行)或进程内收到取消信号时,

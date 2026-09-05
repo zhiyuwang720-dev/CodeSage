@@ -209,3 +209,67 @@ def test_cancel_registration_inner_wraps_execution(monkeypatch):
     # 执行期间已登记(即当前 task), finally 之后清理
     assert observed["registered"] is not None
     assert "task-reg" not in _running_asyncio_tasks
+
+
+@pytest.mark.asyncio
+async def test_executor_resume_prefills_completed_stages(monkeypatch, db_session):
+    """resume 消费: 已完成视角从 audit_stages 快照预填(零 LLM), 未完成视角照常分发。"""
+    captured = _patch_pipeline(monkeypatch, comments=[], meta={})
+    task = _make_task(task_id="task-resume")
+    task.agent_config = {"resume_from_checkpoint": True}
+    em = StubEventManager()
+
+    # 预置 stage: intake + security/architecture 已完成(带 findings 快照), quality 未开始
+    await audit_stage_store.register(db_session, task.id, agent_tasks_mod.QUICK_REVIEW_STAGES)
+    await audit_stage_store.complete(
+        db_session, task.id, "intake",
+        payload={"pr_url": "https://github.com/o/r/pull/1", "changed_files": 1},
+    )
+    security_findings = [{"file_path": "a.py", "severity": "high", "title": "x", "confidence": 0.9}]
+    arch_findings = [{"file_path": "b.py", "severity": "medium", "title": "y", "confidence": 0.7}]
+    await audit_stage_store.complete(
+        db_session, task.id, "review:security", findings=security_findings,
+        payload={"perspective": "security"},
+    )
+    await audit_stage_store.complete(
+        db_session, task.id, "review:architecture", findings=arch_findings,
+        payload={"perspective": "architecture"},
+    )
+
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
+
+    assert task.status == AgentTaskStatus.COMPLETED
+    opts = captured["options"] or {}
+    prefill = opts.get("prefill_handoffs") or {}
+    assert set(prefill) == {"security", "architecture"}
+    assert [f["title"] for f in prefill["security"]["key_findings"]] == ["x"]
+    assert [f["title"] for f in prefill["architecture"]["key_findings"]] == ["y"]
+    assert prefill["security"]["context_data"]["resumed"] is True
+    # 未完成视角无会话锚点 → 不进 resume_sessions, orchestrator 新建会话
+    assert opts.get("resume_sessions") == {}
+    # 终态清 resume 标志, 下次不再走恢复分支
+    assert "resume_from_checkpoint" not in (task.agent_config or {})
+
+
+@pytest.mark.asyncio
+async def test_executor_resume_continues_pending_session(monkeypatch, db_session):
+    """未完成视角带会话锚点 → resume_sessions 透传, dispatcher 侧 L3 续跑该会话。"""
+    captured = _patch_pipeline(monkeypatch, comments=[], meta={})
+    task = _make_task(task_id="task-resume-sess")
+    task.agent_config = {"resume_from_checkpoint": True}
+    em = StubEventManager()
+
+    await audit_stage_store.register(db_session, task.id, agent_tasks_mod.QUICK_REVIEW_STAGES)
+    await audit_stage_store.complete(db_session, task.id, "intake", payload={})
+    await audit_stage_store.complete(
+        db_session, task.id, "review:security", findings=[], payload={}
+    )
+    # quality 未完成但已建会话(running 锚点, 进程死在对话中途)
+    await audit_stage_store.start(db_session, task.id, "review:quality", session_id="sess-q")
+
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
+
+    assert (captured["options"] or {}).get("resume_sessions") == {"quality": "sess-q"}
+    # 完成的 security 仍预填(空 findings → 贡献 0 条), quality 不在预填内
+    prefill = (captured["options"] or {}).get("prefill_handoffs") or {}
+    assert set(prefill) == {"security"}

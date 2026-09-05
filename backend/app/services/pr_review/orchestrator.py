@@ -98,7 +98,13 @@ class ReviewOrchestrator:
         self._enable_rules = enable_rules
         self._enable_followups = enable_followups
 
-    async def run(self, ctx: Any) -> OrchestratedReview:
+    async def run(
+        self,
+        ctx: Any,
+        *,
+        prefill_handoffs: dict[str, dict] | None = None,
+        resume_sessions: dict[str, str] | None = None,
+    ) -> OrchestratedReview:
         # §7: 无 diff(仅删除/文档) → 无可审内容, 直接空评论集终结
         if not str(ctx.diff_text or "").strip():
             return OrchestratedReview(
@@ -109,14 +115,24 @@ class ReviewOrchestrator:
         # 规则层先兜底(确定性, 模型不可用时可独立出审)
         rule_findings: list[ReviewFinding] = run_rules(ctx.diff_text) if self._enable_rules else []
 
+        # 09-P2: resume 预填 — 已完成视角(prefill_handoffs)不进 gather, 直接读快照零 LLM;
+        # 未完成视角若有会话锚点(resume_sessions[perspective])则 L3 续跑, 无则新建会话。
+        # prefill 即 handoff_map 初值, 恢复的 findings 与一次性跑的产物同入综合层。
+        prefill = prefill_handoffs or {}
+        _resume_sessions = resume_sessions or {}
+        pending = [p for p in self._perspectives if p not in prefill]
+
         # 三视角并行分发(黑盒, asyncio.gather)。return_exceptions=True: 单视角硬异常
         # 记为该视角失败(0 findings + 备注), 不冒泡炸掉整个 run —— 其余视角成果照常进综合层。
         results = await asyncio.gather(
-            *(self._dispatch(perspective, ctx, None) for perspective in self._perspectives),
+            *(
+                self._dispatch(p, ctx, None, resume_session_id=_resume_sessions.get(p))
+                for p in pending
+            ),
             return_exceptions=True,
         )
-        handoff_map: dict[str, dict] = {}
-        for perspective, result in zip(self._perspectives, results):
+        handoff_map: dict[str, dict] = dict(prefill)
+        for perspective, result in zip(pending, results):
             if isinstance(result, BaseException):
                 error_note = f"{type(result).__name__}: {result}"
                 handoff_map[perspective] = {
@@ -148,6 +164,9 @@ class ReviewOrchestrator:
         # 或视角在 context_data 自报 needs_followup(矛盾/证据不足)。
         if self._enable_followups and self._dispatcher is not None:
             for perspective in self._perspectives:
+                if perspective in prefill:
+                    # 09-P2: resume 预填视角已完结(快照读回), 不触发追问, 避免 LLM 重跑
+                    continue
                 handoff = handoff_map.get(perspective) or {}
                 pending = self._high_severity_dropped(handoff, synthesis)
                 if not pending and handoff.get("context_data", {}).get("needs_followup"):
@@ -185,7 +204,14 @@ class ReviewOrchestrator:
             empty_reason=empty_reason,
         )
 
-    async def _dispatch(self, perspective: str, ctx: Any, followup_findings: list[dict] | None) -> dict:
+    async def _dispatch(
+        self,
+        perspective: str,
+        ctx: Any,
+        followup_findings: list[dict] | None,
+        *,
+        resume_session_id: str | None = None,
+    ) -> dict:
         if self._dispatcher is None:
             # 无分发器(纯规则模式): 返回空 handoff; 上下文完整性由本层保证
             return {
@@ -197,7 +223,12 @@ class ReviewOrchestrator:
                 "context_data": {},
                 "confidence": 0.0,
             }
-        return await self._dispatcher(perspective, ctx, followup_findings)
+        if resume_session_id is None:
+            return await self._dispatcher(perspective, ctx, followup_findings)
+        # 09-P2: 带会话锚点的视角 L3 续跑(dispatcher 内部 continue 已有会话)
+        return await self._dispatcher(
+            perspective, ctx, followup_findings, resume_session_id=resume_session_id
+        )
 
     @staticmethod
     def _high_severity_dropped(handoff: dict, synthesis: SynthesisResult) -> list[dict]:

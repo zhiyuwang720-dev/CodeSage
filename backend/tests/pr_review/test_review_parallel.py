@@ -131,3 +131,47 @@ def test_empty_reason_when_all_filtered_by_severity():
     assert review.empty_reason == "all_filtered_by_severity"
     assert review.synthesis.severity_dropped == 3
     assert "严重度过滤 3 条" in review.summary
+
+
+def test_prefill_handoffs_skips_gather_and_merges():
+    """09-P2 resume 预填: 已完成视角不进 gather(零 LLM), 恢复 findings 与新增视角产物同入综合层。"""
+    dispatched: list[str] = []
+
+    async def dispatcher(perspective, ctx, followup_findings=None):
+        dispatched.append(perspective)
+        # 不同 line → dedup_key 各异; 都落在 DIFF 新增行(2..4)内, 综合层 enforce_lines 不丢;
+        # 用 high 才能过 orchestrator 默认 min_severity=high(否则被滤掉触发追问, 破坏 dispatched 断言)。
+        line = {"architecture": 4, "quality": 3}[perspective]
+        return {"from_agent": perspective, "to_agent": "orchestrator", "summary": f"{perspective} ok",
+                "key_findings": [_finding(perspective, severity="high", line=line, category="api")],
+                "priority_areas": [], "context_data": {}, "confidence": 0.8}
+
+    prefill = {
+        "security": {
+            "from_agent": "security", "to_agent": "orchestrator", "summary": "(resume: 检查点恢复)",
+            "key_findings": [_finding("security", severity="critical", line=2, category="security")],
+            "priority_areas": ["a.py"], "context_data": {"resumed": True}, "confidence": 0.9,
+        },
+    }
+    ctx = type("C", (), {"diff_text": DIFF, "repo": "r", "pr_number": 1})()
+    review = asyncio.run(ReviewOrchestrator(dispatcher, enable_rules=False).run(ctx, prefill_handoffs=prefill))
+    assert dispatched == ["architecture", "quality"], "已预填视角不再分发"
+    titles = {c.title for c in review.comments}
+    assert "security 发现" in titles, "恢复 findings 进综合层"
+    assert "architecture 发现" in titles and "quality 发现" in titles
+
+
+def test_resume_sessions_forwarded_to_dispatcher():
+    """09-P2: 带会话锚点的视角以 resume_session_id 透传 dispatcher(L3 续跑), 其余视角新建会话。"""
+    seen: dict[str, str | None] = {}
+
+    async def dispatcher(perspective, ctx, followup_findings=None, *, resume_session_id=None):
+        seen[perspective] = resume_session_id
+        return {"from_agent": perspective, "to_agent": "orchestrator", "summary": f"{perspective} ok",
+                "key_findings": [], "priority_areas": [], "context_data": {}, "confidence": 0.8}
+
+    ctx = type("C", (), {"diff_text": DIFF, "repo": "r", "pr_number": 1})()
+    asyncio.run(ReviewOrchestrator(dispatcher, enable_rules=False).run(
+        ctx, resume_sessions={"quality": "sess-q"}))
+    assert seen["quality"] == "sess-q"
+    assert seen["security"] is None and seen["architecture"] is None
