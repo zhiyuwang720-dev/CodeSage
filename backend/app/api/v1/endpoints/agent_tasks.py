@@ -835,132 +835,179 @@ async def _execute_pr_review_task_impl(
     project: Project,
     event_manager: EventManager,
 ) -> None:
-    """PR 3-Agent review 任务执行: 三视角运行时 + 事件流 + findings 落库。"""
+    """PR 3-Agent review 任务执行: 三视角运行时 + 事件流 + findings 落库。
+
+    09-P0 执行器正确性: 整链包 try/except → 崩溃置 FAILED(不卡 RUNNING);
+    终态置 COMPLETED 前加取消竞态门(取消后不被晚到 COMPLETED 覆写)。
+    """
     from pathlib import Path
 
     from app.services.pr_review.command_router import run_review_pipeline_async
 
-    scope = (task.audit_scope or {}).get("pr_review") or {}
-    pr_url = scope.get("pr_url") or project.repository_url
-    diff_file_path = scope.get("diff_file_path")
-    diff_text = None
-    if diff_file_path and os.path.exists(diff_file_path):
-        try:
-            diff_text = await asyncio.to_thread(
-                Path(diff_file_path).read_text, encoding="utf-8", errors="replace"
-            )
-        except Exception as exc:
-            logger.warning(f"Failed to read diff file {diff_file_path}: {exc}")
-    if not pr_url and not diff_text:
-        raise ValueError("pr_review task has neither pr_url nor diff content")
+    sink = None
+    try:
+        scope = (task.audit_scope or {}).get("pr_review") or {}
+        pr_url = scope.get("pr_url") or project.repository_url
+        diff_file_path = scope.get("diff_file_path")
+        diff_text = None
+        if diff_file_path and os.path.exists(diff_file_path):
+            try:
+                diff_text = await asyncio.to_thread(
+                    Path(diff_file_path).read_text, encoding="utf-8", errors="replace"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to read diff file {diff_file_path}: {exc}")
+        if not pr_url and not diff_text:
+            raise ValueError("pr_review task has neither pr_url nor diff content")
 
-    # 纯 diff 审查: 尝试从 PR URL 推导仓库并克隆源码, 让三视角能读/搜被改文件。
-    # clone_source 只填 https 仓库基址(非 PR 页面地址), 克隆失败由 importer 降级 diff-only。
-    clone_source = None
-    if diff_text and pr_url:
-        source = pr_url or ""
-        if "github.com/" in source:
-            parts = source.split("github.com/", 1)[1].split("/")
-            if len(parts) >= 2:
-                clone_source = f"https://github.com/{parts[0]}/{parts[1]}"
-    workspace_root = str(
-        Path(settings.MANAGED_PROJECTS_ROOT).resolve()
-        / ".auditai_workspaces" / "projects" / str(project.id)
-    )
-
-    # 进度推进: diff 变更文件数 → total_files(progress_percentage 计算依据)
-    changed_files = _count_diff_changed_files(diff_text or "")
-    if changed_files:
-        task.total_files = changed_files
-    task.current_phase = AgentTaskPhase.ANALYSIS
-    task.status = AgentTaskStatus.RUNNING
-    await db.commit()
-
-    async def _progress_done(perspective: str) -> None:
-        """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
-        task.analyzed_files = (task.analyzed_files or 0) + 1
-        await db.commit()
-        await event_manager.add_event(
-            task.id, "progress", sequence=0, phase=perspective,
-            message=f"{perspective} 视角完成",
-            metadata={
-                "review_type": "pr_review", "perspective": perspective,
-                "agent_name": perspective,
-                "current": task.analyzed_files or 0,
-                "total": task.total_files or 0,
-            },
+        # 纯 diff 审查: 尝试从 PR URL 推导仓库并克隆源码, 让三视角能读/搜被改文件。
+        # clone_source 只填 https 仓库基址(非 PR 页面地址), 克隆失败由 importer 降级 diff-only。
+        clone_source = None
+        if diff_text and pr_url:
+            source = pr_url or ""
+            if "github.com/" in source:
+                parts = source.split("github.com/", 1)[1].split("/")
+                if len(parts) >= 2:
+                    clone_source = f"https://github.com/{parts[0]}/{parts[1]}"
+        workspace_root = str(
+            Path(settings.MANAGED_PROJECTS_ROOT).resolve()
+            / ".auditai_workspaces" / "projects" / str(project.id)
         )
 
-    sink = _build_pr_review_event_sink(
-        task.id, event_manager, progress_cb=_progress_done, task=task, db=db
-    )
-    await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
+        # 进度推进: diff 变更文件数 → total_files(progress_percentage 计算依据)
+        changed_files = _count_diff_changed_files(diff_text or "")
+        if changed_files:
+            task.total_files = changed_files
+        task.current_phase = AgentTaskPhase.ANALYSIS
+        task.status = AgentTaskStatus.RUNNING
+        await db.commit()
 
-    result = await run_review_pipeline_async(
-        pr_url=pr_url,
-        diff_text=diff_text,
-        user_context=scope.get("user_context"),
-        options={
-            "engine": "runtime",
-            "task_id": task.id,
-            # SEVERITY_RANK 只有 critical/high/medium/low: "info" 不在键里,
-            # get 会回落成 3(high)把全部 medium/low 评论滤掉 → 必须用 "low"(全量输出)。
-            "min_severity": "low",
-            "max_comments": int(scope.get("max_comments") or 10),
-            "max_turns": int(task.max_iterations or 50),
-            # 三视角运行时审计会话用独立 SQLite 文件: sync 写(运行时)与 async 写
-            # (EventManager agent_events)同库并发会在 WAL 下形成写锁循环挂死服务。
-            "session_factory": get_pr_review_sync_session_factory(),
-            # 工具 root: 克隆源码(source_dir)优先, 否则回退项目工作区(含 review.diff)。
-            "workspace_root": workspace_root,
-            "clone_source": clone_source,
-        },
-        event_sink=sink,
-    )
+        async def _progress_done(perspective: str) -> None:
+            """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
+            task.analyzed_files = (task.analyzed_files or 0) + 1
+            await db.commit()
+            await event_manager.add_event(
+                task.id, "progress", sequence=0, phase=perspective,
+                message=f"{perspective} 视角完成",
+                metadata={
+                    "review_type": "pr_review", "perspective": perspective,
+                    "agent_name": perspective,
+                    "current": task.analyzed_files or 0,
+                    "total": task.total_files or 0,
+                },
+            )
 
-    comments = result.comments or []
-    findings = [
-        {
-            "vulnerability_type": c.category or "code_review",
-            "severity": c.severity or "medium",
-            "title": f"{c.category or 'review'} in {c.path}:{c.line}",
-            "description": c.body,
-            "file_path": c.path,
-            "line_start": c.line,
-            "line_end": c.line,
+        sink = _build_pr_review_event_sink(
+            task.id, event_manager, progress_cb=_progress_done, task=task, db=db
+        )
+        await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
+
+        result = await run_review_pipeline_async(
+            pr_url=pr_url,
+            diff_text=diff_text,
+            user_context=scope.get("user_context"),
+            options={
+                "engine": "runtime",
+                "task_id": task.id,
+                # SEVERITY_RANK 只有 critical/high/medium/low: "info" 不在键里,
+                # get 会回落成 3(high)把全部 medium/low 评论滤掉 → 必须用 "low"(全量输出)。
+                "min_severity": "low",
+                "max_comments": int(scope.get("max_comments") or 10),
+                "max_turns": int(task.max_iterations or 50),
+                # 三视角运行时审计会话用独立 SQLite 文件: sync 写(运行时)与 async 写
+                # (EventManager agent_events)同库并发会在 WAL 下形成写锁循环挂死服务。
+                "session_factory": get_pr_review_sync_session_factory(),
+                # 工具 root: 克隆源码(source_dir)优先, 否则回退项目工作区(含 review.diff)。
+                "workspace_root": workspace_root,
+                "clone_source": clone_source,
+            },
+            event_sink=sink,
+        )
+
+        comments = result.comments or []
+        findings = [
+            {
+                "vulnerability_type": c.category or "code_review",
+                "severity": c.severity or "medium",
+                "title": f"{c.category or 'review'} in {c.path}:{c.line}",
+                "description": c.body,
+                "file_path": c.path,
+                "line_start": c.line,
+                "line_end": c.line,
+            }
+            for c in comments
+            if c and getattr(c, "path", None)
+        ]
+        saved = await _save_findings(db, task.id, findings, project_root=None)
+
+        # 07-P2: PR 审计基本信息快照 → agent_config["pr_meta"](报告 PR 块数据源)。
+        # 执行时从 ReviewContext 可取则填 head_sha/author/title, 不可得留 None 由模板兜底。
+        pr_meta = {
+            "pr_url": scope.get("pr_url") or project.repository_url,
+            "pr_number": scope.get("pr_number"),
+            "branch": getattr(task, "branch_name", None),
+            "base_sha": getattr(task, "commit_sha", None),
+            "head_sha": (result.meta or {}).get("head_sha"),
+            "author": None,
+            "title": None,
         }
-        for c in comments
-        if c and getattr(c, "path", None)
-    ]
-    saved = await _save_findings(db, task.id, findings, project_root=None)
+        agent_config = dict(task.agent_config or {})
+        agent_config["pr_meta"] = pr_meta
+        task.agent_config = agent_config
 
-    # 07-P2: PR 审计基本信息快照 → agent_config["pr_meta"](报告 PR 块数据源)。
-    # 执行时从 ReviewContext 可取则填 head_sha/author/title, 不可得留 None 由模板兜底。
-    pr_meta = {
-        "pr_url": scope.get("pr_url") or project.repository_url,
-        "pr_number": scope.get("pr_number"),
-        "branch": getattr(task, "branch_name", None),
-        "base_sha": getattr(task, "commit_sha", None),
-        "head_sha": (result.meta or {}).get("head_sha"),
-        "author": None,
-        "title": None,
-    }
-    agent_config = dict(task.agent_config or {})
-    agent_config["pr_meta"] = pr_meta
-    task.agent_config = agent_config
+        # 09-P0 取消竞态门: cancel 端点已置 CANCELLED(DB 行)或进程内收到取消信号时,
+        # 跳过 COMPLETED 覆写保持 CANCELLED, 防止晚到完成状态抹掉用户的取消意图。
+        if is_task_cancelled(task.id) or task.status == AgentTaskStatus.CANCELLED:
+            logger.info(f"pr_review task {task.id} cancelled during execution; keep CANCELLED")
+            task.current_step = "Cancelled during execution"
+            await db.commit()
+            return
 
-    task.status = AgentTaskStatus.COMPLETED
-    task.current_phase = AgentTaskPhase.REPORTING
-    task.completed_at = datetime.now(timezone.utc)
-    task.findings_count = len(findings)
-    task.error_message = None
-    await db.commit()
-    await sink({"type": "done", "task_complete": True, "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
-    logger.info(f"pr_review task {task.id} completed with {saved} findings")
+        task.status = AgentTaskStatus.COMPLETED
+        task.current_phase = AgentTaskPhase.REPORTING
+        task.completed_at = datetime.now(timezone.utc)
+        task.findings_count = len(findings)
+        task.error_message = None
+        await db.commit()
+        await sink({"type": "done", "task_complete": True, "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
+        logger.info(f"pr_review task {task.id} completed with {saved} findings")
+    except Exception as exc:
+        # 09-P0 崩溃 → FAILED 转换: 异常冒泡会让后台任务静默消失, 任务卡 RUNNING
+        # 且 resume 端点以 "already running" 拒绝 → 崩溃恢复断头。这里统一落 FAILED。
+        logger.exception(f"pr_review task {task.id} failed: {exc}")
+        try:
+            await db.rollback()
+        except Exception:
+            logger.debug("pr_review rollback failed", exc_info=True)
+        task.status = AgentTaskStatus.FAILED
+        task.current_phase = AgentTaskPhase.REPORTING
+        task.current_step = "Failed during execution"
+        task.error_message = str(exc)
+        task.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        if sink is not None:
+            try:
+                await sink({"type": "error", "error": str(exc), "message": f"PR 审查失败: {exc}"})
+            except Exception:
+                logger.debug("pr_review error sink failed", exc_info=True)
+        return
 
 
 async def _execute_agent_task_impl(task_id: str):
     """Execute an agent audit task in the background."""
+    # 09-P0 取消打断在飞: 登记当前 asyncio task, 使 cancel 端点触发的
+    # request_agent_task_cancellation 能真正中断运行中流水线(而非只置 CANCELLED 行等它跑完)。
+    current = asyncio.current_task()
+    if current is not None:
+        _running_asyncio_tasks[task_id] = current
+    try:
+        await _execute_agent_task_impl_inner(task_id)
+    finally:
+        _running_asyncio_tasks.pop(task_id, None)
+
+
+async def _execute_agent_task_impl_inner(task_id: str):
+    """Execute an agent audit task in the background (inner; 外层负责 running task 登记)。"""
     # PR review 任务不依赖 legacy agent 编排, 提前分派: 三视角 review 运行时。
     # 放在 legacy 导入之前, 避免 trimmed 后的 agents 模块缺失阻塞 PR 流程。
     async with async_session_factory() as probe_db:
