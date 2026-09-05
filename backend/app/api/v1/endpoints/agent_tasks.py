@@ -813,6 +813,21 @@ async def _execute_pr_review_task_impl(
     ]
     saved = await _save_findings(db, task.id, findings, project_root=None)
 
+    # 07-P2: PR 审计基本信息快照 → agent_config["pr_meta"](报告 PR 块数据源)。
+    # 执行时从 ReviewContext 可取则填 head_sha/author/title, 不可得留 None 由模板兜底。
+    pr_meta = {
+        "pr_url": scope.get("pr_url") or project.repository_url,
+        "pr_number": scope.get("pr_number"),
+        "branch": getattr(task, "branch_name", None),
+        "base_sha": getattr(task, "commit_sha", None),
+        "head_sha": (result.meta or {}).get("head_sha"),
+        "author": None,
+        "title": None,
+    }
+    agent_config = dict(task.agent_config or {})
+    agent_config["pr_meta"] = pr_meta
+    task.agent_config = agent_config
+
     task.status = AgentTaskStatus.COMPLETED
     task.current_phase = AgentTaskPhase.REPORTING
     task.completed_at = datetime.now(timezone.utc)
@@ -2624,7 +2639,7 @@ async def generate_audit_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Generate a final vulnerability report for the task."""
+    """Generate a PR audit report for the task (markdown/json/html, audit semantics)."""
     from fastapi.responses import Response
     from app.models.report_template import AgentTaskReport
     from app.services.task_report_service import generate_task_report

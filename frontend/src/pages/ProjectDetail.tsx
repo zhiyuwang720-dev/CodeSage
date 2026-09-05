@@ -235,7 +235,7 @@ export default function ProjectDetail() {
         file_path: f.file_path ?? parsed?.file_path ?? null,
         line_number: ((f.line_start ?? parsed?.line_start ?? null) as any),
         line_end: ((f.line_end ?? parsed?.line_end ?? null) as any),
-        category: (f as any).vulnerability_type ?? null,
+        category: (f as any).finding_type ?? (f as any).vulnerability_type ?? null,
         status: f.status ?? null,
       };
     });

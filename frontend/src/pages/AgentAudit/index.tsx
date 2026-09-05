@@ -1352,7 +1352,7 @@ function AgentAuditPageContent() {
           id: (finding.id as string) || `finding-${Date.now()}`,
           title: (finding.title as string) || 'Vulnerability found',
           severity: (finding.severity as string) || 'medium',
-          vulnerability_type: (finding.vulnerability_type as string) || 'unknown',
+          vulnerability_type: (finding.finding_type ?? finding.vulnerability_type) || 'unknown',
           file_path: finding.file_path as string,
           line_start: finding.line_start as number,
           description: finding.description as string,

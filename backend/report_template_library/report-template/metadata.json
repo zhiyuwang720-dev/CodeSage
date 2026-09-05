@@ -1,13 +1,13 @@
 {
   "id": "report-template",
   "slug": "report-template",
-  "name": "默认最终漏洞报告",
-  "description": "AutoCVE 默认最终漏洞报告模板。",
-  "report_type": "final_vulnerability_report",
+  "name": "默认 PR 审计报告",
+  "description": "CodeSage 默认 PR 审计报告模板。",
+  "report_type": "audit_report",
   "output_format": "markdown",
   "variables": {
     "summary": "执行摘要",
-    "findings": "漏洞清单",
+    "findings": "审计发现清单",
     "remediation": "修复建议"
   },
   "metadata": {

@@ -1,4 +1,15 @@
-# AutoCVE 最终漏洞报告
+# CodeSage PR 审计报告
+
+## PR 审计基本信息
+{% if pr.pr_url or pr.pr_number %}
+- PR URL: {{ pr.pr_url or 'N/A' }}
+- PR 编号: {{ pr.pr_number if pr.pr_number is not none else 'N/A' }}
+{% endif %}
+- 标题: {{ pr.title or 'N/A' }}
+- 仓库: {{ project.name }}
+- 分支: {{ pr.branch or 'N/A' }}
+- base → head: {{ pr.base_sha or 'N/A' }} → {{ pr.head_sha or 'N/A' }}
+- 作者: {{ pr.author or 'N/A' }}
 
 ## 基本信息
 - 生成时间: {{ report.generated_at }}
@@ -15,7 +26,7 @@
 ## 执行摘要
 - 安全评分: {{ summary.security_score if summary.security_score is not none else 'N/A' }}
 - 发现总数: {{ summary.total_findings }}
-- 已验证漏洞: {{ summary.verified_findings }}
+- 已验证问题: {{ summary.verified_findings }}
 - 误报数量: {{ summary.false_positive_count }}
 - 分析文件数: {{ summary.total_files_analyzed }}
 
@@ -34,13 +45,15 @@
 - 总迭代数: {{ summary.total_iterations }}
 - 工具调用数: {{ summary.tool_calls_count }}
 - Token 用量: {{ summary.tokens_used }}
+- 最大迭代数: {{ summary.max_iterations if summary.max_iterations is not none else 'N/A' }}
+- Token 预算: {{ summary.token_budget if summary.token_budget is not none else 'N/A' }}
 - 总耗时(ms): {{ summary.duration_ms if summary.duration_ms is not none else 'N/A' }}
 
-## 漏洞清单
+## 审计发现清单
 {% if findings %}
 {% for finding in findings %}
 ### {{ loop.index }}. [{{ finding.severity|upper }}] {{ finding.title }}
-- 漏洞类型: {{ finding.vulnerability_type }}
+- 问题类型: {{ finding.finding_type }}
 - 来源: {{ finding.origin or 'unknown' }}
 - 证据类型: {{ finding.evidence_type or 'unknown' }}
 - 位置: {{ finding.file_path or 'N/A' }}{% if finding.line_start %}:{{ finding.line_start }}{% endif %}{% if finding.line_end and finding.line_end != finding.line_start %}-{{ finding.line_end }}{% endif %}
@@ -61,10 +74,10 @@
 {% endif %}
 {% endfor %}
 {% else %}
-本次任务未生成可输出的漏洞结果。
+本次任务未产生可输出的审计发现。
 {% endif %}
 
 ## 修复优先级建议
 1. 优先修复 Critical / High 严重等级问题。
 2. 结合 Scan/Triage 与 Finding 两条线索统一排期。
-3. 对已验证漏洞优先补充修复与回归验证。
+3. 对已确认发现优先补充修复与回归验证。

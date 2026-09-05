@@ -34,9 +34,9 @@ const HOST_PROJECT_ROOT = (import.meta.env.VITE_HOST_PROJECT_ROOT as string | un
 const EMPTY_TEMPLATE: ReportTemplatePayload = {
   name: '',
   description: '',
-  report_type: 'final_vulnerability_report',
+  report_type: 'audit_report',
   output_format: 'markdown',
-  content: '# 执行摘要\n\n{{summary}}\n\n# 漏洞清单\n\n{{findings}}\n\n# 修复建议\n\n{{remediation}}\n', 
+  content: '# 执行摘要\n\n{{summary}}\n\n# 审计发现清单\n\n{{findings}}\n\n# 修复建议\n\n{{remediation}}\n',
   variables: {},
   metadata_json: {},
   is_active: true,
@@ -367,7 +367,7 @@ export default function ReportTemplatesPage() {
                   </div>
                   <Button variant="outline" size="sm" onClick={() => setForm((prev) => ({
                     ...prev,
-                    content: '# 执行摘要\n\n{{summary}}\n\n# 漏洞清单\n\n{{findings}}\n\n# 修复建议\n\n{{remediation}}\n\n# 附录\n\n{{appendix}}\n',
+                    content: '# 执行摘要\n\n{{summary}}\n\n# 审计发现清单\n\n{{findings}}\n\n# 修复建议\n\n{{remediation}}\n\n# 附录\n\n{{appendix}}\n',
                   }))}>
                     <Sparkles className="mr-2 h-4 w-4" /> 填充示例
                   </Button>

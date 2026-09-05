@@ -10,9 +10,21 @@ from app.models.agent_task import AgentFinding, AgentTask
 from app.models.project import Project
 from app.models.report_template import AgentTaskReport
 from app.services.contracts.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
+from app.services.contracts.report import ReportPayload, ReportPRInfo, ReportSummary, ReportFindingItem
 from app.services.report_template_file_service import ReportTemplateFileService
 
-DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告
+DEFAULT_REPORT_TEMPLATE = """# CodeSage PR 审计报告
+
+## PR 审计基本信息
+{% if pr.pr_url or pr.pr_number %}
+- PR URL: {{ pr.pr_url or 'N/A' }}
+- PR 编号: {{ pr.pr_number if pr.pr_number is not none else 'N/A' }}
+{% endif %}
+- 标题: {{ pr.title or 'N/A' }}
+- 仓库: {{ project.name }}
+- 分支: {{ pr.branch or 'N/A' }}
+- base → head: {{ pr.base_sha or 'N/A' }} → {{ pr.head_sha or 'N/A' }}
+- 作者: {{ pr.author or 'N/A' }}
 
 ## 基本信息
 - 生成时间: {{ report.generated_at }}
@@ -29,7 +41,7 @@ DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告
 ## 执行摘要
 - 安全评分: {{ summary.security_score if summary.security_score is not none else 'N/A' }}
 - 发现总数: {{ summary.total_findings }}
-- 已验证漏洞: {{ summary.verified_findings }}
+- 已验证问题: {{ summary.verified_findings }}
 - 误报数量: {{ summary.false_positive_count }}
 - 分析文件数: {{ summary.total_files_analyzed }}
 
@@ -48,13 +60,15 @@ DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告
 - 总迭代数: {{ summary.total_iterations }}
 - 工具调用数: {{ summary.tool_calls_count }}
 - Token 用量: {{ summary.tokens_used }}
+- 最大迭代数: {{ summary.max_iterations if summary.max_iterations is not none else 'N/A' }}
+- Token 预算: {{ summary.token_budget if summary.token_budget is not none else 'N/A' }}
 - 总耗时(ms): {{ summary.duration_ms if summary.duration_ms is not none else 'N/A' }}
 
-## 漏洞清单
+## 审计发现清单
 {% if findings %}
 {% for finding in findings %}
 ### {{ loop.index }}. [{{ finding.severity|upper }}] {{ finding.title }}
-- 漏洞类型: {{ finding.vulnerability_type }}
+- 问题类型: {{ finding.finding_type }}
 - 来源: {{ finding.origin or 'unknown' }}
 - 证据类型: {{ finding.evidence_type or 'unknown' }}
 - 位置: {{ finding.file_path or 'N/A' }}{% if finding.line_start %}:{{ finding.line_start }}{% endif %}{% if finding.line_end and finding.line_end != finding.line_start %}-{{ finding.line_end }}{% endif %}
@@ -75,13 +89,13 @@ DEFAULT_REPORT_TEMPLATE = """# AutoCVE 最终漏洞报告
 {% endif %}
 {% endfor %}
 {% else %}
-本次任务未生成可输出的漏洞结果。
+本次任务未产生可输出的审计发现。
 {% endif %}
 
 ## 修复优先级建议
 1. 优先修复 Critical / High 严重等级问题。
 2. 结合 Scan/Triage 与 Finding 两条线索统一排期。
-3. 对已验证漏洞优先补充修复与回归验证。
+3. 对已确认发现优先补充修复与回归验证。
 """
 
 
@@ -139,7 +153,7 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
         "task_id": finding.task_id,
         "title": finding.title,
         "severity": str(finding.severity),
-        "vulnerability_type": str(finding.vulnerability_type),
+        "finding_type": str(finding.vulnerability_type),
         "description": finding.description,
         "file_path": finding.file_path,
         "line_start": finding.line_start,
@@ -195,7 +209,7 @@ async def build_report_payload(
     project: Project,
     findings: List[AgentFinding | Dict[str, Any]],
     template: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> ReportPayload:
     del db
     finding_items = [serialize_finding(item) for item in findings]
     severity_distribution = _severity_counts(finding_items)
@@ -206,50 +220,80 @@ async def build_report_payload(
         item for item in finding_items
         if item.get("report_status") in {"confirmed", "candidate"}
     ]
-    return {
-        "report": {
+
+    def _finding_item(item: Dict[str, Any]) -> ReportFindingItem:
+        # 过渡期: raw dict 可能仍是 vulnerability_type 键, 归一化到审计语义 finding_type。
+        normalized = dict(item)
+        normalized.setdefault("finding_type", str(normalized.get("vulnerability_type") or "other"))
+        return ReportFindingItem(**normalized)
+
+    pr_meta = (task.agent_config or {}).get("pr_meta") or {}
+    duration_ms = None
+    if task.completed_at and task.started_at:
+        duration_ms = int((task.completed_at - task.started_at).total_seconds() * 1000)
+
+    return ReportPayload(
+        report={
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "type": "final_vulnerability_report",
+            "type": "audit_report",
         },
-        "project": {
+        pr=ReportPRInfo(
+            pr_url=pr_meta.get("pr_url"),
+            pr_number=pr_meta.get("pr_number"),
+            title=pr_meta.get("title"),
+            branch=pr_meta.get("branch") or task.branch_name,
+            base_sha=pr_meta.get("base_sha") or task.commit_sha,
+            head_sha=pr_meta.get("head_sha"),
+            author=pr_meta.get("author"),
+        ),
+        project={
             "id": project.id,
             "name": project.name,
             "source_type": getattr(project, "source_type", None),
         },
-        "task": {
+        task={
             "id": task.id,
             "status": task.status,
             "phase": task.current_phase,
             "name": task.name,
         },
-        "summary": {
-            "security_score": task.security_score,
-            "total_files_analyzed": task.analyzed_files,
-            "total_findings": len(finding_items),
-            "verified_findings": verified_count,
-            "confirmed_findings": report_status_distribution["confirmed"],
-            "candidate_findings": report_status_distribution["candidate"],
-            "false_positive_findings": report_status_distribution["false_positive"],
-            "false_positive_count": task.false_positive_count or 0,
-            "severity_distribution": severity_distribution,
-            "origin_distribution": origin_distribution,
-            "report_status_distribution": report_status_distribution,
-            "total_iterations": task.total_iterations or 0,
-            "tool_calls_count": task.tool_calls_count or 0,
-            "tokens_used": task.tokens_used or 0,
-            "duration_ms": getattr(task, "duration_ms", None),
-        },
-        "findings": finding_items,
-        "final_conclusions": final_conclusions,
-        "template": {
+        summary=ReportSummary(
+            security_score=task.security_score,
+            total_files_analyzed=task.analyzed_files,
+            total_findings=len(finding_items),
+            verified_findings=verified_count,
+            confirmed_findings=report_status_distribution["confirmed"],
+            candidate_findings=report_status_distribution["candidate"],
+            false_positive_findings=report_status_distribution["false_positive"],
+            severity_distribution=severity_distribution,
+            origin_distribution=origin_distribution,
+            total_iterations=task.total_iterations or 0,
+            tool_calls_count=task.tool_calls_count or 0,
+            tokens_used=task.tokens_used or 0,
+            max_iterations=task.max_iterations,
+            token_budget=task.token_budget,
+            duration_ms=duration_ms,
+            # 存量兼容键(模板执行摘要仍读 false_positive_count)
+            false_positive_count=task.false_positive_count or 0,
+            report_status_distribution=report_status_distribution,
+        ),
+        findings=[_finding_item(item) for item in finding_items],
+        final_conclusions=[_finding_item(item) for item in final_conclusions],
+        template={
             "id": template["slug"] if template else None,
             "name": template["name"] if template else None,
             "metadata_json": template.get("metadata_json", {}) if template else {},
         },
-    }
+    )
 
 
-def render_report_content(payload: Dict[str, Any], template_content: str, output_format: str = "markdown") -> str:
+def render_report_content(
+    payload: ReportPayload | Dict[str, Any],
+    template_content: str,
+    output_format: str = "markdown",
+) -> str:
+    if isinstance(payload, ReportPayload):
+        payload = payload.model_dump()
     if output_format == "json":
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -257,7 +301,7 @@ def render_report_content(payload: Dict[str, Any], template_content: str, output
     if output_format == "html":
         escaped = rendered.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         return (
-            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><title>AutoCVE 最终漏洞报告</title>"
+            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'><title>CodeSage PR 审计报告</title>"
             "<style>body{font-family:'Microsoft YaHei','PingFang SC',sans-serif;background:#f7f4ee;color:#24303f;padding:40px;}"
             ".page{max-width:1080px;margin:0 auto;background:white;border:1px solid #e6ddcf;border-radius:24px;"
             "box-shadow:0 30px 80px rgba(77,67,49,.12);padding:36px;}"
@@ -287,7 +331,8 @@ async def generate_task_report(
     template_content = template["content"] if template else DEFAULT_REPORT_TEMPLATE
     final_format = output_format or (template["output_format"] if template else "markdown")
     payload = await build_report_payload(db, task, project, findings, template)
-    content = render_report_content(payload, template_content, final_format)
+    payload_dict = payload.model_dump()
+    content = render_report_content(payload_dict, template_content, final_format)
 
     report = await get_task_report(db, task.id)
     if report is None:
@@ -296,12 +341,12 @@ async def generate_task_report(
 
     report.template_id = template["slug"] if template else None
     report.output_format = final_format
-    report.title = f"AutoCVE-{project.name}-final-report"
+    report.title = f"CodeSage-{project.name}-audit-report"
     report.content = content
-    report.report_json = payload
+    report.report_json = payload_dict
     report.report_metadata = {
-        "generated_at": payload["report"]["generated_at"],
-        "report_type": payload["report"]["type"],
+        "generated_at": payload_dict["report"]["generated_at"],
+        "report_type": payload_dict["report"]["type"],
         "template_name": template["name"] if template else "系统默认模板",
         "template_path": template.get("template_file") if template else None,
         "template_slug": template["slug"] if template else None,

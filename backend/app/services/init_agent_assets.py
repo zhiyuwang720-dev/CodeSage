@@ -32,8 +32,8 @@ DEFAULT_AGENT_SKILLS: Dict[str, List[Dict[str, Any]]] = {
 }
 
 DEFAULT_REPORT_TEMPLATE_SLUG = "report-template"
-DEFAULT_REPORT_TEMPLATE_NAME = "Default Vulnerability Report"
-DEFAULT_REPORT_TEMPLATE_DESCRIPTION = "AutoCVE default final vulnerability report template."
+DEFAULT_REPORT_TEMPLATE_NAME = "Default PR Audit Report"
+DEFAULT_REPORT_TEMPLATE_DESCRIPTION = "CodeSage default PR audit report template."
 
 
 def _binding_exists(agent_type: str, slug: str) -> bool:
@@ -80,7 +80,7 @@ async def init_report_templates() -> str:
             name=DEFAULT_REPORT_TEMPLATE_NAME,
             description=DEFAULT_REPORT_TEMPLATE_DESCRIPTION,
             content=DEFAULT_REPORT_TEMPLATE,
-            report_type="final_vulnerability_report",
+            report_type="audit_report",
             output_format="markdown",
             variables={
                 "summary": "Execution summary",
@@ -109,7 +109,7 @@ async def init_report_templates() -> str:
             name=DEFAULT_REPORT_TEMPLATE_NAME,
             description=DEFAULT_REPORT_TEMPLATE_DESCRIPTION,
             content=DEFAULT_REPORT_TEMPLATE,
-            report_type="final_vulnerability_report",
+            report_type="audit_report",
             output_format="markdown",
             variables={
                 "summary": "Execution summary",

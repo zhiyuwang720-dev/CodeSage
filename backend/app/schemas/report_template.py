@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class ReportTemplateBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = None
-    report_type: str = Field("final_vulnerability_report")
+    report_type: str = Field("audit_report")
     output_format: str = Field("markdown")
     content: str = Field(..., min_length=1)
     variables: Dict[str, Any] = Field(default_factory=dict)

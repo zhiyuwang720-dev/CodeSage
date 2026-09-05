@@ -652,7 +652,7 @@ export const ReportExportDialog = memo(function ReportExportDialog({
                   <div className="text-xs text-slate-500">
                     {workspaceMode === "report"
                       ? `${FORMAT_OPTIONS[activeFormat].label} · ${formatBytes(preview.content.length)}`
-                      : selectedTemplate?.report_type || "final_vulnerability_report"}
+                      : selectedTemplate?.report_type || "audit_report"}
                   </div>
                 </div>
               </div>

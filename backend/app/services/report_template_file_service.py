@@ -107,7 +107,7 @@ class ReportTemplateFileService:
             "slug": slug,
             "name": metadata.get("name") or slug,
             "description": metadata.get("description"),
-            "report_type": metadata.get("report_type", "final_vulnerability_report"),
+            "report_type": metadata.get("report_type", "audit_report"),
             "output_format": metadata.get("output_format", "markdown"),
             "content": content,
             "variables": metadata.get("variables", {}) or {},

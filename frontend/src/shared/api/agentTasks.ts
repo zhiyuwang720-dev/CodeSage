@@ -106,7 +106,7 @@ export interface RecoveredCandidate {
 export interface AgentFinding {
   id: string;
   task_id: string;
-  vulnerability_type: string;
+  finding_type: string;
   severity: string;
   title: string;
   description: string | null;

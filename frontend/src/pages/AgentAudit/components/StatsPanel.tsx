@@ -372,7 +372,7 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
                       </Badge>
                     </div>
                     <div className="mt-1 text-[11px] font-mono text-muted-foreground">
-                      {finding.severity?.toUpperCase()} · {finding.vulnerability_type}
+                      {finding.severity?.toUpperCase()} · {(finding as any).finding_type ?? (finding as any).vulnerability_type}
                     </div>
                     {finding.file_path && (
                       <div className="mt-1 text-xs text-muted-foreground break-all">
