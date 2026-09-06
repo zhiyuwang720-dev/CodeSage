@@ -157,7 +157,10 @@ function buildRuntimeSessionLogs(
     const content = message.role === 'assistant' ? (message.content || reasoningContent || '') : (message.content || '');
     const agentName = resolveRuntimeAgentName(message, session);
 
-    if (message.role === 'user' && metadata.kind === 'finalization_prompt') {
+    if (message.role === 'user') {
+      // 12-P4: 用户消息(初始视角提示词 / followup / finalizer 提示词)不属活动日志,
+      // 与既有 finalization_prompt 跳过策略一致, 整体过滤 —— 避免 "User prompt"/"USER"
+      // 条目随 5s transcript 合并出现并搭车抖动。
       return;
     }
 
@@ -218,16 +221,6 @@ function buildRuntimeSessionLogs(
         type: isThoughtLike ? 'thinking' : 'info',
         title: isFinalAnswer ? 'Final Answer' : (trimmed.slice(0, 100) + (trimmed.length > 100 ? '...' : '') || 'Assistant'),
         content: isThoughtLike ? cleanThinkingContent(trimmed) : truncateOutput(trimmed),
-        agentName,
-      });
-      return;
-    }
-
-    if (message.role === 'user') {
-      pushLog(`runtime-msg-${message.id}`, message.created_at, {
-        type: 'user',
-        title: message.name === 'runtime_finalizer' ? 'Runtime finalizer' : 'User prompt',
-        content: truncateOutput(content),
         agentName,
       });
       return;
@@ -395,13 +388,14 @@ function AgentAuditPageContent() {
     if (runtimeLogs.length === 0) {
       return 0;
     }
-    const merged = new Map<string, LogItem>();
-    logs.forEach((log) => merged.set(log.id, log));
-    runtimeLogs.forEach((log) => merged.set(log.id, log));
-    const payload = Array.from(merged.values()).sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
-    dispatch({ type: 'SET_LOGS', payload });
-    return payload.length;
-  }, [dispatch, loadRuntimeSessionSnapshot, logs]);
+    // 12-P4: 合并动作下沉 reducer(MERGE_RUNTIME_LOGS 对当前 state.logs 合并)。
+    // 不再在闭包里读 logs → useCallback 依赖稳定 → 轮询 effect 不再因 logs 变化级联重跑。
+    // (旧实现 SET_LOGS(闭包logs ∪ runtime) 会在合并 await 期间覆盖掉 SSE 刚 ADD_LOG
+    // 的日志 → 计数回落, 与 SSE 补充形成上下抖动; 且 effect 依赖 mergeRuntimeSessionLogs
+    // 而后者依赖 logs → 每次合并后立即再合并, 5s interval 形同虚设。)
+    dispatch({ type: 'MERGE_RUNTIME_LOGS', payload: runtimeLogs });
+    return runtimeLogs.length;
+  }, [dispatch, loadRuntimeSessionSnapshot]);
 
   // 馃敟 NEW: 鍔犺浇鍘嗗彶浜嬩欢骞惰浆鎹负鏃ュ織椤?
   const loadHistoricalEvents = useCallback(async (options?: { forceReload?: boolean }) => {

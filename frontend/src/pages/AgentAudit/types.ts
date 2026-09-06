@@ -76,6 +76,7 @@ export type AgentAuditAction =
   | { type: 'ADD_FINDING'; payload: Partial<AgentFinding> & { id: string } }
   | { type: 'SET_AGENT_TREE'; payload: AgentTreeResponse }
   | { type: 'SET_LOGS'; payload: LogItem[] }
+  | { type: 'MERGE_RUNTIME_LOGS'; payload: LogItem[] }
   | { type: 'ADD_LOG'; payload: Omit<LogItem, 'id' | 'time'> & { id?: string } }
   | { type: 'UPDATE_LOG'; payload: { id: string; updates: Partial<LogItem> } }
   | { type: 'UPDATE_OR_ADD_PROGRESS_LOG'; payload: { progressKey: string; title: string; agentName?: string } }

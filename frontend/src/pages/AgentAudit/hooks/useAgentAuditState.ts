@@ -58,6 +58,18 @@ function agentAuditReducer(state: AgentAuditState, action: AgentAuditAction): Ag
     case 'SET_LOGS':
       return { ...state, logs: dedupeActivityLogs(action.payload) };
 
+    case 'MERGE_RUNTIME_LOGS': {
+      // 12-P4: 运行时 transcript 合并下沉 reducer —— 对**当前** state.logs 做 Map 合并,
+      // 不再读调用方 useCallback 闭包中的旧 logs(闭包版本在合并 await 期间被 SSE 的
+      // ADD_LOG 超前, 完成后的 SET_LOGS 会用旧快照覆盖刚到的日志 → 计数回落抖动)。
+      const merged = new Map<string, LogItem>();
+      state.logs.forEach((log) => merged.set(log.id, log));
+      action.payload.forEach((log) => merged.set(log.id, log));
+      const combined = Array.from(merged.values())
+        .sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+      return { ...state, logs: dedupeActivityLogs(combined) };
+    }
+
     case 'ADD_LOG': {
       const { id: providedId, ...logData } = action.payload;
       const newLog = providedId
