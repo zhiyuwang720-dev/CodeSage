@@ -132,25 +132,37 @@ export function stripAgentLogPrefix(content: string): string {
   return (content || "").replace(/^\s*\[(?:Finding|Recon|Analysis|Scan|Triage|Verification|Orchestrator) Agent\]\s*/i, "").trim();
 }
 
+/**
+ * 日志去重指纹(12-P1 扩展):
+ * - 归一化内容加截断窗口(200 字符), 让实时 SSE 截断(100 字符)与运行时 transcript 全量
+ *   同源事件折叠为一条 —— 消除 5s 周期 `mergeRuntimeSessionLogs` 造成的计数/INFO 流抖动;
+ * - 覆盖 user(带 title 区分 finalizer/普通用户消息)、tool(带 tool.name)、
+ *   thinking/info/dispatch/finding/error/phase(type|agentName|text);
+ * - progress 由各 builder 按 progressKey upsert, 不入指纹。
+ */
 function activityLogFingerprint(log: LogItem): string | null {
-  if (!["thinking", "info"].includes(log.type)) {
+  if (log.type === "progress") {
     return null;
   }
 
   const text = stripAgentLogPrefix(log.content || log.title || "")
     .replace(/\s+/g, " ")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .slice(0, 200);
 
   if (!text) {
     return null;
   }
 
-  return [
-    log.type,
-    (log.agentName || "").trim().toLowerCase(),
-    text,
-  ].join("|");
+  const agent = (log.agentName || "").trim().toLowerCase();
+  if (log.type === "user") {
+    return [log.type, agent, (log.title || "").toLowerCase(), text].join("|");
+  }
+  if (log.type === "tool") {
+    return [log.type, agent, (log.tool?.name || "").toLowerCase(), text].join("|");
+  }
+  return [log.type, agent, text].join("|");
 }
 
 /**

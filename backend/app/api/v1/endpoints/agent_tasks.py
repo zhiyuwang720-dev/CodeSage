@@ -963,8 +963,9 @@ async def _execute_pr_review_task_impl(
             for perspective in PERSPECTIVES:
                 stage = stage_rows.get(f"review:{perspective}")
                 if stage is None or stage.status != StageStatus.completed:
-                    # 未完成视角: 有会话锚点 → L3 续跑; 无 → 新建会话(bridge.run 默认路径)
-                    if stage is not None and stage.session_id:
+                    # 未完成视角: 12-P2.3 仅 running(进程中断但会话完好)续跑旧会话 L3;
+                    # failed(被取消/失败)会话不可信 → 不续跑, 新建会话重跑(bridge.run 默认路径)。
+                    if stage is not None and stage.status == StageStatus.running and stage.session_id:
                         resume_sessions[perspective] = stage.session_id
                     continue
                 snap = stage.state_payload or {}
@@ -1078,6 +1079,34 @@ async def _execute_pr_review_task_impl(
             task.current_step = "Cancelled during execution"
             await db.commit()
             return
+
+        # 12-P2.2: 完成判定闸门 — 视角未全部落 completed 不得 COMPLETED(修复 resume 假完成)。
+        # 空 diff 早退(no_diff)无视角运行, 旁路; 否则有视角未完成(续跑兜底空结果/视角失败)
+        # → 任务置 FAILED(可被 resume 端点续跑), 而非带空结果假完成。
+        if (result.meta or {}).get("empty_reason") != "no_diff":
+            stage_rows = {s.stage_type: s for s in await audit_stage_store.list(db, task.id)}
+            unfinished = [
+                p for p in PERSPECTIVES
+                if stage_rows.get(f"review:{p}") is None
+                or stage_rows[f"review:{p}"].status != StageStatus.completed
+            ]
+            if unfinished:
+                task.status = AgentTaskStatus.FAILED
+                task.current_phase = AgentTaskPhase.REPORTING
+                task.current_step = "Wait for incomplete perspectives"
+                task.error_message = f"视角未完成: {', '.join(unfinished)} — 请再次「继续」"
+                task.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                try:
+                    await sink(
+                        {"type": "error", "error": task.error_message, "message": task.error_message}
+                    )
+                except Exception:
+                    logger.debug("pr_review incomplete gate error sink failed", exc_info=True)
+                logger.info(
+                    f"pr_review task {task.id} NOT completed: unfinished perspectives {unfinished}"
+                )
+                return
 
         # 09-P1: report stage 完成快照 — resume 跳过重新组装报告直接出终态。
         try:

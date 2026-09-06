@@ -78,16 +78,37 @@ def _make_project() -> SimpleNamespace:
     return SimpleNamespace(id="proj-1", name="r", repository_url="https://github.com/o/r")
 
 
-def _patch_pipeline(monkeypatch, *, exc: Exception | None = None, comments=None, meta=None):
+def _patch_pipeline(
+    monkeypatch,
+    *,
+    exc: Exception | None = None,
+    comments=None,
+    meta=None,
+    emit_perspective_done: dict[str, list] | None = None,
+):
     """把 command_router.run_review_pipeline_async 换成同步返回/抛错版本。
 
     注意 _execute_pr_review_task_impl 在函数体内 `from ... import run_review_pipeline_async`,
     每调用重新取模块属性, 因此 patch 模块属性即生效。
+
+    emit_perspective_done: 视角→findings 映射; 非 None 时 fake pipeline 在返回前经
+    event_sink 发 perspective_done(模拟 dispatcher 真实契约), 使 audit_stages 的
+    review:* stage 落 completed —— 12-P2.2 完成 stage 闸门依赖该契约。
     """
     captured: dict = {}
 
     async def fake_pipeline(**kwargs):
         captured.update(kwargs)
+        sink = kwargs.get("event_sink")
+        if emit_perspective_done is not None and sink is not None:
+            for perspective, findings in emit_perspective_done.items():
+                await sink({
+                    "type": "perspective_done",
+                    "perspective": perspective,
+                    "findings": findings,
+                    "turn_count": 1,
+                    "session_id": f"s-{perspective}",
+                })
         if exc is not None:
             raise exc
         return SimpleNamespace(comments=comments or [], meta=meta or {})
@@ -139,7 +160,10 @@ async def test_executor_parse_failure_sets_task_failed(monkeypatch, db_session):
 @pytest.mark.asyncio
 async def test_executor_success_sets_completed(monkeypatch, db_session):
     """回归: 无取消时正常完成 → COMPLETED(空 findings 走 _save_findings 早退)。"""
-    _patch_pipeline(monkeypatch, comments=[], meta={"head_sha": "abc"})
+    _patch_pipeline(
+        monkeypatch, comments=[], meta={"head_sha": "abc"},
+        emit_perspective_done={"security": [], "architecture": [], "quality": []},
+    )
     task = _make_task()
     em = StubEventManager()
 
@@ -214,7 +238,10 @@ def test_cancel_registration_inner_wraps_execution(monkeypatch):
 @pytest.mark.asyncio
 async def test_executor_resume_prefills_completed_stages(monkeypatch, db_session):
     """resume 消费: 已完成视角从 audit_stages 快照预填(零 LLM), 未完成视角照常分发。"""
-    captured = _patch_pipeline(monkeypatch, comments=[], meta={})
+    captured = _patch_pipeline(
+        monkeypatch, comments=[], meta={},
+        emit_perspective_done={"quality": []},  # quality 未预填 → 新建会话跑完发 done
+    )
     task = _make_task(task_id="task-resume")
     task.agent_config = {"resume_from_checkpoint": True}
     em = StubEventManager()
@@ -254,7 +281,10 @@ async def test_executor_resume_prefills_completed_stages(monkeypatch, db_session
 @pytest.mark.asyncio
 async def test_executor_resume_continues_pending_session(monkeypatch, db_session):
     """未完成视角带会话锚点 → resume_sessions 透传, dispatcher 侧 L3 续跑该会话。"""
-    captured = _patch_pipeline(monkeypatch, comments=[], meta={})
+    captured = _patch_pipeline(
+        monkeypatch, comments=[], meta={},
+        emit_perspective_done={"quality": []},  # running 会话续跑完发 done
+    )
     task = _make_task(task_id="task-resume-sess")
     task.agent_config = {"resume_from_checkpoint": True}
     em = StubEventManager()
@@ -310,3 +340,61 @@ async def test_executor_hard_cancel_finalizes_cancelled(monkeypatch, db_session)
     )
     # 取消事件落盘(供事件流以 task_cancel 终止)
     assert any(ev[1] == "task_cancel" for ev in em.events)
+
+
+@pytest.mark.asyncio
+async def test_executor_incomplete_stages_block_completion(monkeypatch, db_session):
+    """spec 12-P2.2 完成闸门: 视角未全部落 completed(resume 续跑兜底空结果场景)
+    → 任务置 FAILED(可续), 不假 COMPLETED。"""
+    # fake pipeline 返回但从不发 perspective_done → 三视角 stage 停留在 pending
+    _patch_pipeline(monkeypatch, comments=[], meta={})
+    task = _make_task(task_id="task-incomplete")
+    task.status = AgentTaskStatus.RUNNING
+    em = StubEventManager()
+
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
+
+    assert task.status == AgentTaskStatus.FAILED
+    assert task.completed_at is not None
+    assert "视角未完成" in (task.error_message or "")
+    assert all(p in (task.error_message or "") for p in ("security", "architecture", "quality"))
+    stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+    assert all(stages[f"review:{p}"].status != StageStatus.completed
+               for p in ("security", "architecture", "quality"))
+
+
+@pytest.mark.asyncio
+async def test_executor_partial_perspective_done_blocks_completion(monkeypatch, db_session):
+    """部分视角完成不假完成: 仅 security 落 done → 其余未完成 → FAILED(镜像用户
+    暂停→继续后三视角未跑完却假完成的场景)。"""
+    _patch_pipeline(
+        monkeypatch, comments=[], meta={},
+        emit_perspective_done={"security": [{"file_path": "a.py", "severity": "high",
+                                             "title": "x", "confidence": 0.9}]},
+    )
+    task = _make_task(task_id="task-partial")
+    task.status = AgentTaskStatus.RUNNING
+    em = StubEventManager()
+
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
+
+    assert task.status == AgentTaskStatus.FAILED
+    assert "architecture" in (task.error_message or "")
+    assert "quality" in (task.error_message or "")
+    stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+    assert stages["review:security"].status == StageStatus.completed
+    assert stages["review:architecture"].status != StageStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_executor_no_diff_bypasses_completion_gate(monkeypatch, db_session):
+    """空 diff 早退(no_diff)无视角运行 → 闸门旁路, 仍 COMPLETED(空评论), 不误拦。"""
+    _patch_pipeline(monkeypatch, comments=[], meta={"empty_reason": "no_diff"})
+    task = _make_task(task_id="task-nodiff")
+    task.status = AgentTaskStatus.RUNNING
+    em = StubEventManager()
+
+    await agent_tasks_mod._execute_pr_review_task_impl(db_session, task, _make_project(), em)
+
+    assert task.status == AgentTaskStatus.COMPLETED
+    assert task.completed_at is not None

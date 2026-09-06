@@ -20,6 +20,16 @@ REVIEW_FINALIZER_PROMPTS = [
 ]
 
 
+class PerspectiveResumeIncompleteError(Exception):
+    """视角续跑/重跑未产出真实 payload(_default_fallback_payload 兜底产出)。
+
+    12-P2.1: payload 自标 requires_retry / runtime_completion_mode=incomplete —— 明确
+    "未完成需重试"。不得当作完成视角发 perspective_done(否则 stage 被置 completed、
+    orchestrator 综合空结果 → 任务假完成)。orchestrator 的 return_exceptions=True 会
+    捕获此异常并把该视角记为失败, review:* stage 不置 completed, 任务可再次「继续」。
+    """
+
+
 def tag_event_sink(event_sink, perspective: str):
     """把视角名打进事件 dict 后转发给内层 sink。
 
@@ -117,7 +127,7 @@ class RuntimePerspectiveDispatcher:
         *,
         resume_session_id: str | None = None,
     ) -> dict:
-        from app.services.runtime.bridge import RuntimeBridge
+        from app.services.runtime.bridge import RuntimeBridge, RuntimeCompletionMode
         from app.services.tooling.finalize_review import FinalizeReviewTool
 
         spec = build_review_perspective_spec(perspective)
@@ -181,6 +191,19 @@ class RuntimePerspectiveDispatcher:
                 on_session_created=on_session_created,
             )
         final_payload = result.get("final_payload") or {}
+        # 12-P2.1: 兜底 payload(run 与 continue 两分支共用 _ensure_payload 产出)若自标
+        # "未完成需重试"(_default_fallback_payload: findings=[] + requires_retry + INCOMPLETE),
+        # 不得当作完成视角 —— 发 retry 事件 + raise, 由 orchestrator 记该视角失败,
+        # review:* stage 不置 completed → 任务不会假完成(无最终结果)。
+        if final_payload.get("requires_retry") or (
+            final_payload.get("runtime_completion_mode") == RuntimeCompletionMode.INCOMPLETE.value
+        ):
+            if sink is not None:
+                await sink({"type": "perspective_retry_needed", "perspective": perspective})
+            raise PerspectiveResumeIncompleteError(
+                f"perspective {perspective} incomplete (mode="
+                f"{final_payload.get('runtime_completion_mode')})"
+            )
         findings = [dict(item) for item in (final_payload.get("findings") or [])]
         if sink is not None:
             # 09-P1: perspective_done 带 findings 本体(非计数)+ session_id,
