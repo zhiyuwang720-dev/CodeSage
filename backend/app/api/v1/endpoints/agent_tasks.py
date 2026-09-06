@@ -1098,8 +1098,8 @@ async def _execute_pr_review_task_impl(
         logger.info(f"pr_review task {task.id} completed with {saved} findings")
     except asyncio.CancelledError:
         # 11-P4 优雅取消: 取消端点 hard-cancel 打断在飞流水线 → 在此收尾, 不再裸冒泡
-        # 致任务卡 RUNNING(resume 端点会以 "already running" 拒绝)。PendingException 语义:
-        # 取消是要把任务带到 cancelled, 而非当崩溃置 FAILED。
+        # 致任务卡 RUNNING(resume 端点会以 "already running" 拒绝)。取消语义是把任务
+        # 带到 cancelled, 而非当崩溃置 FAILED。
         logger.warning(f"pr_review task {task.id} cancelled (hard cancel)")
         try:
             await db.rollback()
@@ -1124,7 +1124,11 @@ async def _execute_pr_review_task_impl(
             )
         except Exception:
             logger.debug("pr_review cancel event failed", exc_info=True)
-        raise
+        # 实测(11 冒烟): 此处不能 `raise` 重抛 — 任务经 Starlette BackgroundTasks 从 ASGI
+        # 请求生命周期 await, 重抛的 CancelledError 会冒泡成 "Exception in ASGI application"
+        # 崩掉整个 uvicorn(exit 127)。取消端点已先 commit CANCELLED, 收尾完成直接返回即可,
+        # 任务静默结束(asyncio 在 Task 层吞掉未消费的取消, 与旧代码裸冒泡行为一致)。
+        return
     except Exception as exc:
         # 09-P0 崩溃 → FAILED 转换: 异常冒泡会让后台任务静默消失, 任务卡 RUNNING
         # 且 resume 端点以 "already running" 拒绝 → 崩溃恢复断头。这里统一落 FAILED。
@@ -1186,8 +1190,8 @@ async def _execute_agent_task_impl_inner(task_id: str):
             if probe_task.status == AgentTaskStatus.CANCELLED or is_task_cancelled(task_id):
                 logger.warning(f"pr_review task {task_id} cancelled before execution")
                 return
-            # 释放本次读取的 SQLite 事务(SHARED 锁): 否则整个 review 期间
-            # 运行时的 audit_sessions/agent_events 写入会被阻塞, 报 database is locked。
+            # 释放 probe 读取事务, 让后台执行器干净地接手状态写(Postgres MVCC 下
+            # 读事务本不阻塞写, 此 commit 仅归还连接, 保持事务边界清晰)。
             await probe_db.commit()
             from app.services.agent.event_manager import EventManager
             event_stream = create_agent_event_stream() if event_stream_enabled() else None

@@ -278,7 +278,12 @@ async def test_executor_resume_continues_pending_session(monkeypatch, db_session
 @pytest.mark.asyncio
 async def test_executor_hard_cancel_finalizes_cancelled(monkeypatch, db_session):
     """spec 11-P5: 取消打断在飞 → 流水线被 hard-cancel(CancelledError)→ 任务落 CANCELLED
-    而非卡 RUNNING(裸冒泡会让 resume 端点拒绝续跑)。"""
+    而非卡 RUNNING(裸冒泡会让 resume 端点拒绝续跑)。
+
+    收尾后**不重抛** CancelledError: 任务经 Starlette BackgroundTasks 从 ASGI 请求生命周期
+    await, 重抛会冒泡成 "Exception in ASGI application" 崩掉整个 uvicorn(11 冒烟实测
+    exit 127)。收尾完成即正常返回(取消端点已先 commit CANCELLED)。
+    """
     import asyncio
 
     _patch_pipeline(monkeypatch, exc=asyncio.CancelledError("cancelled"))
@@ -286,10 +291,10 @@ async def test_executor_hard_cancel_finalizes_cancelled(monkeypatch, db_session)
     task.status = AgentTaskStatus.RUNNING
     em = StubEventManager()
 
-    with pytest.raises(asyncio.CancelledError):
-        await agent_tasks_mod._execute_pr_review_task_impl(
-            db_session, task, _make_project(), em
-        )
+    # 正常返回(不抛), 而非重抛 CancelledError 崩掉宿主
+    await agent_tasks_mod._execute_pr_review_task_impl(
+        db_session, task, _make_project(), em
+    )
 
     # 优雅收尾: 状态落 CANCELLED, 而非当崩溃置 FAILED / 卡 RUNNING
     assert task.status == AgentTaskStatus.CANCELLED
