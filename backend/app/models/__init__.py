@@ -13,6 +13,7 @@ from .prompt_template import PromptTemplate
 from .audit_rule import AuditRule, AuditRuleSet
 from .report_template import AgentTaskReport
 from .checkpoint import AuditStageORM
+from .review_execution import ReviewExecutionRun
 from .agent_task import (
     AgentEvent,
     AgentEventType,
@@ -51,6 +52,7 @@ __all__ = [
     "AuditRuleSet",
     "AgentTaskReport",
     "AuditStageORM",
+    "ReviewExecutionRun",
     "AgentTask",
     "AgentEvent",
     "AgentFinding",
