@@ -52,8 +52,8 @@ async def _watch_task_cancellation(
             return
 
 
-async def execute_agent_task(task_id: str) -> None:
+async def execute_agent_task(task_id: str, delivery_id: str | None = None) -> None:
     """Service entrypoint for executing an agent audit task."""
-    from app.api.v1.endpoints.agent_tasks import _execute_agent_task_impl
+    from app.services.pr_review.execution import execute_quick_review
 
-    await _execute_agent_task_impl(task_id)
+    await execute_quick_review(task_id, delivery_id=delivery_id)

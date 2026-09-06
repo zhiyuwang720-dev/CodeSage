@@ -36,12 +36,17 @@ class AgentTaskQueue:
             )
         return self.arq_pool
 
-    async def enqueue(self, task_id: str) -> None:
+    async def enqueue(self, task_id: str, *, delivery_id: str | None = None) -> None:
         pool = await self._pool()
+        job_id = f"agent-task:{task_id}"
+        args: tuple[str, ...] = (str(task_id),)
+        if delivery_id:
+            job_id = f"{job_id}:{delivery_id}"
+            args = (str(task_id), str(delivery_id))
         await pool.enqueue_job(
             AGENT_TASK_JOB_NAME,
-            str(task_id),
-            _job_id=f"agent-task:{task_id}",
+            *args,
+            _job_id=job_id,
             _queue_name=self.queue_name,
         )
 
@@ -55,9 +60,9 @@ class AgentTaskQueue:
                 await result
 
 
-async def enqueue_agent_task(task_id: str) -> None:
+async def enqueue_agent_task(task_id: str, *, delivery_id: str | None = None) -> None:
     queue = AgentTaskQueue()
     try:
-        await queue.enqueue(task_id)
+        await queue.enqueue(task_id, delivery_id=delivery_id)
     finally:
         await queue.close()

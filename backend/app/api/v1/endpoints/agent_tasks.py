@@ -271,11 +271,16 @@ _running_orchestrators: Dict[str, Any] = {}
 _running_event_managers: Dict[str, EventManager] = {}
 
 
-async def _schedule_agent_task(background_tasks: BackgroundTasks, task_id: str) -> None:
+async def _schedule_agent_task(
+    background_tasks: BackgroundTasks,
+    task_id: str,
+    *,
+    delivery_id: str | None = None,
+) -> None:
     if should_use_worker_queue():
-        await enqueue_agent_task(task_id)
+        await enqueue_agent_task(task_id, delivery_id=delivery_id)
         return
-    background_tasks.add_task(_execute_agent_task, task_id)
+    background_tasks.add_task(_execute_agent_task, task_id, delivery_id)
 
 
 def _resolve_task_runtime_stack(agent_config: Any) -> str:
@@ -945,6 +950,9 @@ async def _execute_pr_review_task_impl(
                     "diff_file_path": diff_file_path,
                     "changed_files": changed_files,
                     "clone_source": clone_source,
+                    "artifact_refs": [
+                        (task.agent_config or {}).get("review_execution_input_artifact")
+                    ] if (task.agent_config or {}).get("review_execution_input_artifact") else [],
                 },
             )
         except Exception:
@@ -1108,15 +1116,56 @@ async def _execute_pr_review_task_impl(
                 )
                 return
 
+        # 最终结构化结果作为内容寻址产物落盘；Checkpoint 只保存受校验引用。
+        report_artifact_refs = []
+        execution_artifact_root = (task.agent_config or {}).get("review_execution_artifact_root")
+        if execution_artifact_root:
+            try:
+                import json as _json
+                from app.models.review_execution import ReviewExecutionRun
+                from app.services.pr_review.artifacts import LocalReviewArtifactStore
+
+                execution_run = await db.get(ReviewExecutionRun, task.id)
+                if execution_run is not None:
+                    run_id = str((execution_run.identity_json or {}).get("run_id") or "")
+                    ref = LocalReviewArtifactStore(execution_artifact_root).write_bytes(
+                        run_id=run_id,
+                        kind="final_result",
+                        relative_path="result/final.json",
+                        content=_json.dumps(
+                            {"findings": findings, "pr_meta": pr_meta},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ).encode("utf-8"),
+                        media_type="application/json",
+                    )
+                    report_artifact_refs.append(ref.model_dump(mode="json"))
+            except Exception:
+                logger.exception("pr_review final artifact write failed")
+                raise
+
         # 09-P1: report stage 完成快照 — resume 跳过重新组装报告直接出终态。
         try:
             await audit_stage_store.complete(
                 db, task.id, "report",
-                payload={"findings_count": len(findings), "pr_meta": pr_meta},
+                payload={
+                    "findings_count": len(findings),
+                    "pr_meta": pr_meta,
+                    "artifact_refs": report_artifact_refs,
+                },
             )
         except Exception:
             logger.debug("pr_review report stage complete failed", exc_info=True)
 
+        from app.services.pr_review.execution_ownership import (
+            current_execution_lease,
+            review_execution_ownership,
+        )
+
+        active_lease = current_execution_lease.get()
+        if active_lease is not None:
+            # 与任务终态写处于同一事务；旧 epoch 或 cancel_requested 会在写前失败。
+            await review_execution_ownership.assert_current_owner(db, active_lease)
         task.status = AgentTaskStatus.COMPLETED
         task.current_phase = AgentTaskPhase.REPORTING
         task.completed_at = datetime.now(timezone.utc)
@@ -2197,10 +2246,14 @@ async def resume_agent_task(
     if task.status not in [AgentTaskStatus.CANCELLED, AgentTaskStatus.FAILED, AgentTaskStatus.PAUSED]:
         raise HTTPException(status_code=400, detail="Task is not resumable")
 
+    from app.services.pr_review.execution_ownership import review_execution_ownership
+
+    # 先使旧 epoch 失效并生成新投递标识，再把任务恢复为可执行状态。
+    delivery_id = await review_execution_ownership.prepare_resume(db, task_id)
     _cancelled_tasks.discard(task_id)
     _prepare_task_for_resume(task)
     await db.commit()
-    await _schedule_agent_task(background_tasks, task.id)
+    await _schedule_agent_task(background_tasks, task.id, delivery_id=delivery_id)
     logger.info(f"Resumed agent task {task.id}")
     return {
         "message": "Task resumed",
@@ -2226,6 +2279,11 @@ async def cancel_agent_task(
         raise HTTPException(status_code=403, detail="Access denied")
     if task.status in [AgentTaskStatus.COMPLETED, AgentTaskStatus.FAILED, AgentTaskStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Task is already finished")
+
+    from app.services.pr_review.execution_ownership import review_execution_ownership
+
+    # 数据库 cancel_requested 是跨进程事实来源，必须先于本地 hard-cancel 持久化。
+    await review_execution_ownership.request_cancel(db, task_id)
 
     # 11-P4 先落 CANCELLED(带有限重试), 再打断在飞流水线 — 避免写失败时先毁掉
     # 在飞流水线(旧顺序: 先 hard-cancel 再 commit, 写失败则两头落空)。

@@ -44,9 +44,11 @@ async def run_worker() -> None:
     await worker.async_run()
 
 
-async def execute_agent_task_job(ctx: dict[str, Any], task_id: str) -> None:
+async def execute_agent_task_job(
+    ctx: dict[str, Any], task_id: str, delivery_id: str | None = None
+) -> None:
     logger.info("Agent worker picked task %s", task_id)
-    await execute_agent_task(task_id)
+    await execute_agent_task(task_id, delivery_id=delivery_id)
 
 
 class WorkerSettings:

@@ -12,7 +12,13 @@ from typing import Any
 from sqlalchemy import select
 
 from app.models.checkpoint import AuditStageORM
+from app.models.review_execution import ReviewExecutionRun
 from app.services.contracts.checkpoint import AuditStage, StageStatus
+from app.services.contracts.review_execution import ArtifactRef, StageResult
+from app.services.pr_review.execution_ownership import (
+    current_execution_lease,
+    review_execution_ownership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,9 @@ class AuditStageStoreImpl:
         findings: list[dict[str, Any]] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> AuditStage:
+        lease = current_execution_lease.get()
+        if lease is not None and lease.task_id == task_id:
+            await review_execution_ownership.assert_current_owner(db, lease)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
@@ -120,11 +129,36 @@ class AuditStageStoreImpl:
         new_payload = dict(payload or {})
         if findings is not None:
             new_payload["findings"] = findings
+        execution = await db.get(ReviewExecutionRun, task_id)
+        if execution is not None:
+            run_id = str((execution.identity_json or {}).get("run_id") or "")
+            artifact_refs = [
+                ArtifactRef.model_validate(item)
+                for item in (new_payload.get("artifact_refs") or [])
+            ]
+            stage_result = StageResult(
+                run_id=run_id,
+                stage_type=stage_type,
+                status="completed",
+                session_id=row.session_id,
+                findings=findings or [],
+                artifact_refs=artifact_refs,
+                stats={
+                    "turn_count": row.turn_count,
+                    "token_usage": row.token_usage,
+                    "tool_calls": row.tool_calls,
+                    "findings_count": row.findings_count,
+                },
+            )
+            new_payload["stage_result"] = stage_result.model_dump(mode="json")
         row.state_payload = new_payload
         await db.commit()
         return _to_contract(row)
 
     async def fail(self, db, task_id: str, stage_type: str, error: str) -> AuditStage:
+        lease = current_execution_lease.get()
+        if lease is not None and lease.task_id == task_id:
+            await review_execution_ownership.assert_current_owner(db, lease)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
@@ -132,6 +166,25 @@ class AuditStageStoreImpl:
         row.status = StageStatus.failed.value
         row.error_message = str(error)
         row.completed_at = row.completed_at or _now()
+        execution = await db.get(ReviewExecutionRun, task_id)
+        if execution is not None:
+            run_id = str((execution.identity_json or {}).get("run_id") or "")
+            payload = dict(row.state_payload or {})
+            payload["stage_result"] = StageResult(
+                run_id=run_id,
+                stage_type=stage_type,
+                status="failed",
+                session_id=row.session_id,
+                stats={
+                    "turn_count": row.turn_count or 0,
+                    "token_usage": row.token_usage or 0,
+                    "tool_calls": row.tool_calls or 0,
+                    "findings_count": row.findings_count or 0,
+                },
+                error_code="stage_failed",
+                error_message=str(error),
+            ).model_dump(mode="json")
+            row.state_payload = payload
         await db.commit()
         return _to_contract(row)
 
