@@ -57,6 +57,16 @@ async def lifespan(app: FastAPI):
     """
     logger.info("CodeSage 后端服务启动中...")
 
+    # 11-P6 启动自愈建表: 主库幂等 create_all(Postgres), 防未来新表缺表事故复发
+    # (09 生产事故即无启动建表 → audit_stages 缺失)。
+    try:
+        from app.db.session import create_all_schema
+
+        create_all_schema()
+        logger.info("  - 主库 schema 自愈检查完成")
+    except Exception as e:
+        logger.warning(f"主库 schema 自愈检查跳过: {e}")
+
     # 初始化数据库（创建默认账户）
     # 注意：需要先运行 alembic upgrade head 创建表结构
     try:

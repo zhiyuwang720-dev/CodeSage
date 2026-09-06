@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case, func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
@@ -1023,8 +1024,7 @@ async def _execute_pr_review_task_impl(
                 "min_severity": "low",
                 "max_comments": int(scope.get("max_comments") or 10),
                 "max_turns": int(task.max_iterations or 50),
-                # 三视角运行时审计会话用独立 SQLite 文件: sync 写(运行时)与 async 写
-                # (EventManager agent_events)同库并发会在 WAL 下形成写锁循环挂死服务。
+                # 11-P3: 审计会话与主库同库(Postgres MVCC 承担 sync/async 并发写)。
                 "session_factory": get_pr_review_sync_session_factory(),
                 # 工具 root: 克隆源码(source_dir)优先, 否则回退项目工作区(含 review.diff)。
                 "workspace_root": workspace_root,
@@ -1096,6 +1096,35 @@ async def _execute_pr_review_task_impl(
         await db.commit()
         await sink({"type": "done", "task_complete": True, "message": f"PR 审查完成, 共 {len(comments)} 条评论"})
         logger.info(f"pr_review task {task.id} completed with {saved} findings")
+    except asyncio.CancelledError:
+        # 11-P4 优雅取消: 取消端点 hard-cancel 打断在飞流水线 → 在此收尾, 不再裸冒泡
+        # 致任务卡 RUNNING(resume 端点会以 "already running" 拒绝)。PendingException 语义:
+        # 取消是要把任务带到 cancelled, 而非当崩溃置 FAILED。
+        logger.warning(f"pr_review task {task.id} cancelled (hard cancel)")
+        try:
+            await db.rollback()
+            task.status = AgentTaskStatus.CANCELLED
+            task.current_phase = AgentTaskPhase.REPORTING
+            task.current_step = "Cancelled during execution"
+            task.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception as fin:
+            logger.error(f"pr_review task {task.id} cancel finalize failed: {fin}", exc_info=True)
+        # 阶段收尾: pending/running → failed(resume 对非 completed 一律续跑/重跑)。
+        try:
+            stages = await audit_stage_store.list(db, task.id)
+            for st in stages:
+                if st.status in (StageStatus.pending, StageStatus.running):
+                    await audit_stage_store.fail(db, task.id, st.stage_type, "cancelled")
+        except Exception:
+            logger.debug("pr_review cancel stage marking skipped", exc_info=True)
+        try:
+            await event_manager.add_event(
+                task.id, "task_cancel", sequence=0, phase=None, message="任务已取消"
+            )
+        except Exception:
+            logger.debug("pr_review cancel event failed", exc_info=True)
+        raise
     except Exception as exc:
         # 09-P0 崩溃 → FAILED 转换: 异常冒泡会让后台任务静默消失, 任务卡 RUNNING
         # 且 resume 端点以 "already running" 拒绝 → 崩溃恢复断头。这里统一落 FAILED。
@@ -2165,10 +2194,29 @@ async def cancel_agent_task(
     if task.status in [AgentTaskStatus.COMPLETED, AgentTaskStatus.FAILED, AgentTaskStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Task is already finished")
 
-    request_agent_task_cancellation(task_id)
+    # 11-P4 先落 CANCELLED(带有限重试), 再打断在飞流水线 — 避免写失败时先毁掉
+    # 在飞流水线(旧顺序: 先 hard-cancel 再 commit, 写失败则两头落空)。
     task.status = AgentTaskStatus.CANCELLED
     task.completed_at = datetime.now(timezone.utc)
-    await db.commit()
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            await db.commit()
+            break
+        except OperationalError as e:
+            last_err = e
+            if attempt < 2:
+                await db.rollback()
+                await asyncio.sleep(0.25 * (attempt + 1))
+                task = await db.get(AgentTask, task_id)
+                if task is None:
+                    raise HTTPException(status_code=404, detail="Task not found")
+                task.status = AgentTaskStatus.CANCELLED
+                task.completed_at = datetime.now(timezone.utc)
+    else:
+        raise HTTPException(status_code=503, detail=f"Cannot persist cancel: {last_err}")
+
+    request_agent_task_cancellation(task_id)
     logger.info(f"[Cancel] Task {task_id} cancelled successfully")
     return {"message": "Task cancelled", "task_id": task_id}
 

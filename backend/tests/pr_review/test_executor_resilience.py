@@ -273,3 +273,35 @@ async def test_executor_resume_continues_pending_session(monkeypatch, db_session
     # 完成的 security 仍预填(空 findings → 贡献 0 条), quality 不在预填内
     prefill = (captured["options"] or {}).get("prefill_handoffs") or {}
     assert set(prefill) == {"security"}
+
+
+@pytest.mark.asyncio
+async def test_executor_hard_cancel_finalizes_cancelled(monkeypatch, db_session):
+    """spec 11-P5: 取消打断在飞 → 流水线被 hard-cancel(CancelledError)→ 任务落 CANCELLED
+    而非卡 RUNNING(裸冒泡会让 resume 端点拒绝续跑)。"""
+    import asyncio
+
+    _patch_pipeline(monkeypatch, exc=asyncio.CancelledError("cancelled"))
+    task = _make_task(task_id="task-p0-hardcancel")
+    task.status = AgentTaskStatus.RUNNING
+    em = StubEventManager()
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent_tasks_mod._execute_pr_review_task_impl(
+            db_session, task, _make_project(), em
+        )
+
+    # 优雅收尾: 状态落 CANCELLED, 而非当崩溃置 FAILED / 卡 RUNNING
+    assert task.status == AgentTaskStatus.CANCELLED
+    assert task.completed_at is not None
+    assert task.current_step == "Cancelled during execution"
+    # intake 已过(complete); 其余未完成 stage 置 failed(resume 对非 completed 续跑)
+    stages = {s.stage_type: s for s in await audit_stage_store.list(db_session, task.id)}
+    assert stages["intake"].status == StageStatus.completed
+    assert stages["report"].status == StageStatus.failed
+    assert all(
+        stages[f"review:{p}"].status == StageStatus.failed
+        for p in ("security", "architecture", "quality")
+    )
+    # 取消事件落盘(供事件流以 task_cancel 终止)
+    assert any(ev[1] == "task_cancel" for ev in em.events)

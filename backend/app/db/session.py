@@ -1,7 +1,7 @@
-﻿from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,30 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 
-def _sqlite_enable_wal(dbapi_connection, connection_record):
-    """SQLite 并发写容忍度: WAL + busy_timeout。
-
-    PR review 运行时与 EventManager 通过各自 session 并发写库(agent_events/
-    audit_sessions), 默认 rollback journal 下 writer 会被其他 session 的读事务
-    阻塞报 database is locked。WAL 允许读-写并发, busy_timeout 让写锁等待而非立即失败。
-    """
-    try:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
-        cursor.close()
-    except Exception:
-        # 非 SQLite 后端(Postgres 等)无此 PRAGMA, 忽略
-        pass
-
-
-_engine_kwargs: dict = {}
-if settings.DATABASE_URL.startswith("sqlite"):
-    _engine_kwargs["connect_args"] = {"timeout": 30}
-
-engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True, **_engine_kwargs)
-if settings.DATABASE_URL.startswith("sqlite"):
-    event.listen(engine.sync_engine, "connect", _sqlite_enable_wal)
+engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True)
 
 AsyncSessionLocal = sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
@@ -40,6 +17,7 @@ AsyncSessionLocal = sessionmaker(
 
 
 def _coerce_sync_database_url(database_url: str) -> str:
+    """async driver → sync driver(asyncpg→psycopg), 供同步引擎复用同一 DATABASE_URL。"""
     url = make_url(database_url)
     drivername = url.drivername
     driver_map = {
@@ -55,41 +33,45 @@ def _coerce_sync_database_url(database_url: str) -> str:
 
 @lru_cache(maxsize=1)
 def get_sync_session_factory():
-    sync_kwargs: dict = {}
-    if settings.DATABASE_URL.startswith("sqlite"):
-        sync_kwargs["connect_args"] = {"timeout": 30}
+    """同步会话工厂(psycopg): bridge 运行时等 sync 写路径复用主库。"""
     sync_engine = create_engine(
-        _coerce_sync_database_url(settings.DATABASE_URL), echo=False, future=True, **sync_kwargs
+        _coerce_sync_database_url(settings.DATABASE_URL), echo=False, future=True
     )
-    if settings.DATABASE_URL.startswith("sqlite"):
-        event.listen(sync_engine, "connect", _sqlite_enable_wal)
     return sessionmaker(bind=sync_engine, expire_on_commit=False)
 
 
 @lru_cache(maxsize=1)
 def get_pr_review_sync_session_factory():
-    """PR review 运行时专用同步会话工厂: 审计会话落到独立 SQLite 文件。
+    """PR review 运行时同步会话工厂: 与主库同库 + 幂等 create_all bootstrap。
 
-    三视角运行时经 sync 引擎写 audit_sessions, 而 EventManager/FastAPI 经 async
-    引擎(aiosqlite 单工作线程)写 agent_events。两者若写同一主库文件, 并发写事务在
-    WAL 下会形成 RESERVED↔EXCLUSIVE 写锁循环: 事件循环线程被同步 sqlite 调用阻塞,
-    aiosqlite 工作线程在锁上排队, 整个服务挂死(health 无响应, 实测复现)。
-    隔到独立文件后双引擎各自单写, busy_timeout 即可串行化, 服务保持响应。
+    早期 SQLite 版把审计会话隔到独立 audit_runtime.db, 规避 sync/async 双引擎写同一
+    SQLite 文件的 RESERVED↔EXCLUSIVE 锁死; Postgres 无单写者锁(MVCC), 同步/异步引擎
+    可同库并发, 故收编为同一 Postgres 库。create_all 幂等, 该工厂 lru_cache 只执行一次,
+    保证审计表(audit_sessions 等)在主库齐全。
     """
-    from pathlib import Path
-
     from app.db.base import Base
 
-    main_path = make_url(settings.DATABASE_URL).database or "eval_runtime.db"
-    audit_path = str(Path(main_path).parent / "audit_runtime.db")
     sync_engine = create_engine(
-        f"sqlite:///{audit_path}", echo=False, future=True, connect_args={"timeout": 30}
+        _coerce_sync_database_url(settings.DATABASE_URL), echo=False, future=True
     )
-    event.listen(sync_engine, "connect", _sqlite_enable_wal)
-    # 独立文件的审计表不会随主库 create_all 生成, 这里就地建全量表(审计用表齐全,
-    # 多余表空置无害)。create_all 幂等, 该工厂 lru_cache 只会执行一次。
     Base.metadata.create_all(bind=sync_engine)
     return sessionmaker(bind=sync_engine, expire_on_commit=False)
+
+
+def create_all_schema() -> None:
+    """启动自愈建表(11-P6): 对主库幂等 create_all, 防未来新表缺表事故复发。
+
+    09 生产事故根因即主库 create_all 管理 + 无启动建表 → audit_stages 缺失。
+    create_all 幂等且只在缺表时补建, 每次启动可安全调用; 用 sync psycopg 引擎
+    (asyncpg→psycopg 由 _coerce_sync_database_url 承担)。
+    """
+    from app.db.base import Base
+
+    sync_engine = create_engine(
+        _coerce_sync_database_url(settings.DATABASE_URL), echo=False, future=True
+    )
+    Base.metadata.create_all(bind=sync_engine)
+    sync_engine.dispose()
 
 
 async def get_db():
