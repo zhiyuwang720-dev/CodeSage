@@ -31,7 +31,7 @@ class _FakeDB:
 
 
 @pytest.mark.asyncio
-async def test_resume_agent_task_resets_task_and_schedules_background_execution():
+async def test_resume_agent_task_resets_task_and_schedules_background_execution(monkeypatch):
     task = AgentTask(
         id="task-1",
         project_id="project-1",
@@ -45,6 +45,11 @@ async def test_resume_agent_task_resets_task_and_schedules_background_execution(
     project = Project(id="project-1", name="Demo Project", owner_id="user-1", source_type="repository")
     db = _FakeDB(task, project)
     background_tasks = BackgroundTasks()
+    prepare_resume = AsyncMock(return_value="delivery-test")
+    monkeypatch.setattr(
+        "app.services.pr_review.execution_ownership.review_execution_ownership.prepare_resume",
+        prepare_resume,
+    )
 
     response = await resume_agent_task(
         task_id="task-1",
@@ -61,7 +66,8 @@ async def test_resume_agent_task_resets_task_and_schedules_background_execution(
     assert task.current_step == "Resuming from latest checkpoint"
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func is agent_tasks_endpoint._execute_agent_task
-    assert background_tasks.tasks[0].args == ("task-1",)
+    assert background_tasks.tasks[0].args == ("task-1", "delivery-test")
+    prepare_resume.assert_awaited_once_with(db, "task-1")
     db.commit.assert_awaited_once()
 
 

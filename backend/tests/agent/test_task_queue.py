@@ -37,6 +37,22 @@ async def test_agent_task_queue_enqueues_task_payload():
     ]
 
 
+@pytest.mark.asyncio
+async def test_agent_task_queue_uses_delivery_id_for_manual_resume():
+    pool = _FakeArqPool()
+    queue = AgentTaskQueue(arq_pool=pool, queue_name="agent:q")
+
+    await queue.enqueue("task-1", delivery_id="delivery-2")
+
+    assert pool.jobs == [
+        (
+            AGENT_TASK_JOB_NAME,
+            ("task-1", "delivery-2"),
+            {"_job_id": "agent-task:task-1:delivery-2", "_queue_name": "agent:q"},
+        )
+    ]
+
+
 def test_should_use_worker_queue_only_for_worker_mode(monkeypatch):
     from app.core.config import settings
 
