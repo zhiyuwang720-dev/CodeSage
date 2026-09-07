@@ -108,6 +108,7 @@ class ReviewExecutionOwnership:
         identity: ReviewRunIdentity,
         *,
         delivery_id: str | None = None,
+        commit: bool = True,
     ) -> ReviewExecutionRun:
         row = await _locked_row(db, identity.task_id)
         if row is None:
@@ -126,7 +127,10 @@ class ReviewExecutionOwnership:
                 )
             else:
                 db.add(ReviewExecutionRun(**values))
-            await db.commit()
+            if commit:
+                await db.commit()
+            else:
+                await db.flush()
             row = await db.get(ReviewExecutionRun, identity.task_id)
             if row is None:
                 raise ExecutionOwnershipError("执行身份初始化失败")
@@ -137,7 +141,10 @@ class ReviewExecutionOwnership:
             raise IncompatibleResumeError(
                 "任务已有不同的运行身份；输入或配置已变化，请创建新任务"
             )
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return row
 
     async def load_identity(self, db, task_id: str) -> ReviewRunIdentity | None:
