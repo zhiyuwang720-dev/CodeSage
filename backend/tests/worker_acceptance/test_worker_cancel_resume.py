@@ -17,13 +17,12 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import async_session_factory
-from app.models.agent_task import AgentTask, AgentTaskPhase, AgentTaskStatus
+from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.checkpoint import AuditStageORM
 from app.models.project import Project
 from app.models.review_execution import ReviewExecutionRun
 from app.models.user import User
-from app.services.pr_review.execution import build_review_identity
-from app.services.pr_review.execution_ownership import review_execution_ownership
+from app.services.pr_review.lifecycle import task_lifecycle_service
 
 
 pytestmark = pytest.mark.skipif(
@@ -89,7 +88,7 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
     workspace.mkdir(parents=True, exist_ok=True)
     diff = workspace / "review.diff"
     diff.write_text(
-        f"diff --git a/a.py b/a.py\n+cancel-resume-{repetition}\n",
+        f"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+cancel-resume-{repetition}\n",
         encoding="utf-8",
     )
     async with async_session_factory() as db:
@@ -132,12 +131,7 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
             before = await db.get(ReviewExecutionRun, task_id)
             original_run_id = (before.identity_json or {})["run_id"]
             original_attempt = before.attempt_id
-            assert await review_execution_ownership.request_cancel(
-                db, task_id, commit=False
-            )
-            task = await db.get(AgentTask, task_id)
-            task.status = AgentTaskStatus.CANCELLED
-            await db.commit()
+            await task_lifecycle_service.cancel(db, task_id)
         first_record = await _wait_for_result(
             redis, record_key, AgentTaskStatus.CANCELLED, 10
         )
@@ -150,19 +144,8 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
         await asyncio.to_thread(process.wait, 10)
 
         async with async_session_factory() as db:
-            task = await db.get(AgentTask, task_id)
-            candidate, _ = await build_review_identity(task)
-            await review_execution_ownership.validate_resume_identity(db, candidate)
-            delivery = await review_execution_ownership.prepare_resume(
-                db, task_id, commit=False
-            )
-            task.status = AgentTaskStatus.PENDING
-            task.current_phase = AgentTaskPhase.PLANNING
-            task.error_message = None
-            config = dict(task.agent_config or {})
-            config["resume_from_checkpoint"] = True
-            task.agent_config = config
-            await db.commit()
+            command = await task_lifecycle_service.resume(db, task_id)
+            delivery = command.delivery_id
         await redis.hset(control_key, mapping={"release": "1"})
         await redis.delete(record_key)
         await pool.enqueue_job(
@@ -190,6 +173,12 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
             ))).scalars().all()
             assert len(stages) == 5
             assert all(stage.status == "completed" for stage in stages)
+            finding_rows = (await db.execute(select(AgentFinding).where(
+                AgentFinding.task_id == task_id
+            ))).scalars().all()
+            assert {item.category for item in finding_rows} == {
+                "security", "perf", "test_gap"
+            }
     finally:
         for job_id in (f"cancel-first:{task_id}", f"cancel-resume:{task_id}"):
             try:

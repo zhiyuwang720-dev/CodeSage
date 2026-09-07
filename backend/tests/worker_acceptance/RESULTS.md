@@ -1,5 +1,7 @@
 # 16 小范围底座验收记录
 
+> Plan 18 的最新结构化验收见 [PLAN18_RESULTS.md](PLAN18_RESULTS.md)。本文件保留历史结果，不作为 Plan 18 通过依据。
+
 - 基线提交：`61c8d7a36e19ce8c3fe8a03c94287cfe1a5ca9be`
 - 环境：PostgreSQL 16、Redis 7、队列 `codesage:acceptance:agent_tasks`
 - 一键验收：13 passed in 6.37s

@@ -7,12 +7,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.db.session import async_session_factory
-from app.models.agent_task import AgentTask, AgentTaskStatus
+from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
-from app.api.v1.endpoints.agent_tasks import _save_findings
+from app.services.contracts.final_review_contract import ReviewFinding
 from app.services.contracts.review_execution import ExecutionContext, ReviewRunIdentity, sha256_bytes
 from app.services.pr_review.execution import QuickReviewDependencies, execute_quick_review
 from app.services.pr_review.execution_ownership import (
@@ -23,6 +24,7 @@ from app.services.pr_review.execution_ownership import (
     review_execution_ownership,
 )
 from app.services.session.stage_store import audit_stage_store
+from app.services.pr_review.results import review_result_service
 
 
 pytestmark = pytest.mark.skipif(
@@ -38,7 +40,7 @@ async def _new_task(label: str) -> tuple[str, Path]:
     root = Path(os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"])
     diff = root / "fixtures" / task_id / "review.diff"
     diff.parent.mkdir(parents=True, exist_ok=True)
-    diff.write_text(f"diff --git a/a.py b/a.py\n+{label}\n", encoding="utf-8")
+    diff.write_text(f"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+{label}\n", encoding="utf-8")
     async with async_session_factory() as db:
         db.add(User(id=user_id, email=f"{task_id}@example.test", hashed_password="x"))
         db.add(Project(id=project_id, name=label, owner_id=user_id))
@@ -63,6 +65,15 @@ def _identity(task_id: str, run_id: str | None = None) -> ReviewRunIdentity:
         repository_key="acceptance/supervision",
         diff_sha256=sha256_bytes(b"fixture"),
         config_fingerprint=sha256_bytes(b"config"),
+    )
+
+
+def _review_finding(category: str = "perf") -> ReviewFinding:
+    return ReviewFinding(
+        rule_id=f"ACCEPT-{category}", severity="medium", category=category,
+        title=f"{category} finding", description="acceptance evidence",
+        file_path="a.py", line_start=1, line_end=1, confidence=0.9,
+        needs_verification=False, verdict="confirmed", source="rules",
     )
 
 
@@ -240,8 +251,12 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
             with pytest.raises(StaleExecutionOwnerError):
                 await audit_stage_store.start(db, task_id, "review:security")
         async with async_session_factory() as db:
+            task = await db.get(AgentTask, task_id)
             with pytest.raises(StaleExecutionOwnerError):
-                await _save_findings(db, task_id, [], commit=False)
+                await review_result_service.commit_success(
+                    db, task, old_lease, [_review_finding()],
+                    pr_meta={}, artifact_root=str(root),
+                )
     finally:
         current_execution_context.reset(context_token)
         current_execution_lease.reset(lease_token)
@@ -249,3 +264,53 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
     async with async_session_factory() as db:
         await review_execution_ownership.assert_current_owner(db, new_lease)
         assert await audit_stage_store.get(db, task_id, "review:security") is None
+        assert not (await db.execute(select(AgentFinding).where(
+            AgentFinding.task_id == task_id
+        ))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatch):
+    task_id, _ = await _new_task("report-failure")
+    identity = _identity(task_id)
+    async with async_session_factory() as db:
+        await review_execution_ownership.initialize(db, identity, delivery_id="report")
+        lease = await review_execution_ownership.claim(
+            db, task_id, worker_id="report-worker", delivery_id="report"
+        )
+    root = Path(os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"]).resolve()
+    context = ExecutionContext(
+        identity=lease.identity, attempt_id=lease.attempt_id,
+        worker_id=lease.worker_id, lease_epoch=lease.lease_epoch,
+        workspace_root=str(root), artifact_root=str(root),
+        deadline_at=datetime.now(timezone.utc),
+    )
+    lease_token = current_execution_lease.set(lease)
+    context_token = current_execution_context.set(context)
+    try:
+        original_complete = audit_stage_store.complete
+
+        async def fail_report(db, current_task_id, stage_type, **kwargs):
+            if stage_type == "report":
+                raise RuntimeError("injected report failure")
+            return await original_complete(db, current_task_id, stage_type, **kwargs)
+
+        monkeypatch.setattr(audit_stage_store, "complete", fail_report)
+        async with async_session_factory() as db:
+            task = await db.get(AgentTask, task_id)
+            with pytest.raises(RuntimeError, match="injected report failure"):
+                await review_result_service.commit_success(
+                    db, task, lease, [_review_finding("test_gap")],
+                    pr_meta={}, artifact_root=str(root),
+                )
+    finally:
+        current_execution_context.reset(context_token)
+        current_execution_lease.reset(lease_token)
+    async with async_session_factory() as db:
+        task = await db.get(AgentTask, task_id)
+        findings = (await db.execute(select(AgentFinding).where(
+            AgentFinding.task_id == task_id
+        ))).scalars().all()
+        assert task.status != AgentTaskStatus.COMPLETED
+        assert findings == []
+        assert await audit_stage_store.get(db, task_id, "report") is None

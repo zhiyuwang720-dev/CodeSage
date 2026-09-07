@@ -9,9 +9,11 @@ from collections import defaultdict
 from uuid import uuid4
 
 from arq.connections import RedisSettings
-from arq.worker import Retry, func
+from arq.worker import func
 
 from app.services.pr_review.execution import QuickReviewDependencies, execute_quick_review
+from app.services.agent.task_queue import AGENT_TASK_JOB_NAME
+from app.worker.agent_worker import execute_agent_task_job
 
 
 class DeterministicReviewModel:
@@ -42,8 +44,32 @@ class DeterministicReviewModel:
             payload = {"file_path": "review.diff", "start_line": 1, "max_lines": 20}
             tool_name = "Read"
         else:
+            zero_findings = await self.redis.hget(
+                f"acceptance:control:{self.task_id}", "zero_findings"
+            )
+            perspective_name = perspective.removeprefix("review:")
+            categories = {
+                "security": "security",
+                "architecture": "perf",
+                "quality": "test_gap",
+            }
+            findings = [] if zero_findings else [{
+                "rule_id": f"FIXTURE-{perspective_name.upper()}",
+                "severity": "medium",
+                "category": categories[perspective_name],
+                "title": f"deterministic {categories[perspective_name]} finding",
+                "description": "deterministic acceptance evidence",
+                "file_path": "a.py",
+                "line_start": 1,
+                "line_end": 1,
+                "suggestion": "add a regression guard",
+                "confidence": 0.9,
+                "needs_verification": False,
+                "verdict": "confirmed",
+                "source": perspective_name,
+            }]
             payload = {
-                "findings": [],
+                "findings": findings,
                 "summary": f"{perspective} fixture review completed after reading review.diff",
             }
             tool_name = "FinalizeReview"
@@ -60,25 +86,28 @@ class DeterministicReviewModel:
         }
 
 
-async def execute_acceptance_review(ctx, task_id: str, delivery_id: str) -> str:
-    redis = ctx["redis"]
+async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None) -> str:
     worker_id = f"acceptance:{os.getpid()}"
     print(f"worker_id={worker_id} task_id={task_id}", flush=True)
     await redis.hset(
         f"acceptance:{task_id}",
         mapping={"worker_id": worker_id, "started": str(time.time())},
     )
+    async def observe(event: dict) -> None:
+        await redis.rpush(
+            f"acceptance:attempts:{task_id}", json.dumps(event, sort_keys=True)
+        )
+
     result = await execute_quick_review(
         task_id,
         QuickReviewDependencies(
             llm_service=DeterministicReviewModel(redis, task_id),
             worker_id=worker_id,
             artifact_root=os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"],
+            observer=observe,
         ),
         delivery_id=delivery_id,
     )
-    if result == "already_owned":
-        raise Retry(defer=2)
     await redis.hset(
         f"acceptance:{task_id}",
         mapping={"ended": str(time.time()), "result": result},
@@ -86,8 +115,16 @@ async def execute_acceptance_review(ctx, task_id: str, delivery_id: str) -> str:
     return result
 
 
+async def startup(ctx) -> None:
+    async def executor(task_id: str, delivery_id: str | None = None) -> str:
+        return await execute_acceptance_review(ctx["redis"], task_id, delivery_id)
+
+    ctx["execute_agent_task"] = executor
+
+
 class WorkerSettings:
-    functions = [func(execute_acceptance_review, name="acceptance_execute")]
+    functions = [func(execute_agent_task_job, name="acceptance_execute")]
+    on_startup = startup
     redis_settings = RedisSettings.from_dsn(os.environ["REDIS_URL"])
     queue_name = os.environ["AGENT_TASK_QUEUE_NAME"]
     max_jobs = 1

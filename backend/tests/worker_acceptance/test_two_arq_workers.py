@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.db.session import async_session_factory
 from app.models.audit_session import AuditSession, AuditToolCall
 from app.models.checkpoint import AuditStageORM
-from app.models.agent_task import AgentTask, AgentTaskStatus
+from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
 
@@ -46,7 +46,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
         workspace.mkdir(parents=True, exist_ok=True)
         path = workspace / "review.diff"
         path.write_text(
-            f"diff --git a/a.py b/a.py\n+fixture {repetition}-{index}\n",
+            f"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+fixture {repetition}-{index}\n",
             encoding="utf-8",
         )
         diff_paths.append(path)
@@ -70,6 +70,11 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
     await redis.delete(
         *(f"acceptance:{task_id}" for task_id in task_ids),
         *(f"acceptance:model_calls:{task_id}" for task_id in task_ids),
+        *(f"acceptance:control:{task_id}" for task_id in task_ids),
+    )
+    # 每轮同时覆盖规范非空结果与合法零发现结果。
+    await redis.hset(
+        f"acceptance:control:{task_ids[1]}", mapping={"zero_findings": "1"}
     )
     pool = await create_pool(
         RedisSettings.from_dsn(os.environ["REDIS_URL"]),
@@ -122,7 +127,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
                 "review:quality": "2",
             }
         async with async_session_factory() as db:
-            for task_id in task_ids:
+            for task_index, task_id in enumerate(task_ids):
                 task = await db.get(AgentTask, task_id)
                 assert task.status == AgentTaskStatus.COMPLETED
                 stages = (await db.execute(
@@ -131,6 +136,14 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
                 assert len(stages) == 5
                 assert all(stage.status == "completed" for stage in stages)
                 assert all((stage.state_payload or {}).get("stage_result") for stage in stages)
+                finding_rows = (await db.execute(
+                    select(AgentFinding).where(AgentFinding.task_id == task_id)
+                )).scalars().all()
+                expected_categories = (
+                    {"security", "perf", "test_gap"} if task_index == 0 else set()
+                )
+                assert {row.category for row in finding_rows} == expected_categories
+                assert all(row.vulnerability_type is None for row in finding_rows)
                 session_count = await db.scalar(
                     select(func.count(AuditSession.id)).where(AuditSession.task_id == task_id)
                 )
