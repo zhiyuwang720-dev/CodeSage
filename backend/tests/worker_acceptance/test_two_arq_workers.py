@@ -11,9 +11,14 @@ from uuid import uuid4
 import pytest
 from arq import create_pool
 from arq.connections import RedisSettings
+from arq.jobs import Job
 from redis.asyncio import Redis
+from sqlalchemy import func, select
 
+from app.core.config import settings
 from app.db.session import async_session_factory
+from app.models.audit_session import AuditSession, AuditToolCall
+from app.models.checkpoint import AuditStageORM
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
@@ -26,15 +31,24 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path):
+@pytest.mark.parametrize("repetition", range(3))
+async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, repetition):
     suffix = uuid4().hex
     user_id = str(uuid4())
     project_id = str(uuid4())
     task_ids = [str(uuid4()), str(uuid4())]
     diff_paths = []
-    for index in range(2):
-        path = tmp_path / f"review-{index}.diff"
-        path.write_text(f"diff --git a/a.py b/a.py\n+fixture {index}\n", encoding="utf-8")
+    for index, task_id in enumerate(task_ids):
+        workspace = (
+            Path(settings.MANAGED_PROJECTS_ROOT)
+            / ".auditai_workspaces" / "projects" / task_id
+        )
+        workspace.mkdir(parents=True, exist_ok=True)
+        path = workspace / "review.diff"
+        path.write_text(
+            f"diff --git a/a.py b/a.py\n+fixture {repetition}-{index}\n",
+            encoding="utf-8",
+        )
         diff_paths.append(path)
 
     async with async_session_factory() as db:
@@ -53,7 +67,10 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path):
         await db.commit()
 
     redis = Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
-    await redis.delete("acceptance:barrier", *(f"acceptance:{task_id}" for task_id in task_ids))
+    await redis.delete(
+        *(f"acceptance:{task_id}" for task_id in task_ids),
+        *(f"acceptance:model_calls:{task_id}" for task_id in task_ids),
+    )
     pool = await create_pool(
         RedisSettings.from_dsn(os.environ["REDIS_URL"]),
         default_queue_name=os.environ["AGENT_TASK_QUEUE_NAME"],
@@ -72,7 +89,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path):
     handles = []
     try:
         for index in range(2):
-            handle = (logs / f"worker-{index + 1}.log").open("w", encoding="utf-8")
+            handle = (logs / f"worker-{repetition}-{index + 1}.log").open("w", encoding="utf-8")
             handles.append(handle)
             processes.append(subprocess.Popen(
                 [sys.executable, "-m", "arq", "tests.worker_acceptance.acceptance_worker.WorkerSettings", "--burst"],
@@ -81,7 +98,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path):
                 stdout=handle,
                 stderr=subprocess.STDOUT,
             ))
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             records = [await redis.hgetall(f"acceptance:{task_id}") for task_id in task_ids]
             if all(record.get("ended") for record in records):
@@ -93,11 +110,46 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path):
             raise TimeoutError("independent ARQ workers did not finish")
         records = [await redis.hgetall(f"acceptance:{task_id}") for task_id in task_ids]
         assert len({record["worker_id"] for record in records}) == 2
-        assert all(record["tool_success"] == "1" for record in records)
+        assert all(record["result"] == AgentTaskStatus.COMPLETED for record in records)
         starts = [float(record["started"]) for record in records]
         ends = [float(record["ended"]) for record in records]
         assert max(starts) < min(ends), "两个 worker 的执行区间必须重叠"
+        for task_id in task_ids:
+            calls = await redis.hgetall(f"acceptance:model_calls:{task_id}")
+            assert calls == {
+                "review:security": "2",
+                "review:architecture": "2",
+                "review:quality": "2",
+            }
+        async with async_session_factory() as db:
+            for task_id in task_ids:
+                task = await db.get(AgentTask, task_id)
+                assert task.status == AgentTaskStatus.COMPLETED
+                stages = (await db.execute(
+                    select(AuditStageORM).where(AuditStageORM.task_id == task_id)
+                )).scalars().all()
+                assert len(stages) == 5
+                assert all(stage.status == "completed" for stage in stages)
+                assert all((stage.state_payload or {}).get("stage_result") for stage in stages)
+                session_count = await db.scalar(
+                    select(func.count(AuditSession.id)).where(AuditSession.task_id == task_id)
+                )
+                assert session_count == 3
+                read_calls = await db.scalar(
+                    select(func.count(AuditToolCall.id))
+                    .join(AuditSession, AuditToolCall.session_id == AuditSession.id)
+                    .where(AuditSession.task_id == task_id, AuditToolCall.tool_name == "Read")
+                )
+                assert read_calls == 3
     finally:
+        for task_id in task_ids:
+            try:
+                await Job(
+                    f"acceptance:{task_id}", pool,
+                    _queue_name=os.environ["AGENT_TASK_QUEUE_NAME"],
+                ).abort(timeout=1)
+            except Exception:
+                pass
         await pool.close()
         await redis.aclose()
         for process in processes:

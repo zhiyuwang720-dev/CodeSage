@@ -31,3 +31,21 @@ def test_store_rejects_path_escape(tmp_path):
             media_type="application/json",
         )
 
+
+def test_store_rejects_symlinked_run_root(tmp_path):
+    store = LocalReviewArtifactStore(tmp_path / "artifacts")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = store.root / "run-1"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前平台不允许创建测试符号链接")
+    with pytest.raises(ArtifactIntegrityError, match="符号链接"):
+        store.write_bytes(
+            run_id="run-1",
+            kind="result",
+            relative_path="result.json",
+            content=b"{}",
+            media_type="application/json",
+        )
