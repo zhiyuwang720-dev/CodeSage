@@ -49,4 +49,6 @@ cordis-py/
 AutoCVE/
 pr-agent-0.43.0
 evoagent
+pr-af/
+backend/.acceptance-artifacts
 

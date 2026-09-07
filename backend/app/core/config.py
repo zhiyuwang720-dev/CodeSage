@@ -9,7 +9,7 @@ DEFAULT_MANAGED_PROJECTS_ROOT = str(Path(__file__).resolve().parents[3] / "proje
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AutoCVE"
+    PROJECT_NAME: str = "CodeSage"
     API_V1_STR: str = "/api/v1"
 
     SECRET_KEY: str = "changethis_in_production_to_a_long_random_string"
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str = "db"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
-    POSTGRES_DB: str = "autocve"
+    POSTGRES_DB: str = "codesage"
     DATABASE_URL: str | None = None
 
     @validator("DATABASE_URL", pre=True)
@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     CHECKMARX_WORKFLOW_ENABLED: bool = True
     WORKFLOW_URL: Optional[str] = None
     WORKFLOW_API_TOKEN: Optional[str] = None
-    WORKFLOW_USER: str = "autocve"
+    WORKFLOW_USER: str = "codeSage"
     WORKFLOW_TIMEOUT: float = 300.0
 
     EMBEDDING_PROVIDER: str = "openai"
@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     AGENT_TOKEN_EVENT_CHUNK_SIZE: int = 20
     AGENT_TOKEN_EVENT_FLUSH_INTERVAL_MS: int = 100
     AGENT_TASK_EXECUTION_MODE: str = "inline"
-    AGENT_TASK_QUEUE_NAME: str = "autocve:arq:agent_tasks"
+    AGENT_TASK_QUEUE_NAME: str = "CodeSage:arq:agent_tasks"
     AGENT_WORKER_CONCURRENCY: int = 2
     AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 3600
     AGENT_WORKER_MAX_TRIES: int = 2
