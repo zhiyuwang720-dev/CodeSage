@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
-from app.services.contracts.review_execution import ReviewRunIdentity
+from app.services.contracts.review_execution import ExecutionContext, ReviewRunIdentity
 
 
 LEASE_SECONDS = 20
@@ -51,6 +52,34 @@ class ExecutionLease:
 current_execution_lease: ContextVar[ExecutionLease | None] = ContextVar(
     "current_review_execution_lease", default=None
 )
+current_execution_context: ContextVar[ExecutionContext | None] = ContextVar(
+    "current_review_execution_context", default=None
+)
+
+
+async def guard_managed_execution_write(db, task_id: str) -> bool:
+    """Fence a managed write in the caller's transaction.
+
+    Returns ``False`` only for explicitly legacy tasks without an execution row.
+    """
+    row = await db.get(ReviewExecutionRun, task_id)
+    if row is None:
+        return False
+    context = current_execution_context.get()
+    lease = current_execution_lease.get()
+    persisted_run_id = str((row.identity_json or {}).get("run_id") or "")
+    if (
+        context is None
+        or lease is None
+        or context.identity.task_id != task_id
+        or context.identity.run_id != persisted_run_id
+        or context.attempt_id != lease.attempt_id
+        or context.worker_id != lease.worker_id
+        or context.lease_epoch != lease.lease_epoch
+    ):
+        raise StaleExecutionOwnerError("受管审查写入缺少或错配 ExecutionContext")
+    await review_execution_ownership.assert_current_owner(db, lease)
+    return True
 
 
 def _aware(value: datetime) -> datetime:
@@ -58,7 +87,9 @@ def _aware(value: datetime) -> datetime:
 
 
 async def _database_now(db) -> datetime:
-    return _aware(await db.scalar(select(func.now())))
+    bind = db.get_bind()
+    clock = func.clock_timestamp() if bind.dialect.name == "postgresql" else func.now()
+    return _aware(await db.scalar(select(clock)))
 
 
 async def _locked_row(db, task_id: str) -> ReviewExecutionRun | None:
@@ -80,18 +111,28 @@ class ReviewExecutionOwnership:
     ) -> ReviewExecutionRun:
         row = await _locked_row(db, identity.task_id)
         if row is None:
-            row = ReviewExecutionRun(
-                task_id=identity.task_id,
-                identity_json=identity.model_dump(mode="json"),
-                lease_epoch=0,
-                cancel_requested=False,
-                delivery_id=delivery_id or str(uuid4()),
-            )
-            db.add(row)
+            values = {
+                "task_id": identity.task_id,
+                "identity_json": identity.model_dump(mode="json"),
+                "lease_epoch": 0,
+                "cancel_requested": False,
+                "delivery_id": delivery_id or str(uuid4()),
+            }
+            if db.get_bind().dialect.name == "postgresql":
+                await db.execute(
+                    pg_insert(ReviewExecutionRun)
+                    .values(**values)
+                    .on_conflict_do_nothing(index_elements=["task_id"])
+                )
+            else:
+                db.add(ReviewExecutionRun(**values))
             await db.commit()
-            return row
+            row = await db.get(ReviewExecutionRun, identity.task_id)
+            if row is None:
+                raise ExecutionOwnershipError("执行身份初始化失败")
         persisted = ReviewRunIdentity.model_validate(row.identity_json)
-        if persisted != identity:
+        comparable = identity.model_copy(update={"run_id": persisted.run_id})
+        if persisted != comparable:
             await db.rollback()
             raise IncompatibleResumeError(
                 "任务已有不同的运行身份；输入或配置已变化，请创建新任务"
@@ -188,6 +229,11 @@ class ReviewExecutionOwnership:
         )
         if result.rowcount != 1:
             await db.rollback()
+            row = await db.get(ReviewExecutionRun, lease.task_id)
+            if row is not None and row.cancel_requested:
+                await db.rollback()
+                raise CancelRequestedError("任务已请求取消")
+            await db.rollback()
             raise StaleExecutionOwnerError("lease 已过期、被接管或任务已取消")
         await db.commit()
         return expires
@@ -206,16 +252,19 @@ class ReviewExecutionOwnership:
             raise StaleExecutionOwnerError("lease 已过期，禁止提交")
         return row
 
-    async def request_cancel(self, db, task_id: str) -> bool:
+    async def request_cancel(self, db, task_id: str, *, commit: bool = True) -> bool:
         row = await _locked_row(db, task_id)
         if row is None:
             await db.rollback()
             return False
         row.cancel_requested = True
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return True
 
-    async def prepare_resume(self, db, task_id: str) -> str:
+    async def prepare_resume(self, db, task_id: str, *, commit: bool = True) -> str:
         row = await _locked_row(db, task_id)
         if row is None:
             await db.rollback()
@@ -230,8 +279,26 @@ class ReviewExecutionOwnership:
         row.lease_expires_at = None
         row.last_heartbeat_at = None
         row.delivery_id = str(uuid4())
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return row.delivery_id
+
+    async def release(self, db, lease: ExecutionLease) -> None:
+        result = await db.execute(
+            update(ReviewExecutionRun)
+            .where(
+                ReviewExecutionRun.task_id == lease.task_id,
+                ReviewExecutionRun.worker_id == lease.worker_id,
+                ReviewExecutionRun.lease_epoch == lease.lease_epoch,
+            )
+            .values(worker_id=None, attempt_id=None, lease_expires_at=None)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            raise StaleExecutionOwnerError("结束 attempt 时所有权已变化")
+        await db.commit()
 
 
 review_execution_ownership = ReviewExecutionOwnership()

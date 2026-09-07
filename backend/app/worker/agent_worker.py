@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from arq.connections import RedisSettings
-from arq.worker import func
+from arq.worker import Retry, func
 
 from app.core.config import settings
 from app.services.agent.task_executor import execute_agent_task
@@ -46,9 +46,15 @@ async def run_worker() -> None:
 
 async def execute_agent_task_job(
     ctx: dict[str, Any], task_id: str, delivery_id: str | None = None
-) -> None:
+) -> str:
+    del ctx
     logger.info("Agent worker picked task %s", task_id)
-    await execute_agent_task(task_id, delivery_id=delivery_id)
+    result = await execute_agent_task(task_id, delivery_id=delivery_id)
+    if result == "already_owned":
+        from app.services.pr_review.execution_ownership import LEASE_SECONDS
+
+        raise Retry(defer=LEASE_SECONDS + 1)
+    return result
 
 
 class WorkerSettings:

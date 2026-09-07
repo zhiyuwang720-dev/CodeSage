@@ -14,16 +14,29 @@ class ArtifactIntegrityError(ValueError):
 
 class LocalReviewArtifactStore:
     def __init__(self, artifact_root: str | Path):
-        self.root = Path(artifact_root).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
+        raw_root = Path(artifact_root).absolute()
+        for ancestor in (raw_root, *raw_root.parents):
+            if ancestor.is_symlink():
+                raise ArtifactIntegrityError(
+                    f"artifact_root 父链不允许符号链接: {ancestor}"
+                )
+        raw_root.mkdir(parents=True, exist_ok=True)
+        self.root = raw_root.resolve()
 
     def _run_root(self, run_id: str, *, create: bool) -> Path:
         if not run_id or run_id in (".", "..") or any(c in run_id for c in "/\\:"):
             raise ArtifactIntegrityError("run_id 不能包含路径分隔符")
         path = self.root / run_id
+        if path.is_symlink():
+            raise ArtifactIntegrityError("run 产物根不允许是符号链接")
         if create:
             path.mkdir(parents=True, exist_ok=True)
-        return path.resolve()
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(self.root)
+        except ValueError as exc:
+            raise ArtifactIntegrityError("run 产物根越过 artifact_root") from exc
+        return resolved
 
     def _resolve(self, run_id: str, relative_path: str, *, create_parent: bool) -> Path:
         # 先借契约完成跨平台绝对路径、盘符和 traversal 校验。
@@ -41,7 +54,7 @@ class LocalReviewArtifactStore:
         current = run_root
         for part in placeholder.relative_path.split("/"):
             current = current / part
-            if current.exists() and current.is_symlink():
+            if current.is_symlink():
                 raise ArtifactIntegrityError(f"产物路径不允许符号链接: {relative_path}")
         if create_parent:
             candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -89,4 +102,3 @@ class LocalReviewArtifactStore:
         if sha256_bytes(content) != reference.sha256:
             raise ArtifactIntegrityError(f"产物哈希不匹配: {reference.relative_path}")
         return content
-

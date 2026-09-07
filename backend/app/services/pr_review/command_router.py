@@ -184,6 +184,7 @@ async def run_review_pipeline_async(
     # 运行时对象(dispatcher / session_factory / event_sink)不是 JSON 类型, 混入会崩。
     # 这里把注入通道从 options 抽出为局部变量, 持久化的 options 保持纯净数据。
     dispatcher = options.pop("dispatcher", None)
+    llm_service = options.pop("llm_service", None)
     session_factory = options.pop("session_factory", None)
     workspace_root = options.pop("workspace_root", None)
     event_sink = event_sink if event_sink is not None else options.pop("event_sink", None)
@@ -237,7 +238,7 @@ async def run_review_pipeline_async(
 
         project_root = ctx.source_dir or workspace_root or "."
         dispatcher = RuntimePerspectiveDispatcher(
-            llm_service=LLMService(),
+            llm_service=llm_service or LLMService(),
             tools=build_runtime_tool_catalog(project_root=project_root),
             project_id=ctx.pr_key or ctx.repo,
             task_id=options.get("task_id"),

@@ -80,6 +80,7 @@ class AuditStageStore(Protocol):
         stats: dict[str, Any] | None = None,
         findings: list[dict[str, Any]] | None = None,
         payload: dict[str, Any] | None = None,
+        commit: bool = True,
     ) -> AuditStage: ...
 
     async def fail(self, db, task_id: str, stage_type: str, error: str) -> AuditStage: ...

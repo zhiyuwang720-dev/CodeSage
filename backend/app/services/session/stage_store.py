@@ -16,11 +16,14 @@ from app.models.review_execution import ReviewExecutionRun
 from app.services.contracts.checkpoint import AuditStage, StageStatus
 from app.services.contracts.review_execution import ArtifactRef, StageResult
 from app.services.pr_review.execution_ownership import (
-    current_execution_lease,
-    review_execution_ownership,
+    guard_managed_execution_write,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _guard_managed_write(db, task_id: str) -> None:
+    await guard_managed_execution_write(db, task_id)
 
 
 def _stage_id(task_id: str, stage_type: str) -> str:
@@ -77,6 +80,7 @@ class AuditStageStoreImpl:
 
     async def register(self, db, task_id: str, planned_stages: list[str]) -> None:
         """任务启动登记 pending(幂等): 已存在记录跳过, 不覆盖进度。"""
+        await _guard_managed_write(db, task_id)
         for stage_type in planned_stages:
             if await _load(db, task_id, stage_type) is not None:
                 continue
@@ -86,6 +90,7 @@ class AuditStageStoreImpl:
     async def start(
         self, db, task_id: str, stage_type: str, *, session_id: str | None = None
     ) -> AuditStage:
+        await _guard_managed_write(db, task_id)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
@@ -107,10 +112,9 @@ class AuditStageStoreImpl:
         stats: dict[str, Any] | None = None,
         findings: list[dict[str, Any]] | None = None,
         payload: dict[str, Any] | None = None,
+        commit: bool = True,
     ) -> AuditStage:
-        lease = current_execution_lease.get()
-        if lease is not None and lease.task_id == task_id:
-            await review_execution_ownership.assert_current_owner(db, lease)
+        await _guard_managed_write(db, task_id)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
@@ -152,13 +156,14 @@ class AuditStageStoreImpl:
             )
             new_payload["stage_result"] = stage_result.model_dump(mode="json")
         row.state_payload = new_payload
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return _to_contract(row)
 
     async def fail(self, db, task_id: str, stage_type: str, error: str) -> AuditStage:
-        lease = current_execution_lease.get()
-        if lease is not None and lease.task_id == task_id:
-            await review_execution_ownership.assert_current_owner(db, lease)
+        await _guard_managed_write(db, task_id)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
@@ -213,6 +218,7 @@ class AuditStageStoreImpl:
         self, db, task_id: str, stage_type: str, session_id: str
     ) -> None:
         """session_start 事件更新 L3 会话锚点(进程死在对话中途时 resume 靠它续跑)。"""
+        await _guard_managed_write(db, task_id)
         row = await _load(db, task_id, stage_type)
         if row is None:
             row = _new_row(task_id, stage_type)
