@@ -79,14 +79,11 @@ try {
         "tests/agent/test_task_resume.py", "-q"
     ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $regressionStdout -RedirectStandardError $regressionStderr
     $regressionOutput = Get-Content -Raw $regressionStdout
+    $knownRegressionFailure = $regressionProcess.ExitCode -eq 1 -and $regressionOutput.Contains("test_extract_text_tool_calls_preserves_nested_write_payload") -and $regressionOutput.Contains("1 failed, 170 passed")
     if ($regressionProcess.ExitCode -eq 0) {
         $regressionStatus = "passed"
     }
-    elseif (
-        $regressionProcess.ExitCode -eq 1
-        -and $regressionOutput.Contains("test_extract_text_tool_calls_preserves_nested_write_payload")
-        -and $regressionOutput.Contains("1 failed, 170 passed")
-    ) {
+    elseif ($knownRegressionFailure) {
         $regressionStatus = "known_baseline_failure:nested Write text parser"
     }
     else {
