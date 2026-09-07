@@ -46,9 +46,18 @@ async def test_resume_agent_task_resets_task_and_schedules_background_execution(
     db = _FakeDB(task, project)
     background_tasks = BackgroundTasks()
     prepare_resume = AsyncMock(return_value="delivery-test")
+    validate_resume = AsyncMock()
+    build_identity = AsyncMock(return_value=(SimpleNamespace(task_id="task-1"), None))
     monkeypatch.setattr(
         "app.services.pr_review.execution_ownership.review_execution_ownership.prepare_resume",
         prepare_resume,
+    )
+    monkeypatch.setattr(
+        "app.services.pr_review.execution_ownership.review_execution_ownership.validate_resume_identity",
+        validate_resume,
+    )
+    monkeypatch.setattr(
+        "app.services.pr_review.execution.build_review_identity", build_identity
     )
 
     response = await resume_agent_task(
@@ -67,7 +76,8 @@ async def test_resume_agent_task_resets_task_and_schedules_background_execution(
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func is agent_tasks_endpoint._execute_agent_task
     assert background_tasks.tasks[0].args == ("task-1", "delivery-test")
-    prepare_resume.assert_awaited_once_with(db, "task-1")
+    prepare_resume.assert_awaited_once_with(db, "task-1", commit=False)
+    validate_resume.assert_awaited_once()
     db.commit.assert_awaited_once()
 
 
@@ -116,6 +126,10 @@ class _FakeFindingDB:
         self._existing_findings = list(existing_findings or [])
         self.added = []
         self.commit = AsyncMock()
+
+    async def get(self, model, key):
+        del model, key
+        return None
 
     async def execute(self, stmt):
         assert stmt is not None

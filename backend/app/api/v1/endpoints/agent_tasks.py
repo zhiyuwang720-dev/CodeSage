@@ -55,6 +55,10 @@ from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill.file_service import SkillFileService
 from app.services.contracts.checkpoint import StageStatus
 from app.services.pr_review.orchestrator import PERSPECTIVES
+from app.services.pr_review.execution_ownership import (
+    current_execution_lease,
+    review_execution_ownership,
+)
 from app.services.session.stage_store import audit_stage_store
 from app.core.config import settings
 
@@ -532,6 +536,7 @@ def _build_pr_review_event_sink(
     progress_cb=None,
     task: AgentTask | None = None,
     db: AsyncSession | None = None,
+    db_lock: asyncio.Lock | None = None,
 ):
     """PR review 运行时事件 → AgentEvent 流。
 
@@ -562,6 +567,7 @@ def _build_pr_review_event_sink(
     _per_agent_tokens: dict[str, dict] = {}
     # 07-P1.1: flush 节流(last flush 时刻, 按单调钟)
     _last_flush_at = 0.0
+    _db_lock = db_lock or asyncio.Lock()
 
     async def _flush_stats() -> None:
         """增量回写 AgentTask 统计列并 commit(节流 + 关键节点 force, 不每事件 commit 避免频繁写主库)。
@@ -571,14 +577,15 @@ def _build_pr_review_event_sink(
         """
         if task is None or db is None:
             return
-        task.total_iterations = max(task.total_iterations or 0, _stats["total_iterations"])
-        task.tool_calls_count = max(task.tool_calls_count or 0, _stats["tool_calls_count"])
-        task.tokens_used = _stats["tokens_used"]
-        _persist_token_stats()
-        try:
+        async with _db_lock:
+            task.total_iterations = max(task.total_iterations or 0, _stats["total_iterations"])
+            task.tool_calls_count = max(task.tool_calls_count or 0, _stats["tool_calls_count"])
+            task.tokens_used = _stats["tokens_used"]
+            _persist_token_stats()
+            active_lease = current_execution_lease.get()
+            if active_lease is not None:
+                await review_execution_ownership.assert_current_owner(db, active_lease)
             await db.commit()
-        except Exception:
-            logger.debug("pr_review stats flush failed", exc_info=True)
 
     async def _maybe_flush_stats(force: bool = False) -> None:
         """节流 flush: 至少每 FLUSH_INTERVAL_S 一次(前端实时非 0), force 用于关键节点兜底。"""
@@ -712,9 +719,10 @@ def _build_pr_review_event_sink(
             session_id = event.get("session_id")
             if perspective and session_id:
                 try:
-                    await audit_stage_store.touch_session(
-                        db, task.id, f"review:{perspective}", str(session_id)
-                    )
+                    async with _db_lock:
+                        await audit_stage_store.touch_session(
+                            db, task.id, f"review:{perspective}", str(session_id)
+                        )
                 except Exception:
                     logger.debug("pr_review stage touch_session failed", exc_info=True)
         elif ev_type == "assistant_start":
@@ -828,17 +836,18 @@ def _build_pr_review_event_sink(
             if perspective:
                 try:
                     per_agent = _per_agent_tokens.get(perspective) or {}
-                    await audit_stage_store.complete(
-                        db, task.id, f"review:{perspective}",
-                        session_id=str(event["session_id"]) if event.get("session_id") else None,
-                        stats={
-                            "turn_count": int(turns or 0),
-                            "token_usage": int(per_agent.get("total") or _stats["tokens_used"] or 0),
-                            "tool_calls": _stats["tool_calls_count"],
-                        },
-                        findings=findings_payload if isinstance(findings_payload, list) else None,
-                        payload={"perspective": perspective},
-                    )
+                    async with _db_lock:
+                        await audit_stage_store.complete(
+                            db, task.id, f"review:{perspective}",
+                            session_id=str(event["session_id"]) if event.get("session_id") else None,
+                            stats={
+                                "turn_count": int(turns or 0),
+                                "token_usage": int(per_agent.get("total") or _stats["tokens_used"] or 0),
+                                "tool_calls": _stats["tool_calls_count"],
+                            },
+                            findings=findings_payload if isinstance(findings_payload, list) else None,
+                            payload={"perspective": perspective},
+                        )
                 except Exception:
                     logger.debug("pr_review stage complete failed", exc_info=True)
         elif ev_type == "llm_retry":
@@ -898,6 +907,12 @@ async def _execute_pr_review_task_impl(
     from pathlib import Path
 
     from app.services.pr_review.command_router import run_review_pipeline_async
+    from app.services.pr_review.execution import current_review_llm_service
+    from app.services.pr_review.execution_ownership import (
+        current_execution_context,
+        current_execution_lease,
+        review_execution_ownership,
+    )
 
     sink = None
     try:
@@ -927,9 +942,14 @@ async def _execute_pr_review_task_impl(
                 parts = source.split("github.com/", 1)[1].split("/")
                 if len(parts) >= 2:
                     clone_source = f"https://github.com/{parts[0]}/{parts[1]}"
-        workspace_root = str(
-            Path(settings.MANAGED_PROJECTS_ROOT).resolve()
-            / ".auditai_workspaces" / "projects" / str(project.id)
+        execution_context = current_execution_context.get()
+        workspace_root = (
+            execution_context.workspace_root
+            if execution_context is not None
+            else str(
+                Path(settings.MANAGED_PROJECTS_ROOT).resolve()
+                / ".auditai_workspaces" / "projects" / str(project.id)
+            )
         )
 
         # 进度推进: diff 变更文件数 → total_files(progress_percentage 计算依据)
@@ -938,6 +958,9 @@ async def _execute_pr_review_task_impl(
             task.total_files = changed_files
         task.current_phase = AgentTaskPhase.ANALYSIS
         task.status = AgentTaskStatus.RUNNING
+        active_lease = current_execution_lease.get()
+        if active_lease is not None:
+            await review_execution_ownership.assert_current_owner(db, active_lease)
         await db.commit()
 
         # 09-P1: intake stage 完成快照 — resume 跳过 PR 解析/输入重读。
@@ -977,7 +1000,41 @@ async def _execute_pr_review_task_impl(
                         resume_sessions[perspective] = stage.session_id
                     continue
                 snap = stage.state_payload or {}
-                findings = [dict(f) for f in (snap.get("findings") or [])]
+                from app.models.review_execution import ReviewExecutionRun
+                from app.services.contracts.review_execution import StageResult
+                from app.services.pr_review.artifacts import LocalReviewArtifactStore
+
+                execution_run = await db.get(ReviewExecutionRun, task.id)
+                stage_result_raw = snap.get("stage_result")
+                if execution_run is not None:
+                    if not stage_result_raw:
+                        raise ValueError(
+                            f"受管恢复缺少可信 StageResult: review:{perspective}"
+                        )
+                    stage_result = StageResult.model_validate(stage_result_raw)
+                    expected_run_id = str(
+                        (execution_run.identity_json or {}).get("run_id") or ""
+                    )
+                    if (
+                        stage_result.run_id != expected_run_id
+                        or stage_result.stage_type != f"review:{perspective}"
+                        or stage_result.status != "completed"
+                    ):
+                        raise ValueError(
+                            f"StageResult 与恢复身份/阶段不一致: review:{perspective}"
+                        )
+                    artifact_root = (task.agent_config or {}).get(
+                        "review_execution_artifact_root"
+                    )
+                    if stage_result.artifact_refs:
+                        if not artifact_root:
+                            raise ValueError("恢复阶段产物缺少 artifact_root")
+                        store = LocalReviewArtifactStore(artifact_root)
+                        for ref in stage_result.artifact_refs:
+                            store.read_verified(ref)
+                    findings = [f.model_dump(mode="json") for f in stage_result.findings]
+                else:
+                    findings = [dict(f) for f in (snap.get("findings") or [])]
                 confidences = [
                     float(f.get("confidence", 0.5))
                     for f in findings
@@ -1001,10 +1058,15 @@ async def _execute_pr_review_task_impl(
                     "confidence": confidence,
                 }
 
+        db_write_lock = asyncio.Lock()
+
         async def _progress_done(perspective: str) -> None:
             """视角完成回调: 推进 analyzed_files + 发 progress 事件(修复 4)。"""
-            task.analyzed_files = (task.analyzed_files or 0) + 1
-            await db.commit()
+            async with db_write_lock:
+                task.analyzed_files = (task.analyzed_files or 0) + 1
+                if active_lease is not None:
+                    await review_execution_ownership.assert_current_owner(db, active_lease)
+                await db.commit()
             await event_manager.add_event(
                 task.id, "progress", sequence=0, phase=perspective,
                 message=f"{perspective} 视角完成",
@@ -1017,7 +1079,8 @@ async def _execute_pr_review_task_impl(
             )
 
         sink = _build_pr_review_event_sink(
-            task.id, event_manager, progress_cb=_progress_done, task=task, db=db
+            task.id, event_manager, progress_cb=_progress_done, task=task, db=db,
+            db_lock=db_write_lock,
         )
         await sink({"type": "meta", "repo": project.name or pr_url, "pr_number": scope.get("pr_number")})
 
@@ -1041,6 +1104,7 @@ async def _execute_pr_review_task_impl(
                 # 09-P2: resume 执行指令(command_router 从 options 抽出, 不进持久化 options)
                 "prefill_handoffs": prefill_handoffs,
                 "resume_sessions": resume_sessions,
+                "llm_service": current_review_llm_service.get(),
             },
             event_sink=sink,
         )
@@ -1059,7 +1123,11 @@ async def _execute_pr_review_task_impl(
             for c in comments
             if c and getattr(c, "path", None)
         ]
-        saved = await _save_findings(db, task.id, findings, project_root=None)
+        if active_lease is not None:
+            await review_execution_ownership.assert_current_owner(db, active_lease)
+        saved = await _save_findings(
+            db, task.id, findings, project_root=None, commit=False
+        )
 
         # 07-P2: PR 审计基本信息快照 → agent_config["pr_meta"](报告 PR 块数据源)。
         # 执行时从 ReviewContext 可取则填 head_sha/author/title, 不可得留 None 由模板兜底。
@@ -1131,7 +1199,10 @@ async def _execute_pr_review_task_impl(
                     ref = LocalReviewArtifactStore(execution_artifact_root).write_bytes(
                         run_id=run_id,
                         kind="final_result",
-                        relative_path="result/final.json",
+                        relative_path=(
+                            f"result/final-{active_lease.lease_epoch}-{active_lease.attempt_id}.json"
+                            if active_lease is not None else "result/final-legacy.json"
+                        ),
                         content=_json.dumps(
                             {"findings": findings, "pr_meta": pr_meta},
                             ensure_ascii=False,
@@ -1153,16 +1224,11 @@ async def _execute_pr_review_task_impl(
                     "pr_meta": pr_meta,
                     "artifact_refs": report_artifact_refs,
                 },
+                commit=False,
             )
         except Exception:
             logger.debug("pr_review report stage complete failed", exc_info=True)
 
-        from app.services.pr_review.execution_ownership import (
-            current_execution_lease,
-            review_execution_ownership,
-        )
-
-        active_lease = current_execution_lease.get()
         if active_lease is not None:
             # 与任务终态写处于同一事务；旧 epoch 或 cancel_requested 会在写前失败。
             await review_execution_ownership.assert_current_owner(db, active_lease)
@@ -1179,6 +1245,16 @@ async def _execute_pr_review_task_impl(
         # 致任务卡 RUNNING(resume 端点会以 "already running" 拒绝)。取消语义是把任务
         # 带到 cancelled, 而非当崩溃置 FAILED。
         logger.warning(f"pr_review task {task.id} cancelled (hard cancel)")
+        from app.services.pr_review.execution_ownership import current_execution_lease
+
+        if current_execution_lease.get() is not None:
+            # 受管执行的取消事实由控制端事务写入；lease 丢失/心跳故障导致的本地
+            # CancelledError 也不得由旧 owner 覆写任务或阶段。
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            return
         try:
             await db.rollback()
             task.status = AgentTaskStatus.CANCELLED
@@ -1211,10 +1287,23 @@ async def _execute_pr_review_task_impl(
         # 09-P0 崩溃 → FAILED 转换: 异常冒泡会让后台任务静默消失, 任务卡 RUNNING
         # 且 resume 端点以 "already running" 拒绝 → 崩溃恢复断头。这里统一落 FAILED。
         logger.exception(f"pr_review task {task.id} failed: {exc}")
+        from app.services.pr_review.execution_ownership import (
+            current_execution_lease,
+            review_execution_ownership,
+        )
+
         try:
             await db.rollback()
         except Exception:
             logger.debug("pr_review rollback failed", exc_info=True)
+        active_lease = current_execution_lease.get()
+        if active_lease is not None:
+            try:
+                await review_execution_ownership.assert_current_owner(db, active_lease)
+            except Exception:
+                # 无法证明当前所有权时 fail closed：只结束本地 attempt。
+                logger.warning("managed review lost/unconfirmed ownership; skip FAILED write")
+                return
         task.status = AgentTaskStatus.FAILED
         task.current_phase = AgentTaskPhase.REPORTING
         task.current_step = "Failed during execution"
@@ -1447,9 +1536,16 @@ async def _save_findings(
     task_id: str,
     findings: List[Dict],
     project_root: Optional[str] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """Persist normalized findings for an audit task."""
     from app.models.agent_task import VulnerabilityType
+    from app.services.pr_review.execution_ownership import guard_managed_execution_write
+
+    managed = await guard_managed_execution_write(db, task_id)
+    if managed and commit:
+        raise RuntimeError("受管 Findings 必须由最终结果事务统一提交")
 
     logger.info(f"[SaveFindings] Starting to save {len(findings)} findings for task {task_id}")
     if not findings:
@@ -1672,7 +1768,7 @@ async def _save_findings(
             logger.exception(f"[SaveFindings] Failed to save finding: {exc}")
 
     persisted_count = inserted_count + merged_count
-    if persisted_count:
+    if persisted_count and commit:
         await db.commit()
         logger.info(
             f"[SaveFindings] Persisted {persisted_count} findings for task {task_id} "
@@ -2249,7 +2345,13 @@ async def resume_agent_task(
     from app.services.pr_review.execution_ownership import review_execution_ownership
 
     # 先使旧 epoch 失效并生成新投递标识，再把任务恢复为可执行状态。
-    delivery_id = await review_execution_ownership.prepare_resume(db, task_id)
+    from app.services.pr_review.execution import build_review_identity
+
+    candidate_identity, _ = await build_review_identity(task)
+    await review_execution_ownership.validate_resume_identity(db, candidate_identity)
+    delivery_id = await review_execution_ownership.prepare_resume(
+        db, task_id, commit=False
+    )
     _cancelled_tasks.discard(task_id)
     _prepare_task_for_resume(task)
     await db.commit()
@@ -2283,7 +2385,7 @@ async def cancel_agent_task(
     from app.services.pr_review.execution_ownership import review_execution_ownership
 
     # 数据库 cancel_requested 是跨进程事实来源，必须先于本地 hard-cancel 持久化。
-    await review_execution_ownership.request_cancel(db, task_id)
+    await review_execution_ownership.request_cancel(db, task_id, commit=False)
 
     # 11-P4 先落 CANCELLED(带有限重试), 再打断在飞流水线 — 避免写失败时先毁掉
     # 在飞流水线(旧顺序: 先 hard-cancel 再 commit, 写失败则两头落空)。
