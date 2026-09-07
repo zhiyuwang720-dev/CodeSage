@@ -6,193 +6,73 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
-import app.api.v1.endpoints.agent_tasks as agent_tasks_endpoint
-from app.api.v1.endpoints.agent_tasks import (
-    _save_findings,
-    resume_agent_task,
-)
+import app.api.v1.endpoints.agent_tasks as endpoint
+from app.api.v1.endpoints.agent_tasks import resume_agent_task
 from app.models.agent_task import AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.models.project import Project
 
 
 class _FakeDB:
     def __init__(self, task, project):
-        self._task = task
-        self._project = project
-        self.commit = AsyncMock()
+        self.task = task
+        self.project = project
 
     async def get(self, model, key, options=None):
-        del options
-        if model is AgentTask and key == self._task.id:
-            return self._task
-        if model is Project and key == self._project.id:
-            return self._project
-        return None
+        del key, options
+        return self.task if model is AgentTask else self.project if model is Project else None
 
 
 @pytest.mark.asyncio
-async def test_resume_agent_task_resets_task_and_schedules_background_execution(monkeypatch):
+async def test_resume_api_delegates_to_lifecycle_then_schedules(monkeypatch):
     task = AgentTask(
-        id="task-1",
-        project_id="project-1",
-        created_by="user-1",
-        name="Demo",
-        version_label="resume-test",
-        status=AgentTaskStatus.CANCELLED,
-        current_phase=AgentTaskPhase.ANALYSIS,
-        error_message="Task cancelled",
+        id="task-1", project_id="project-1", created_by="user-1",
+        name="Demo", version_label="resume-test",
+        status=AgentTaskStatus.RUNNING, current_phase=AgentTaskPhase.PLANNING,
+        current_step="Resume from checkpoint",
     )
-    project = Project(id="project-1", name="Demo Project", owner_id="user-1", source_type="repository")
-    db = _FakeDB(task, project)
-    background_tasks = BackgroundTasks()
-    prepare_resume = AsyncMock(return_value="delivery-test")
-    validate_resume = AsyncMock()
-    build_identity = AsyncMock(return_value=(SimpleNamespace(task_id="task-1"), None))
+    db = _FakeDB(
+        task,
+        Project(id="project-1", name="Demo Project", owner_id="user-1", source_type="repository"),
+    )
+    resume = AsyncMock(return_value=SimpleNamespace(task=task, delivery_id="delivery-test"))
+    schedule = AsyncMock()
     monkeypatch.setattr(
-        "app.services.pr_review.execution_ownership.review_execution_ownership.prepare_resume",
-        prepare_resume,
+        "app.services.pr_review.lifecycle.task_lifecycle_service.resume", resume
     )
-    monkeypatch.setattr(
-        "app.services.pr_review.execution_ownership.review_execution_ownership.validate_resume_identity",
-        validate_resume,
-    )
-    monkeypatch.setattr(
-        "app.services.pr_review.execution.build_review_identity", build_identity
-    )
+    monkeypatch.setattr(endpoint, "_schedule_agent_task", schedule)
+    background = BackgroundTasks()
 
     response = await resume_agent_task(
-        task_id="task-1",
-        background_tasks=background_tasks,
-        db=db,
+        "task-1", background_tasks=background, db=db,
         current_user=SimpleNamespace(id="user-1"),
     )
 
-    assert response["message"] == "Task resumed"
-    assert response["task_id"] == "task-1"
-    assert task.status == AgentTaskStatus.PENDING
-    assert task.current_phase == AgentTaskPhase.PLANNING
-    assert task.error_message is None
-    assert task.current_step == "Resuming from latest checkpoint"
-    assert len(background_tasks.tasks) == 1
-    assert background_tasks.tasks[0].func is agent_tasks_endpoint._execute_agent_task
-    assert background_tasks.tasks[0].args == ("task-1", "delivery-test")
-    prepare_resume.assert_awaited_once_with(db, "task-1", commit=False)
-    validate_resume.assert_awaited_once()
-    db.commit.assert_awaited_once()
+    assert response["status"] == AgentTaskStatus.RUNNING
+    resume.assert_awaited_once_with(db, "task-1")
+    schedule.assert_awaited_once_with(
+        background, "task-1", delivery_id="delivery-test"
+    )
 
 
 @pytest.mark.asyncio
-async def test_resume_agent_task_rejects_completed_tasks():
+async def test_resume_api_maps_invalid_state(monkeypatch):
     task = AgentTask(
-        id="task-1",
-        project_id="project-1",
-        created_by="user-1",
-        name="Demo",
-        version_label="resume-test",
-        status=AgentTaskStatus.COMPLETED,
+        id="task-1", project_id="project-1", created_by="user-1",
+        name="Demo", version_label="resume-test", status=AgentTaskStatus.COMPLETED,
     )
-    project = Project(id="project-1", name="Demo Project", owner_id="user-1", source_type="repository")
-    db = _FakeDB(task, project)
+    db = _FakeDB(
+        task,
+        Project(id="project-1", name="Demo Project", owner_id="user-1", source_type="repository"),
+    )
+    from app.services.pr_review.lifecycle import InvalidTaskStateError
 
-    with pytest.raises(HTTPException) as exc_info:
+    monkeypatch.setattr(
+        "app.services.pr_review.lifecycle.task_lifecycle_service.resume",
+        AsyncMock(side_effect=InvalidTaskStateError("Task is not resumable")),
+    )
+    with pytest.raises(HTTPException) as captured:
         await resume_agent_task(
-            task_id="task-1",
-            background_tasks=BackgroundTasks(),
-            db=db,
+            "task-1", background_tasks=BackgroundTasks(), db=db,
             current_user=SimpleNamespace(id="user-1"),
         )
-
-    assert exc_info.value.status_code == 400
-
-
-class _FakeFindingScalars:
-    def __init__(self, findings):
-        self._findings = findings
-
-    def all(self):
-        return list(self._findings)
-
-
-class _FakeFindingResult:
-    def __init__(self, findings):
-        self._findings = findings
-
-    def scalars(self):
-        return _FakeFindingScalars(self._findings)
-
-
-class _FakeFindingDB:
-    def __init__(self, existing_findings=None):
-        self._existing_findings = list(existing_findings or [])
-        self.added = []
-        self.commit = AsyncMock()
-
-    async def get(self, model, key):
-        del model, key
-        return None
-
-    async def execute(self, stmt):
-        assert stmt is not None
-        return _FakeFindingResult(self._existing_findings)
-
-    def add(self, record):
-        self.added.append(record)
-
-
-def _build_existing_finding(*, fingerprint: str | None = None, verified: bool = False):
-    finding = agent_tasks_endpoint.AgentFinding(
-        id='finding-1',
-        task_id='task-1',
-        vulnerability_type='sql_injection',
-        severity='medium',
-        title='SQL injection in api.py',
-        file_path='src/api.py',
-        line_start=21,
-        line_end=21,
-        code_snippet='cursor.execute(query)',
-        status='verified' if verified else 'new',
-        is_verified=verified,
-        ai_confidence=0.4,
-        verification_result={'verdict': 'confirmed' if verified else 'candidate'},
-        finding_metadata={'raw_finding': {'title': 'SQL injection in api.py'}},
-    )
-    finding.fingerprint = fingerprint or finding.generate_fingerprint()
-    return finding
-
-
-@pytest.mark.asyncio
-async def test_save_findings_merges_duplicate_resume_finding_instead_of_reinserting():
-    existing = _build_existing_finding()
-    db = _FakeFindingDB(existing_findings=[existing])
-
-    persisted = await _save_findings(
-        db,
-        'task-1',
-        [
-            {
-                'title': 'SQL injection in api.py',
-                'vulnerability_type': 'sql_injection',
-                'severity': 'high',
-                'file_path': 'src/api.py',
-                'line_start': 21,
-                'line_end': 21,
-                'code_snippet': 'cursor.execute(query)',
-                'confidence': 0.9,
-                'verdict': 'confirmed',
-                'verification_method': 'resume-checkpoint',
-                'verification_result': {'verdict': 'confirmed'},
-                'references': ['https://example.com/advisory'],
-            }
-        ],
-    )
-
-    assert persisted == 1
-    assert db.added == []
-    assert existing.is_verified is True
-    assert existing.status == 'verified'
-    assert existing.severity == 'high'
-    assert existing.ai_confidence == 0.9
-    assert existing.verification_method == 'resume-checkpoint'
-    assert existing.references == ['https://example.com/advisory']
-    assert existing.finding_metadata['merge_count'] == 1
-    db.commit.assert_awaited_once()
+    assert captured.value.status_code == 400

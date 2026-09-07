@@ -334,7 +334,9 @@ class AgentFinding(Base):
     task_id = Column(String(36), ForeignKey("agent_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     
     # 漏洞基本信息
-    vulnerability_type = Column(String(100), nullable=False, index=True)
+    # PR 新写路径以 category 为规范语义；旧列仅保留历史数据/API 兼容读取。
+    category = Column(String(100), nullable=True, index=True)
+    vulnerability_type = Column(String(100), nullable=True, index=True)
     severity = Column(String(20), nullable=False, index=True)
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)
@@ -409,13 +411,13 @@ class AgentFinding(Base):
     task = relationship("AgentTask", back_populates="findings")
     
     def __repr__(self):
-        return f"<AgentFinding {self.vulnerability_type} - {self.severity} - {self.file_path}>"
+        return f"<AgentFinding {self.category or self.vulnerability_type} - {self.severity} - {self.file_path}>"
     
     def generate_fingerprint(self) -> str:
         """生成去重指纹"""
         import hashlib
         components = [
-            self.vulnerability_type or "",
+            self.category or self.vulnerability_type or "",
             self.file_path or "",
             str(self.line_start or 0),
             self.function_name or "",
@@ -429,6 +431,7 @@ class AgentFinding(Base):
         return {
             "id": self.id,
             "task_id": self.task_id,
+            "category": self.category,
             "vulnerability_type": self.vulnerability_type,
             "severity": self.severity,
             "title": self.title,

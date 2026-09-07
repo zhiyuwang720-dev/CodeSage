@@ -79,7 +79,10 @@ export interface AgentTask {
 export interface RecoveredCandidate {
   title: string;
   severity: string;
-  vulnerability_type: string;
+  /** PR 审查规范类别；历史记录可能为空。 */
+  category?: string | null;
+  /** 仅用于历史漏洞记录兼容。 */
+  vulnerability_type?: string | null;
   description?: string | null;
   file_path?: string | null;
   line_start?: number | null;

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import socket
 from dataclasses import dataclass
@@ -14,20 +13,14 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.db.session import async_session_factory
+from app.db.session import get_pr_review_sync_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.services.agent.prompts.review_prompts import (
     REVIEW_ARCHITECTURE_PROMPT,
     REVIEW_QUALITY_PROMPT,
     REVIEW_SECURITY_PROMPT,
 )
-from app.services.contracts.review_execution import (
-    ReviewRunIdentity,
-    ArtifactRef,
-    ExecutionContext,
-    build_config_fingerprint,
-    sha256_bytes,
-)
-from app.services.pr_review.artifacts import LocalReviewArtifactStore
+from app.services.contracts.review_execution import ExecutionContext
 from app.services.pr_review.execution_ownership import (
     ActiveLeaseError,
     CancelRequestedError,
@@ -38,6 +31,7 @@ from app.services.pr_review.execution_ownership import (
     current_execution_context,
 )
 from app.services.pr_review.orchestrator import TOOL_MATRICES
+from app.services.pr_review.inputs import initialize_or_resume_review_input
 
 
 QuickRunner = Callable[[str], Awaitable[None]]
@@ -46,11 +40,13 @@ QuickRunner = Callable[[str], Awaitable[None]]
 @dataclass
 class QuickReviewDependencies:
     session_factory: Callable[[], Any] = async_session_factory
+    sync_session_factory: Callable[[], Any] = get_pr_review_sync_session_factory
     runner: QuickRunner | None = None
     worker_id: str | None = None
     artifact_root: str | None = None
     observer: Callable[[dict[str, Any]], Any] | None = None
     llm_service: Any | None = None
+    event_stream_factory: Callable[[], Any] | None = None
     heartbeat_interval: float = 5.0
 
 
@@ -63,7 +59,7 @@ def _worker_id(explicit: str | None) -> str:
     return explicit or f"{socket.gethostname()}:{os.getpid()}"
 
 
-def _compatibility_config(task: AgentTask) -> dict[str, Any]:
+def build_review_compatibility_config(task: AgentTask) -> dict[str, Any]:
     llm = dict(task.llm_config or {})
     compatibility_fields = (
         "provider",
@@ -101,41 +97,6 @@ def _compatibility_config(task: AgentTask) -> dict[str, Any]:
     }
 
 
-async def build_review_identity(task: AgentTask) -> tuple[ReviewRunIdentity, bytes | None]:
-    scope = (task.audit_scope or {}).get("pr_review") or {}
-    diff_path = scope.get("diff_file_path")
-    diff_bytes: bytes | None = None
-    if diff_path:
-        diff_bytes = await asyncio.to_thread(Path(diff_path).read_bytes)
-    source_kind = "diff" if diff_bytes is not None else "git"
-    base_sha = scope.get("base_sha") or task.commit_sha
-    head_sha = scope.get("head_sha")
-    repository_key = str(
-        scope.get("repository_key")
-        or task.repository_url_snapshot
-        or task.project_id
-    )
-    identity = ReviewRunIdentity(
-        run_id=str(uuid4()),
-        task_id=str(task.id),
-        source_kind=source_kind,
-        repository_key=repository_key,
-        pr_number=scope.get("pr_number"),
-        base_sha=base_sha,
-        head_sha=head_sha,
-        diff_sha256=sha256_bytes(diff_bytes or b""),
-        config_fingerprint=build_config_fingerprint(_compatibility_config(task)),
-    )
-    return identity, diff_bytes
-
-
-async def _default_runner(task_id: str) -> None:
-    # 兼容包装只保留在此处；worker 不再直接反向导入 API 私有实现。
-    from app.api.v1.endpoints.agent_tasks import _execute_agent_task_impl
-
-    await _execute_agent_task_impl(task_id)
-
-
 async def _heartbeat(
     lease: ExecutionLease,
     dependencies: QuickReviewDependencies,
@@ -167,39 +128,16 @@ async def execute_quick_review(
             raise ValueError(f"Task not found: {task_id}")
         if task.status == AgentTaskStatus.COMPLETED:
             return AgentTaskStatus.COMPLETED
-        candidate, diff_bytes = await build_review_identity(task)
-        persisted = await review_execution_ownership.load_identity(db, task_id)
-        if persisted is None:
-            identity = candidate
-            execution_row = await review_execution_ownership.initialize(
-                db, identity, delivery_id=delivery
-            )
-            identity = ReviewRunIdentity.model_validate(execution_row.identity_json)
-            artifact_store = LocalReviewArtifactStore(
+        prepared = await initialize_or_resume_review_input(
+            db,
+            task,
+            compatibility_config=build_review_compatibility_config(task),
+            artifact_root=(
                 deps.artifact_root
                 or str(Path(settings.MANAGED_PROJECTS_ROOT) / ".review_artifacts")
-            )
-            if diff_bytes is not None:
-                input_ref = artifact_store.write_bytes(
-                    run_id=identity.run_id,
-                    kind="input_diff",
-                    relative_path="input/review.diff",
-                    content=diff_bytes,
-                    media_type="text/x-diff",
-                )
-                agent_config = dict(task.agent_config or {})
-                agent_config["review_execution_artifact_root"] = str(artifact_store.root)
-                agent_config["review_execution_input_artifact"] = input_ref.model_dump(mode="json")
-                task.agent_config = agent_config
-                await db.commit()
-        else:
-            await review_execution_ownership.validate_resume_identity(db, candidate)
-            config = dict(task.agent_config or {})
-            root = config.get("review_execution_artifact_root")
-            raw_ref = config.get("review_execution_input_artifact")
-            if not root or not raw_ref:
-                raise ValueError("恢复任务缺少可信输入 ArtifactRef，请创建新任务")
-            LocalReviewArtifactStore(root).read_verified(ArtifactRef.model_validate(raw_ref))
+            ),
+            delivery_id=delivery,
+        )
         try:
             lease = await review_execution_ownership.claim(
                 db,
@@ -236,7 +174,7 @@ async def execute_quick_review(
         Path(deps.artifact_root or settings.MANAGED_PROJECTS_ROOT) / ".review_artifacts"
     ) if deps.artifact_root is None else str(Path(deps.artifact_root).resolve())
     execution_context = ExecutionContext(
-        identity=lease.identity,
+            identity=prepared.identity,
         attempt_id=lease.attempt_id,
         worker_id=lease.worker_id,
         lease_epoch=lease.lease_epoch,
@@ -249,7 +187,22 @@ async def execute_quick_review(
     lease_token = current_execution_lease.set(lease)
     context_token = current_execution_context.set(execution_context)
     llm_token = current_review_llm_service.set(deps.llm_service)
-    run_task = asyncio.create_task((deps.runner or _default_runner)(task_id))
+    if deps.runner is not None:
+        review_coro = deps.runner(task_id)
+    else:
+        from app.services.pr_review.dependencies import ReviewUseCaseDependencies
+        from app.services.pr_review.quick_review import execute_review_use_case
+
+        review_coro = execute_review_use_case(
+            task_id,
+            ReviewUseCaseDependencies(
+                async_session_factory=deps.session_factory,
+                sync_session_factory=deps.sync_session_factory,
+                llm_service=deps.llm_service,
+                event_stream_factory=deps.event_stream_factory,
+            ),
+        )
+    run_task = asyncio.create_task(review_coro)
     heartbeat = asyncio.create_task(_heartbeat(lease, deps, run_task))
     try:
         done, _ = await asyncio.wait(

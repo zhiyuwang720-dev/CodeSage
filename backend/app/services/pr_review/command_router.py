@@ -20,6 +20,7 @@ from .paths import review_path
 from .plain_diff_importer import import_plain_diff
 from .rules import run_rules
 from .synthesizer import finding_to_comment, synthesize
+from app.services.contracts.final_review_contract import ReviewFinding
 
 
 class ReviewResult:
@@ -29,6 +30,7 @@ class ReviewResult:
         pr_key: str,
         status: str,
         comments: list[ReviewComment] | None = None,
+        findings: list[ReviewFinding] | None = None,
         context_path: str | None = None,
         meta: dict | None = None,
     ):
@@ -36,6 +38,7 @@ class ReviewResult:
         self.pr_key = pr_key
         self.status = status
         self.comments = comments or []
+        self.findings = findings or []
         self.context_path = context_path
         self.meta = meta or {}
 
@@ -45,6 +48,7 @@ class ReviewResult:
             "pr_key": self.pr_key,
             "status": self.status,
             "comments": [c.model_dump() for c in self.comments],
+            "findings": [f.model_dump(mode="json") for f in self.findings],
             "context_path": self.context_path,
             "meta": self.meta,
         }
@@ -152,6 +156,7 @@ def run_review_pipeline(
         pr_key=imported.pr_key,
         status="completed",
         comments=comments,
+        findings=synthesis.comments,
         context_path=str(ctx.pr_key),
         meta={
             "engine": "rules",
@@ -279,6 +284,7 @@ async def run_review_pipeline_async(
         pr_key=imported.pr_key,
         status="completed",
         comments=comments,
+        findings=list(getattr(review, "comments", [])),
         context_path=str(ctx.pr_key),
         meta={"engine": "runtime", **review.to_result_dict()},
     )

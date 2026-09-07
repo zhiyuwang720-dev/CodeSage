@@ -154,7 +154,8 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
         "task_id": finding.task_id,
         "title": finding.title,
         "severity": str(finding.severity),
-        "finding_type": str(finding.vulnerability_type),
+        "finding_type": str(finding.category or finding.vulnerability_type or "uncategorized"),
+        "category": finding.category,
         "description": finding.description,
         "file_path": finding.file_path,
         "line_start": finding.line_start,
@@ -225,7 +226,14 @@ async def build_report_payload(
     def _finding_item(item: Dict[str, Any]) -> ReportFindingItem:
         # 过渡期: raw dict 可能仍是 vulnerability_type 键, 归一化到审计语义 finding_type。
         normalized = dict(item)
-        normalized.setdefault("finding_type", str(normalized.get("vulnerability_type") or "other"))
+        normalized.setdefault(
+            "finding_type",
+            str(
+                normalized.get("category")
+                or normalized.get("vulnerability_type")
+                or "uncategorized"
+            ),
+        )
         return ReportFindingItem(**normalized)
 
     pr_meta = (task.agent_config or {}).get("pr_meta") or {}
