@@ -126,11 +126,12 @@ class Settings(BaseSettings):
     AGENT_EVENT_QUEUE_MAX_SIZE: int = 1000
     AGENT_TOKEN_EVENT_CHUNK_SIZE: int = 20
     AGENT_TOKEN_EVENT_FLUSH_INTERVAL_MS: int = 100
-    AGENT_TASK_EXECUTION_MODE: str = "inline"
+    AGENT_TASK_EXECUTION_MODE: str = "worker"
     AGENT_TASK_QUEUE_NAME: str = "CodeSage:arq:agent_tasks"
     AGENT_WORKER_CONCURRENCY: int = 2
-    AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 3600
-    AGENT_WORKER_MAX_TRIES: int = 2
+    # ARQ 在 worker 进程硬退出后按 job timeout 重新投递；60s 保证单消息 90s 内接管。
+    AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 60
+    AGENT_WORKER_MAX_TRIES: int = 3
     AGENT_EVENT_STREAM_ENABLED: bool = False
     AGENT_EVENT_STREAM_MAXLEN: int = 5000
     AGENT_EVENT_STREAM_BLOCK_MS: int = 15000

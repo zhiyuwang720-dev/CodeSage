@@ -9,7 +9,12 @@ AGENT_TASK_JOB_NAME = "execute_agent_task"
 
 
 def should_use_worker_queue() -> bool:
-    return str(settings.AGENT_TASK_EXECUTION_MODE).strip().lower() == "worker"
+    mode = str(settings.AGENT_TASK_EXECUTION_MODE).strip().lower()
+    if mode != "worker":
+        raise RuntimeError(
+            "AGENT_TASK_EXECUTION_MODE 仅支持 worker；请启动 Redis 与 CodeSage worker"
+        )
+    return True
 
 
 class AgentTaskQueue:

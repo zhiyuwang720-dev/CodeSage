@@ -53,11 +53,12 @@ async def test_agent_task_queue_uses_delivery_id_for_manual_resume():
     ]
 
 
-def test_should_use_worker_queue_only_for_worker_mode(monkeypatch):
+def test_should_use_worker_queue_rejects_legacy_inline_mode(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "AGENT_TASK_EXECUTION_MODE", "worker")
     assert should_use_worker_queue() is True
 
     monkeypatch.setattr(settings, "AGENT_TASK_EXECUTION_MODE", "inline")
-    assert should_use_worker_queue() is False
+    with pytest.raises(RuntimeError, match="仅支持 worker"):
+        should_use_worker_queue()

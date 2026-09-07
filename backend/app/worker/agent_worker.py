@@ -47,9 +47,9 @@ async def run_worker() -> None:
 async def execute_agent_task_job(
     ctx: dict[str, Any], task_id: str, delivery_id: str | None = None
 ) -> str:
-    del ctx
     logger.info("Agent worker picked task %s", task_id)
-    result = await execute_agent_task(task_id, delivery_id=delivery_id)
+    executor = ctx.get("execute_agent_task", execute_agent_task)
+    result = await executor(task_id, delivery_id=delivery_id)
     if result == "already_owned":
         from app.services.pr_review.execution_ownership import LEASE_SECONDS
 
