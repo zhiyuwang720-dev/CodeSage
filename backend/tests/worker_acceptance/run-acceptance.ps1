@@ -70,6 +70,9 @@ try {
     $testProcess = Start-Process -FilePath "python" -ArgumentList @(
         "-m", "pytest", "tests/worker_acceptance", "-q"
     ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    # 回归套件验证本地调度语义，不得继承上方 Harness 的 worker-only 开关。
+    $env:AGENT_TASK_EXECUTION_MODE = "local"
+    $env:CODESAGE_WORKER_ACCEPTANCE = "0"
     $regressionStdout = Join-Path $artifactRoot "regression.stdout.log"
     $regressionStderr = Join-Path $artifactRoot "regression.stderr.log"
     $regressionProcess = Start-Process -FilePath "python" -ArgumentList @(
