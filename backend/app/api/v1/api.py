@@ -13,7 +13,6 @@ from app.api.v1.endpoints import (
     config,
     members,
     projects,
-    pr_reviews,
     pr_webhook,
     prompts,
     report_templates,
@@ -38,4 +37,3 @@ api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(report_templates.router, prefix="/report-templates", tags=["report-templates"])
 # 阶段 01: PR 审查输入层
 api_router.include_router(pr_webhook.router, prefix="/pr-webhook", tags=["pr-webhook"])
-api_router.include_router(pr_reviews.router, prefix="/pr-reviews", tags=["pr-reviews"])

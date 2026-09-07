@@ -34,22 +34,3 @@ export interface ReviewFinding extends ReviewComment {
   /** 视角标记(spec 03 分视角归因) */
   source?: ReviewPerspective;
 }
-
-export interface PrReviewCreatePayload {
-  pr_url?: string;
-  diff_text?: string;
-  engine?: "rules" | "runtime";
-  options?: Record<string, unknown>;
-}
-
-export interface PrReviewJob {
-  review_id: string;
-  pr_key: string;
-  status: "running" | "completed" | "failed";
-}
-
-export interface PrReviewResult {
-  status: string;
-  comments: ReviewComment[];
-  meta?: Record<string, unknown>;
-}
