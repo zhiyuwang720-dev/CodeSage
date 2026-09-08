@@ -1,0 +1,1 @@
+"""Pure business domains."""

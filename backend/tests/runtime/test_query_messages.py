@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.runtime.query_messages import normalize_messages_for_model
+from app.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.execution_plane.runtime.query_messages import normalize_messages_for_model
 
 
 def test_normalize_messages_for_model_drops_empty_synthetic_and_merges_plain_user_messages():

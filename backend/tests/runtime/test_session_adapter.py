@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditMemoryKind
-from app.services.runtime.adapters.session import RuntimeSessionAdapter
-from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord, RuntimeMessageRole, RuntimeStopReason, TranscriptItem
-from app.services.contracts.query_state import QueryLoopState
-from app.services.session.store import AuditSessionStore
+from app.execution_plane.runtime.adapters.session import RuntimeSessionAdapter
+from app.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord, RuntimeMessageRole, RuntimeStopReason, TranscriptItem
+from app.contracts.query_state import QueryLoopState
+from app.execution_plane.session.store import AuditSessionStore
 
 
 class FakeRunner:

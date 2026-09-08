@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.tooling.runtime import match_runtime_event_hooks
+from app.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.tool_gateway.runtime import match_runtime_event_hooks
 
 
 def collect_turn_hook_events(*, checkpoints: Iterable[Any], turn_id: str | None) -> list[dict[str, Any]]:

@@ -4,10 +4,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.session.store import AuditSessionStore
-from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
-from app.services.tooling.registry import build_runtime_tool_registry
-from app.services.tooling.runtime import ToolExecutionContext
+from app.execution_plane.session.store import AuditSessionStore
+from app.tool_gateway.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.tool_gateway.registry import build_runtime_tool_registry
+from app.tool_gateway.runtime import ToolExecutionContext
 
 
 def build_store() -> AuditSessionStore:

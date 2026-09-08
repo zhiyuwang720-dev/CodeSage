@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
 
-from app.services.contracts.models import RuntimeMessageRole, ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord, TranscriptItem
-from app.services.runtime.query_stop_hooks import build_stop_hook_artifact_messages, evaluate_post_tool_hooks, evaluate_stop_hooks
+from app.contracts.models import RuntimeMessageRole, ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord, TranscriptItem
+from app.execution_plane.runtime.query_stop_hooks import build_stop_hook_artifact_messages, evaluate_post_tool_hooks, evaluate_stop_hooks
 
 
 class FakeExecutorRuntime:

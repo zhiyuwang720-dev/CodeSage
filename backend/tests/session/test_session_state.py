@@ -4,8 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.session.store import AuditSessionStore
-from app.services.session.state import (
+from app.execution_plane.session.store import AuditSessionStore
+from app.contracts.session_state import (
     AgentRuntimeState,
     InvokedSkillState,
     SessionRuntimeState,

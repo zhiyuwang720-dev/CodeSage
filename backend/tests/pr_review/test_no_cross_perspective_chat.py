@@ -2,8 +2,8 @@
 import asyncio
 import inspect
 
-from app.services.agent.prompts.review_prompts import build_followup_prompt
-from app.services.pr_review.orchestrator import TOOL_MATRICES, ReviewOrchestrator
+from app.domains.pr_review.prompts import build_followup_prompt
+from app.domains.pr_review.orchestrator import TOOL_MATRICES, ReviewOrchestrator
 
 DIFF = """diff --git a/a.py b/a.py
 --- a/a.py

@@ -3,8 +3,8 @@
 背景: agents 在缺源码的 plain-diff 工作区里产出的多是 medium/low 置信度 findings,
 runtime 默认 high 会把它们全滤掉 → 空评论像"没干活"(审计数据证实)。用户拍板 runtime 默认 low。
 """
-from app.services.pr_review import command_router as cr
-from app.services.pr_review.synthesizer import SynthesisResult
+from app.execution_plane.review import command_router as cr
+from app.domains.pr_review.synthesizer import SynthesisResult
 
 DIFF = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n"
 

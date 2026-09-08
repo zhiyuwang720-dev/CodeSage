@@ -9,8 +9,8 @@ from arq.connections import RedisSettings
 from arq.worker import Retry, func
 
 from app.core.config import settings
-from app.services.agent.task_executor import execute_agent_task
-from app.services.agent.task_queue import AGENT_TASK_JOB_NAME
+from app.execution_plane.task_executor import execute_agent_task
+from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ async def execute_agent_task_job(
     executor = ctx.get("execute_agent_task", execute_agent_task)
     result = await executor(task_id, delivery_id=delivery_id)
     if result == "already_owned":
-        from app.services.pr_review.execution_ownership import LEASE_SECONDS
+        from app.control_plane.execution_ownership import LEASE_SECONDS
 
         raise Retry(defer=LEASE_SECONDS + 1)
     return result

@@ -8,9 +8,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditToolCallStatus
-from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload
-from app.services.session.store import AuditSessionStore
-from app.services.tooling.runtime import (
+from app.contracts.models import ToolCallRequest, ToolExecutionPayload
+from app.execution_plane.session.store import AuditSessionStore
+from app.tool_gateway.runtime import (
     RuntimeTool,
     ToolExecutionContext,
     ToolOrchestrator,

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from io import StringIO
 
-from app.services.pr_review.progress import RuntimeProgressSink
-from app.services.pr_review.runtime_dispatcher import tag_event_sink
+from app.execution_plane.review.progress import RuntimeProgressSink
+from app.execution_plane.review.runtime_dispatcher import tag_event_sink
 
 
 def test_sink_prints_turn_and_retry_lines():
@@ -98,8 +98,8 @@ async def test_dispatcher_forwards_tagged_events_to_sink(monkeypatch):
     """
     from types import SimpleNamespace
 
-    import app.services.runtime.bridge as bridge_mod
-    from app.services.pr_review.runtime_dispatcher import RuntimePerspectiveDispatcher
+    import app.execution_plane.runtime.bridge as bridge_mod
+    from app.execution_plane.review.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class Recorder:
         def __init__(self) -> None:
@@ -169,7 +169,7 @@ async def test_dispatcher_forwards_tagged_events_to_sink(monkeypatch):
 def _run_cli_main(monkeypatch, tmp_path, *extra_args: str):
     """用 fake 异步 pipeline 跑 app.cli.main, 返回 fake 收到的 options。"""
     import app.cli as cli
-    from app.services.pr_review import command_router
+    from app.execution_plane.review import command_router
 
     captured: dict = {}
 
@@ -195,7 +195,7 @@ def _run_cli_main(monkeypatch, tmp_path, *extra_args: str):
 
 
 def test_cli_progress_flag_injects_sink(monkeypatch, tmp_path):
-    from app.services.pr_review.progress import RuntimeProgressSink
+    from app.execution_plane.review.progress import RuntimeProgressSink
 
     captured = _run_cli_main(monkeypatch, tmp_path, "--progress")
     assert isinstance(captured["event_sink"], RuntimeProgressSink)

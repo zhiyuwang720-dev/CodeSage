@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.utils.repo_utils import parse_repository_url
 from app.models.project import Project
-from app.services.llm.service import LLMService
+from app.execution_plane.models.service import LLMService
 from app.core.config import settings
 
 

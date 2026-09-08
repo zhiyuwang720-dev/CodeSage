@@ -1,5 +1,5 @@
 """spec §6 test_context_git_history: git log 提取提交/作者/意图摘要正确。"""
-from app.services.pr_review.context_collector import collect_git_history
+from app.domains.pr_review.context_collector import collect_git_history
 
 
 def test_git_history_basic(fixture_repo):

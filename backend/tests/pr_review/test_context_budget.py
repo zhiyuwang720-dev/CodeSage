@@ -1,6 +1,6 @@
 """spec §6 test_context_budget: 相关文件超预算 → 按引用强度裁剪, 不崩溃。"""
-from app.services.pr_review.context_collector import collect_related_files
-from app.services.pr_review.diff_importer import extract_diff
+from app.domains.pr_review.context_collector import collect_related_files
+from app.domains.pr_review.diff_importer import extract_diff
 
 
 def test_budget_trim_no_crash(fixture_repo):

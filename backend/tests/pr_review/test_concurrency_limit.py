@@ -1,5 +1,5 @@
 """spec §6 test_concurrency_limit: 同 PR 并发事件第二个等待/丢弃(内存守卫接入)。"""
-from app.services.pr_review.webhook_guard import WebhookGuard
+from app.domains.pr_review.webhook_guard import WebhookGuard
 
 
 def test_same_pr_concurrency_capped():

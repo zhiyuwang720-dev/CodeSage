@@ -1,7 +1,7 @@
 """spec §6 test_guided_followup: 矛盾时同 session 续跑一轮补充证据; >2 轮被拒。"""
 import asyncio
 
-from app.services.pr_review.orchestrator import MAX_FOLLOWUPS_PER_PERSPECTIVE, ReviewOrchestrator
+from app.domains.pr_review.orchestrator import MAX_FOLLOWUPS_PER_PERSPECTIVE, ReviewOrchestrator
 
 DIFF = """diff --git a/a.py b/a.py
 --- a/a.py

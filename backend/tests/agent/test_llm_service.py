@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from app.services.agent.core.errors import LLMConnectionError, LLMRateLimitError
-from app.services.llm.service import LLMService
+from app.execution_plane.models.errors import LLMConnectionError, LLMRateLimitError
+from app.execution_plane.models.service import LLMService
 
 
 class _ConcurrencyProbeAdapter:
@@ -192,7 +192,7 @@ async def test_llm_service_respects_user_configured_llm_concurrency(monkeypatch)
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     await asyncio.gather(
         service.chat_completion(messages=[{"role": "user", "content": "first"}]),
@@ -219,7 +219,7 @@ async def test_llm_service_retries_rate_limit_errors(monkeypatch):
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     result = await service.chat_completion(messages=[{"role": "user", "content": "retry me"}])
 
@@ -240,7 +240,7 @@ async def test_llm_service_passes_tools_and_parallel_tool_calls(monkeypatch):
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     result = await service.chat_completion(
         messages=[{"role": "user", "content": "use tools"}],
@@ -300,7 +300,7 @@ async def test_llm_service_chat_completion_stream_preserves_provider_tool_call_e
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(
@@ -342,7 +342,7 @@ async def test_llm_service_chat_completion_stream_retries_connection_failures_be
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(
@@ -371,7 +371,7 @@ async def test_llm_service_chat_completion_stream_can_disable_internal_retry(mon
             }
         }
     )
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(
@@ -398,7 +398,7 @@ async def test_llm_service_chat_completion_stream_retries_unknown_empty_error_be
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(
@@ -424,7 +424,7 @@ async def test_llm_service_chat_completion_stream_does_not_retry_after_reasoning
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(
@@ -450,7 +450,7 @@ async def test_llm_service_chat_completion_stream_returns_error_after_three_conn
         }
     )
 
-    monkeypatch.setattr("app.services.llm.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
 
     events = []
     async for event in service.chat_completion_stream(

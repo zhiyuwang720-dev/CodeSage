@@ -1,6 +1,6 @@
 """spec §6 test_importer: 本地 fixture 仓库 clone 成功, 持久化目录结构正确。"""
-from app.services.pr_review.diff_importer import import_github_pr
-from app.services.pr_review.paths import diff_path, repo_dir
+from app.domains.pr_review.diff_importer import import_github_pr
+from app.domains.pr_review.paths import diff_path, repo_dir
 
 
 def test_local_fixture_clone_to_persistent_dir(fixture_repo):

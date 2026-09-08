@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.pr_review.plain_diff_importer import import_plain_diff
+from app.domains.pr_review.plain_diff_importer import import_plain_diff
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 

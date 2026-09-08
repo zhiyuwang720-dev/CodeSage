@@ -6,10 +6,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.contracts.models import ToolExecutionPayload
-from app.services.session.store import AuditSessionStore
-from app.services.tooling.runtime import ToolExecutionContext, ToolRegistry, build_runtime_tool
-from app.services.tooling.search import ToolSearchInput, ToolSearchRuntimeTool
+from app.contracts.models import ToolExecutionPayload
+from app.execution_plane.session.store import AuditSessionStore
+from app.tool_gateway.runtime import ToolExecutionContext, ToolRegistry, build_runtime_tool
+from app.tool_gateway.search import ToolSearchInput, ToolSearchRuntimeTool
 
 
 async def _noop_execute(parsed_input, context):

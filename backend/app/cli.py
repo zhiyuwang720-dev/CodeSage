@@ -18,7 +18,7 @@ import argparse
 import json
 import sys
 
-from app.services.pr_review.command_router import run_review_pipeline
+from app.execution_plane.review.command_router import run_review_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -95,19 +95,19 @@ def main(argv: list[str] | None = None) -> int:
         elif want_progress is True:
             want_live = False
         if want_live:
-            from app.services.pr_review.live_sink import LiveReviewSink
+            from app.execution_plane.review.live_sink import LiveReviewSink
 
             if tty:
                 event_sink = LiveReviewSink(sys.stderr)
             else:
                 print("警告: 输出被管道捕获, --live 回落为行进度", file=sys.stderr)
-                from app.services.pr_review.progress import RuntimeProgressSink
+                from app.execution_plane.review.progress import RuntimeProgressSink
 
                 event_sink = RuntimeProgressSink(sys.stderr)
             # 用户拍板: TUI 下默认真流式(临时关掉网关兼容开关)
             options["streaming"] = True
         elif want_progress:
-            from app.services.pr_review.progress import RuntimeProgressSink
+            from app.execution_plane.review.progress import RuntimeProgressSink
 
             event_sink = RuntimeProgressSink(sys.stderr)
 
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.engine == "runtime":
             import asyncio
 
-            from app.services.pr_review.command_router import run_review_pipeline_async
+            from app.execution_plane.review.command_router import run_review_pipeline_async
 
             result = asyncio.run(
                 run_review_pipeline_async(

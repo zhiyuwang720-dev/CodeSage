@@ -6,12 +6,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.contracts.models import ToolCallRequest
-from app.services.session.store import AuditSessionStore
-from app.services.tooling.runtime import ToolOrchestrator, ToolRegistry
-from app.services.tooling.interactive.ask_user import AskUserRuntimeTool
-from app.services.tooling.interactive.plan_mode import EnterPlanModeRuntimeTool, ExitPlanModeRuntimeTool
-from app.services.tooling.interactive.todo import TodoWriteRuntimeTool
+from app.contracts.models import ToolCallRequest
+from app.execution_plane.session.store import AuditSessionStore
+from app.tool_gateway.runtime import ToolOrchestrator, ToolRegistry
+from app.tool_gateway.interactive.ask_user import AskUserRuntimeTool
+from app.tool_gateway.interactive.plan_mode import EnterPlanModeRuntimeTool, ExitPlanModeRuntimeTool
+from app.tool_gateway.interactive.todo import TodoWriteRuntimeTool
 
 
 def build_store() -> AuditSessionStore:

@@ -22,7 +22,7 @@ from app.models.checkpoint import AuditStageORM
 from app.models.project import Project
 from app.models.review_execution import ReviewExecutionRun
 from app.models.user import User
-from app.services.pr_review.lifecycle import task_lifecycle_service
+from app.control_plane.lifecycle import task_lifecycle_service
 
 
 pytestmark = pytest.mark.skipif(

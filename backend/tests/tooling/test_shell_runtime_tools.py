@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import asyncio
 
-from app.services.session.store import AuditSessionStore
+from app.execution_plane.session.store import AuditSessionStore
 from app.db.base import Base
-from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
-from app.services.tooling.registry import build_runtime_tool_registry
-from app.services.permission.guardrails import register_shell_approval
-from app.services.tooling.shell import (
+from app.tool_gateway.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.tool_gateway.registry import build_runtime_tool_registry
+from app.tool_gateway.permission.guardrails import register_shell_approval
+from app.tool_gateway.shell import (
     BashRuntimeTool,
     BashToolInput,
     PowerShellRuntimeTool,
     PowerShellToolInput,
 )
-from app.services.tooling.runtime import ToolExecutionContext
+from app.tool_gateway.runtime import ToolExecutionContext
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -96,7 +96,7 @@ def test_bash_runtime_tool_matches_restored_style_metadata_and_safety_flags():
 
 
 def test_bash_runtime_tool_executes_with_backend_tool_when_present(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     backend = FakeExecBackend()
     tool = BashRuntimeTool(project_root="D:/repo", backend_tool=backend, executable=None)
 
@@ -132,9 +132,9 @@ def test_powershell_runtime_tool_matches_restored_style_metadata_and_safety_flag
 
 
 def test_runtime_tool_registry_adds_shell_tools_when_shell_backends_are_available(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
-    monkeypatch.setattr("app.services.tooling.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
-    monkeypatch.setattr("app.services.tooling.registry.is_powershell_runtime_tool_enabled", lambda: True)
+    monkeypatch.setattr("app.tool_gateway.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
+    monkeypatch.setattr("app.tool_gateway.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    monkeypatch.setattr("app.tool_gateway.registry.is_powershell_runtime_tool_enabled", lambda: True)
 
     registry = build_runtime_tool_registry(
         session_store=_store(),
@@ -150,7 +150,7 @@ def test_runtime_tool_registry_adds_shell_tools_when_shell_backends_are_availabl
 
 
 def test_bash_runtime_tool_requires_approval_for_mutating_commands_when_guardrails_are_enabled(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -171,7 +171,7 @@ def test_bash_runtime_tool_requires_approval_for_mutating_commands_when_guardrai
 
 
 def test_bash_runtime_tool_allows_session_approved_mutating_command(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -196,7 +196,7 @@ def test_bash_runtime_tool_allows_session_approved_mutating_command(monkeypatch)
 
 
 def test_bash_runtime_tool_requires_approval_for_destructive_commands_when_guardrails_are_enabled(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -217,7 +217,7 @@ def test_bash_runtime_tool_requires_approval_for_destructive_commands_when_guard
 
 
 def test_bash_runtime_tool_allows_destructive_commands_when_guardrails_are_disabled(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     tool = BashRuntimeTool(project_root="D:/repo", backend_tool=FakeExecBackend(), executable=None, session_store=store)
@@ -233,7 +233,7 @@ def test_bash_runtime_tool_allows_destructive_commands_when_guardrails_are_disab
 
 
 def test_bash_runtime_tool_requires_approval_for_commands_targeting_paths_outside_project_root(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -254,7 +254,7 @@ def test_bash_runtime_tool_requires_approval_for_commands_targeting_paths_outsid
 
 
 def test_bash_runtime_tool_consumes_single_use_shell_approval_after_first_execution(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)
@@ -301,7 +301,7 @@ def test_bash_runtime_tool_consumes_single_use_shell_approval_after_first_execut
 
 
 def test_bash_runtime_tool_keeps_session_scope_shell_approval_reusable(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.shell.detect_bash_executable", lambda: None)
+    monkeypatch.setattr("app.tool_gateway.shell.detect_bash_executable", lambda: None)
     store = _store()
     session_id = store.create_session(project_id="project-1")
     runtime_state = store.load_runtime_state(session_id)

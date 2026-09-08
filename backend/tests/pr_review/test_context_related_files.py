@@ -1,6 +1,6 @@
 """spec §6 test_context_related_files: diff 引用分析命中调用方与测试文件。"""
-from app.services.pr_review.context_collector import collect_related_files
-from app.services.pr_review.diff_importer import extract_diff
+from app.domains.pr_review.context_collector import collect_related_files
+from app.domains.pr_review.diff_importer import extract_diff
 
 
 def test_related_files_includes_caller_and_test(fixture_repo):

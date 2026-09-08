@@ -4,8 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.services.contracts.models import ToolExecutionPayload
-from app.services.contracts.tools import RuntimeTool, ToolExecutionContext
+from app.contracts.models import ToolExecutionPayload
+from app.contracts.tools import RuntimeTool, ToolExecutionContext
 from app.services.skill.facade import SkillService
 from app.services.skill.runtime import SkillInvocationRuntime
 

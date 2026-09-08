@@ -1,5 +1,5 @@
 """spec §6 test_rules_engine: 规则命中/误报样例(移植 evoagent 规则 + 扩充)。"""
-from app.services.pr_review.rules import RULES, run_rules
+from app.domains.pr_review.rules import RULES, run_rules
 
 DIFF = """diff --git a/worker.py b/worker.py
 --- a/worker.py
@@ -51,7 +51,7 @@ def test_rule_registry_expandable():
     """规则表可扩充: 追加自定义规则即刻生效。"""
     import re
 
-    from app.services.pr_review.rules import Rule
+    from app.domains.pr_review.rules import Rule
 
     custom = Rule(
         rule_id="TEAM-NO-GOTO", severity="low", category="bug",

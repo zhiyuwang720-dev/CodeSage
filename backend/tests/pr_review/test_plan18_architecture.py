@@ -23,6 +23,6 @@ def test_services_and_worker_do_not_import_api_layer():
 
 
 def test_default_execution_path_targets_service_use_case():
-    source = (ROOT / "services" / "pr_review" / "execution.py").read_text(encoding="utf-8")
+    source = (ROOT / "execution_plane" / "review" / "execution.py").read_text(encoding="utf-8")
     assert "app.api" not in source
     assert "execute_review_use_case" in source

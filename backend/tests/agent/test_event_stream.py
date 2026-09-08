@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.agent.event_stream import RedisAgentEventStream
+from app.infrastructure.messaging.event_stream import RedisAgentEventStream
 
 
 class _FakeRedisStreamClient:

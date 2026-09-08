@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.agent import task_executor
+from app.execution_plane import task_executor
 
 
 class _FakeRunner:

@@ -3,8 +3,8 @@ import sys
 
 import pytest
 
-from app.services.llm.adapters.litellm_adapter import LiteLLMAdapter
-from app.services.llm.types import LLMConfig, LLMMessage, LLMProvider, LLMRequest
+from app.execution_plane.models.adapters.litellm_adapter import LiteLLMAdapter
+from app.execution_plane.models.types import LLMConfig, LLMMessage, LLMProvider, LLMRequest
 
 
 class _FunctionDelta:

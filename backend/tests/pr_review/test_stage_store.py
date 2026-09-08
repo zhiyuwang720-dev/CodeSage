@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.services.contracts.checkpoint import AuditStage, StageStatus
-from app.services.session.stage_store import AuditStageStoreImpl
+from app.contracts.checkpoint import AuditStage, StageStatus
+from app.infrastructure.persistence.stage_store import AuditStageStoreImpl
 
 store = AuditStageStoreImpl()
 
@@ -86,6 +86,21 @@ async def test_start_and_touch_session(db_session):
     await store.touch_session(db_session, task_id, "review:quality", "sess-q2")
     got = await store.get(db_session, task_id, "review:quality")
     assert got.session_id == "sess-q2"
+
+
+async def test_late_start_does_not_downgrade_completed_stage(db_session):
+    task_id = "t-late-start"
+    await store.complete(
+        db_session, task_id, "review:security", session_id="sess-complete",
+        findings=[], stats={"turn_count": 1},
+    )
+
+    stage = await store.start(
+        db_session, task_id, "review:security", session_id="sess-late"
+    )
+
+    assert stage.status == StageStatus.completed
+    assert stage.session_id == "sess-complete"
 
 
 async def test_fail_sets_error(db_session):

@@ -1,7 +1,7 @@
 """spec §6 test_diff_extraction: 生成的 diff 与 git diff 输出一致。"""
 import subprocess
 
-from app.services.pr_review.diff_importer import extract_diff, resolve_sha
+from app.domains.pr_review.diff_importer import extract_diff, resolve_sha
 
 
 def test_extract_diff_matches_git(fixture_repo):

@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from app.services.pr_review.orchestrator import ReviewOrchestrator
-from app.services.pr_review.synthesizer import finding_to_comment
+from app.domains.pr_review.orchestrator import ReviewOrchestrator
+from app.domains.pr_review.synthesizer import finding_to_comment
 
 
 def _finding(source: str, severity: str = "high", path: str = "a.py", line: int = 3, category: str = "security") -> dict:

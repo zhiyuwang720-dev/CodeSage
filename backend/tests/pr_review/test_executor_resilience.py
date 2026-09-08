@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.api.v1.endpoints.agent_tasks as endpoint
-from app.services.agent.task_executor import _running_asyncio_tasks
+from app.execution_plane.task_executor import _running_asyncio_tasks
 
 
 @pytest.mark.asyncio
 async def test_pr_review_compatibility_wrapper_delegates_to_service(monkeypatch):
     execute = AsyncMock()
     monkeypatch.setattr(
-        "app.services.pr_review.quick_review.execute_review_use_case", execute
+        "app.execution_plane.review.quick_review.execute_review_use_case", execute
     )
     await endpoint._execute_pr_review_task_impl(
         SimpleNamespace(),

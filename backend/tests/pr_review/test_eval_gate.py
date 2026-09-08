@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.pr_review.eval_gate import (
+from app.domains.pr_review.eval_gate import (
     check_gate,
     compute_metrics,
     perspective_breakdown,
@@ -166,8 +166,8 @@ def test_source_of_comment_parses_prefix():
 
 def test_cli_body_prefix_convention():
     """CLI 输出 body 以 [Rules] 等前缀开头(评测归因约定, spec §7.105)。"""
-    from app.services.pr_review.synthesizer import finding_to_comment
-    from app.services.contracts.final_review_contract import ReviewFinding
+    from app.domains.pr_review.synthesizer import finding_to_comment
+    from app.contracts.final_review_contract import ReviewFinding
 
     finding = ReviewFinding.model_validate(dict(
         rule_id="SEC-EVAL", severity="critical", category="security",

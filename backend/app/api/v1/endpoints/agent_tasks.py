@@ -33,15 +33,15 @@ from app.models.agent_task import (
     VulnerabilitySeverity, FindingStatus,
 )
 from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, AuditToolCall
-from app.services.runtime.config import RuntimeStack, coerce_runtime_stack
-from app.services.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
+from app.execution_plane.runtime.config import RuntimeStack, coerce_runtime_stack
+from app.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
 from app.models.user import User
 from app.models.user_config import UserConfig
-from app.services.agent.event_manager import EventManager
-from app.services.agent.event_stream import create_agent_event_stream, event_stream_enabled
-from app.services.agent.task_queue import enqueue_agent_task, should_use_worker_queue
-from app.services.agent.task_executor import (
+from app.infrastructure.messaging.event_manager import EventManager
+from app.infrastructure.messaging.event_stream import create_agent_event_stream, event_stream_enabled
+from app.infrastructure.messaging.task_queue import enqueue_agent_task, should_use_worker_queue
+from app.execution_plane.task_executor import (
     _cancelled_tasks,
     _running_asyncio_tasks,
     _running_tasks,
@@ -53,14 +53,14 @@ from app.services.agent.task_executor import (
 )
 from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill.file_service import SkillFileService
-from app.services.contracts.checkpoint import StageStatus
-from app.services.pr_review.orchestrator import PERSPECTIVES
-from app.services.pr_review.results import QUICK_REVIEW_STAGES
-from app.services.pr_review.execution_ownership import (
+from app.contracts.checkpoint import StageStatus
+from app.domains.pr_review.orchestrator import PERSPECTIVES
+from app.control_plane.results import QUICK_REVIEW_STAGES
+from app.control_plane.execution_ownership import (
     current_execution_lease,
     review_execution_ownership,
 )
-from app.services.session.stage_store import audit_stage_store
+from app.infrastructure.persistence.stage_store import audit_stage_store
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -534,7 +534,7 @@ FLUSH_INTERVAL_S = 2.0
 
 def _build_pr_review_event_sink(*args, **kwargs):
     """Deprecated adapter; event mapping is owned by the application service."""
-    from app.services.pr_review.execution_events import build_review_event_sink
+    from app.execution_plane.review.execution_events import build_review_event_sink
 
     return build_review_event_sink(*args, **kwargs)
 
@@ -542,7 +542,7 @@ def _build_pr_review_event_sink(*args, **kwargs):
 async def _execute_pr_review_task_impl(db, task, project, event_manager) -> None:
     """Deprecated adapter; managed execution is owned by quick_review.py."""
     del db, project, event_manager
-    from app.services.pr_review.quick_review import execute_review_use_case
+    from app.execution_plane.review.quick_review import execute_review_use_case
 
     await execute_review_use_case(str(task.id))
 
@@ -866,7 +866,7 @@ async def start_agent_task(
     project = await db.get(Project, task.project_id)
     if not project or project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    from app.services.pr_review.lifecycle import InvalidTaskStateError, task_lifecycle_service
+    from app.control_plane.lifecycle import InvalidTaskStateError, task_lifecycle_service
 
     try:
         command = await task_lifecycle_service.start(db, task_id)
@@ -1137,7 +1137,7 @@ async def resume_agent_task(
     project = await db.get(Project, task.project_id)
     if not project or project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    from app.services.pr_review.lifecycle import InvalidTaskStateError, task_lifecycle_service
+    from app.control_plane.lifecycle import InvalidTaskStateError, task_lifecycle_service
 
     try:
         command = await task_lifecycle_service.resume(db, task_id)
@@ -1171,7 +1171,7 @@ async def cancel_agent_task(
     project = await db.get(Project, task.project_id)
     if not project or project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    from app.services.pr_review.lifecycle import InvalidTaskStateError, task_lifecycle_service
+    from app.control_plane.lifecycle import InvalidTaskStateError, task_lifecycle_service
 
     try:
         await task_lifecycle_service.cancel(db, task_id)

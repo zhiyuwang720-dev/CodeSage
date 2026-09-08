@@ -12,16 +12,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.tooling.builder import build_runtime_tool_catalog
-from app.services.contracts.models import (
+from app.tool_gateway.builder import build_runtime_tool_catalog
+from app.contracts.models import (
     RuntimeMessageRole,
     RuntimeModelResponse,
     TranscriptItem,
 )
-from app.services.runtime.runner import RuntimeRunner
-from app.services.session.store import AuditSessionStore
-from app.services.tooling.registry import build_runtime_tool_registry
-from app.services.tooling.codec import build_runtime_model_messages
+from app.execution_plane.runtime.runner import RuntimeRunner
+from app.execution_plane.session.store import AuditSessionStore
+from app.tool_gateway.registry import build_runtime_tool_registry
+from app.tool_gateway.codec import build_runtime_model_messages
 
 
 def make_session_factory(tmp_path):
@@ -153,7 +153,7 @@ def build_review_runner(
         file_tools=build_runtime_tool_catalog(project_root=str(project_root)),
         agent_type=agent_type,
     )
-    from app.services.tooling.runtime import ToolOrchestrator
+    from app.tool_gateway.runtime import ToolOrchestrator
 
     orchestrator = ToolOrchestrator(session_store=session_store, tool_registry=registry)
     runner = RuntimeRunner(

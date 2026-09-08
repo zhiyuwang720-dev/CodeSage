@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_task import AgentFinding, AgentTask
 from app.models.project import Project
 from app.models.report_template import AgentTaskReport
-from app.services.contracts.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
-from app.services.contracts.report import ReportPayload, ReportPRInfo, ReportSummary, ReportFindingItem
+from app.contracts.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
+from app.contracts.report import ReportPayload, ReportPRInfo, ReportSummary, ReportFindingItem
 from app.services.report_template_file_service import ReportTemplateFileService
 
 DEFAULT_REPORT_TEMPLATE = """# CodeSage PR 审计报告

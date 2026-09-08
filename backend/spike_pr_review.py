@@ -89,7 +89,7 @@ from app.db.base import Base
 import app.models.audit_session  # noqa: F401  表: audit_sessions/messages/turns/tool_calls/checkpoints/skills/memories/handoffs/...
 
 # ── ② 运行时组装所需组件（全部是 AutoCVE 真实代码） ─────────────────────────────
-from app.services.agent.tools.shared_catalog import build_shared_agent_tool_catalog
+from app.tool_gateway.builder import build_runtime_tool_catalog as build_shared_agent_tool_catalog
 from app.services.review_runtime.models import (
     RuntimeCompletionMode,
     RuntimeMessageRole,
@@ -101,10 +101,10 @@ from app.services.review_runtime.models import (
 )
 from app.services.review_runtime.runner import FindingRuntimeRunner
 from app.services.review_runtime.session_store import AuditSessionStore
-from app.services.llm.service import LLMService
-from app.services.runtime_core.runtime_tool_registry import build_runtime_tool_registry
-from app.services.runtime_core.tool_message_codec import build_runtime_model_messages
-from app.services.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator
+from app.execution_plane.models.service import LLMService
+from app.execution_plane.runtime_core.runtime_tool_registry import build_runtime_tool_registry
+from app.execution_plane.runtime_core.tool_message_codec import build_runtime_model_messages
+from app.execution_plane.runtime_core.tool_runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator
 
 # ── ③ 自建 SQLite session factory（生产: app/db/session.py:33, 这里用内置 sqlite3 驱动） ──
 SPIKE_DB_PATH = Path(__file__).resolve().parent / "spike_phase0.db"

@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from app.services.llm.adapters.anthropic_adapter import AnthropicAdapter
-from app.services.llm.factory import LLMFactory
-from app.services.llm.adapters.litellm_adapter import LiteLLMAdapter
-from app.services.llm.types import LLMConfig, LLMMessage, LLMProvider, LLMRequest
+from app.execution_plane.models.adapters.anthropic_adapter import AnthropicAdapter
+from app.execution_plane.models.factory import LLMFactory
+from app.execution_plane.models.adapters.litellm_adapter import LiteLLMAdapter
+from app.execution_plane.models.types import LLMConfig, LLMMessage, LLMProvider, LLMRequest
 
 
 def test_llm_factory_uses_anthropic_adapter_for_anthropic_endpoint_protocol():

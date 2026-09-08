@@ -279,7 +279,7 @@ async def test_prompt_template(
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """测试提示词效果"""
-    from app.services.llm.service import LLMService
+    from app.execution_plane.models.service import LLMService
     from app.models.user_config import UserConfig
     from app.core.encryption import decrypt_sensitive_data
     

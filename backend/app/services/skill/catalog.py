@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.contracts.models import RuntimeSkillCatalogSnapshot
+from app.contracts.models import RuntimeSkillCatalogSnapshot
 from app.services.skill.facade import SkillService
 from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, build_review_skill_route_message
 

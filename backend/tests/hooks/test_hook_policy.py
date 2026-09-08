@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.services.contracts.models import RuntimeMessageRole, ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord, TranscriptItem
+from app.contracts.models import RuntimeMessageRole, ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord, TranscriptItem
 from app.services.hooks.policy import evaluate_post_tool_hook_policy, evaluate_stop_hook_policy
 
 

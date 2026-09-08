@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.agent.task_queue import AGENT_TASK_JOB_NAME, AgentTaskQueue, should_use_worker_queue
+from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME, AgentTaskQueue, should_use_worker_queue
 
 
 class _FakeArqPool:

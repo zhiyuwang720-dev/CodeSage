@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.audit_session import AuditSkillInvocationStatus
-from app.services.session.store import AuditSessionStore
+from app.execution_plane.session.store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.skill.tool import RuntimeSkillTool
-from app.services.tooling.runtime import ToolExecutionContext
+from app.tool_gateway.runtime import ToolExecutionContext
 
 
 class FakeSkillService:

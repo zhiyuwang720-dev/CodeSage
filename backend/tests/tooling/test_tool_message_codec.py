@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.services.tooling.codec import (
+from app.contracts.models import RuntimeMessageRole, TranscriptItem
+from app.tool_gateway.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )

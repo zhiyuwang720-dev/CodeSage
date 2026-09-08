@@ -1,9 +1,9 @@
 """spec §6 test_agent_permission_matrix: 各视角只能调用自己矩阵内的工具。"""
 import pytest
 
-from app.services.pr_review.orchestrator import TOOL_MATRICES
-from app.services.tooling.builder import build_runtime_tool_catalog
-from app.services.tooling.registry import build_runtime_tool_registry
+from app.domains.pr_review.orchestrator import TOOL_MATRICES
+from app.tool_gateway.builder import build_runtime_tool_catalog
+from app.tool_gateway.registry import build_runtime_tool_registry
 from tests.pr_review.fake_runtime import build_review_runner, make_session_factory
 
 

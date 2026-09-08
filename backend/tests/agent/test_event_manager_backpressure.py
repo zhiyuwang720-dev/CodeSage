@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.agent.event_manager import EventManager
+from app.infrastructure.messaging.event_manager import EventManager
 
 
 @pytest.mark.asyncio

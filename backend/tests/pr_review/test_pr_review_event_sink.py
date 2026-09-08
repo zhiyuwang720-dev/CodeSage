@@ -11,7 +11,7 @@ stream_events 遇 task_complete 终止(修复 5 的 done→task_complete)。本�
 from __future__ import annotations
 
 from app.api.v1.endpoints.agent_tasks import _build_pr_review_event_sink
-from app.services.agent.event_manager import EventManager
+from app.infrastructure.messaging.event_manager import EventManager
 
 
 def _push_and_drain(sink, em: EventManager, task_id: str, events: list[dict]) -> list[dict]:

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.models.audit_rule import AuditRule, AuditRuleSet
 from app.models.audit_session import AuditMemoryKind
 from app.services.skill.router import RUNTIME_SKILL_ROUTE_AGENT_TYPES, resolve_review_skill_routes
-from app.services.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord
+from app.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord
 from app.services.skill.file_service import SkillFileService
 
 MAX_RECALLS = 5

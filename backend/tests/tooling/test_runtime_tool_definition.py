@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pydantic import BaseModel
 
-from app.services.contracts.models import ToolExecutionPayload
-from app.services.tooling.runtime import RuntimeTool, ToolExecutionContext, ToolRegistry, build_runtime_tool
+from app.contracts.models import ToolExecutionPayload
+from app.tool_gateway.runtime import RuntimeTool, ToolExecutionContext, ToolRegistry, build_runtime_tool
 
 
 class EchoInput(BaseModel):

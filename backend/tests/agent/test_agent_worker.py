@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.agent.task_queue import AGENT_TASK_JOB_NAME
+from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.worker.agent_worker import WorkerSettings, decode_task_payload
 
 

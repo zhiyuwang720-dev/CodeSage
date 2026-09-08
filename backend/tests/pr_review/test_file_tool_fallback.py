@@ -8,8 +8,8 @@ import os
 import shutil
 import tempfile
 
-from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool
-from app.services.tooling.runtime import ToolExecutionContext
+from app.tool_gateway.read import GlobRuntimeTool, GrepRuntimeTool
+from app.tool_gateway.runtime import ToolExecutionContext
 
 
 def _make_workspace() -> str:

@@ -16,7 +16,7 @@ OFFLINE = Path(__file__).resolve().parent
 BACKEND = Path(r"E:\Mac\CodeSage\backend")
 sys.path.insert(0, str(BACKEND))
 
-from app.services.pr_review.eval_gate import (  # noqa: E402
+from app.domains.pr_review.eval_gate import (  # noqa: E402
     check_gate,
     compute_metrics,
     perspective_breakdown,

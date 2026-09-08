@@ -35,11 +35,11 @@ from app.models.audit_session import (
 )
 from app.models.project import Project
 from app.models.user import User
-from app.services.contracts.checkpoint import StageStatus
-from app.services.runtime.bridge import RuntimeBridge
-from app.services.llm.service import LLMService
-from app.services.permission.guardrails import is_guardrails_enabled
-from app.services.session.stage_store import audit_stage_store
+from app.contracts.checkpoint import StageStatus
+from app.execution_plane.runtime.bridge import RuntimeBridge
+from app.execution_plane.models.service import LLMService
+from app.tool_gateway.permission.guardrails import is_guardrails_enabled
+from app.infrastructure.persistence.stage_store import audit_stage_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -283,7 +283,7 @@ async def _build_runtime_follow_up_context(
     db: AsyncSession,
 ) -> tuple[RuntimeBridge, str, int | None]:
     from app.api.v1.endpoints.agent_tasks import _get_project_root, _get_user_config
-    from app.services.tooling.builder import build_runtime_tool_catalog
+    from app.tool_gateway.builder import build_runtime_tool_catalog
 
     task = await db.get(AgentTask, session.task_id) if session.task_id else None
     project = await db.get(Project, session.project_id)

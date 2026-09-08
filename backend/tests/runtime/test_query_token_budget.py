@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.services.contracts.models import RuntimeMessageRole, RuntimeModelResponse, TranscriptItem
-from app.services.contracts.query_state import QueryLoopState
-from app.services.runtime.query_token_budget import evaluate_token_budget_continuation
+from app.contracts.models import RuntimeMessageRole, RuntimeModelResponse, TranscriptItem
+from app.contracts.query_state import QueryLoopState
+from app.execution_plane.runtime.query_token_budget import evaluate_token_budget_continuation
 
 
 def test_evaluate_token_budget_continuation_uses_remaining_budget_and_turn_count():

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from app.services.contracts.models import RuntimeMessageRole, TranscriptItem
-import app.services.runtime.query_context as query_context
-from app.services.runtime.query_context import (
+from app.contracts.models import RuntimeMessageRole, TranscriptItem
+import app.execution_plane.runtime.query_context as query_context
+from app.execution_plane.runtime.query_context import (
     apply_context_collapse_if_needed,
     apply_history_snip,
     apply_microcompact,
@@ -10,7 +10,7 @@ from app.services.runtime.query_context import (
     evaluate_blocking_limit,
     get_messages_after_compact_boundary,
 )
-from app.services.contracts.query_state import QueryLoopState
+from app.contracts.query_state import QueryLoopState
 
 
 def test_get_messages_after_compact_boundary_returns_tail_after_last_boundary():

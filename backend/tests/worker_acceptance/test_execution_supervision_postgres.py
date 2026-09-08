@@ -13,18 +13,18 @@ from app.db.session import async_session_factory
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
-from app.services.contracts.final_review_contract import ReviewFinding
-from app.services.contracts.review_execution import ExecutionContext, ReviewRunIdentity, sha256_bytes
-from app.services.pr_review.execution import QuickReviewDependencies, execute_quick_review
-from app.services.pr_review.execution_ownership import (
+from app.contracts.final_review_contract import ReviewFinding
+from app.contracts.review_execution import ExecutionContext, ReviewRunIdentity, sha256_bytes
+from app.execution_plane.review.execution import QuickReviewDependencies, execute_quick_review
+from app.control_plane.execution_ownership import (
     StaleExecutionOwnerError,
     current_execution_context,
     current_execution_lease,
     guard_managed_execution_write,
     review_execution_ownership,
 )
-from app.services.session.stage_store import audit_stage_store
-from app.services.pr_review.results import review_result_service
+from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.control_plane.results import review_result_service
 
 
 pytestmark = pytest.mark.skipif(

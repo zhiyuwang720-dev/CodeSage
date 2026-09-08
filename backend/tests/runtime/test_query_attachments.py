@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from app.services.contracts.models import ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord
-from app.services.runtime.query_attachments import build_between_turn_attachments, start_pending_tool_use_summary
-from app.services.contracts.query_state import QueryLoopState
+from app.contracts.models import ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord
+from app.execution_plane.runtime.query_attachments import build_between_turn_attachments, start_pending_tool_use_summary
+from app.contracts.query_state import QueryLoopState
 
 
 def _record(name: str, content: str, *, status: str = "completed", is_error: bool = False) -> ToolExecutionRecord:

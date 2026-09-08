@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.pr_review.artifacts import ArtifactIntegrityError, LocalReviewArtifactStore
+from app.infrastructure.persistence.review_artifacts import ArtifactIntegrityError, LocalReviewArtifactStore
 
 
 def test_round_trip_and_tamper_detection(tmp_path):

@@ -7,12 +7,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.services.runtime.bridge import (
+from app.execution_plane.runtime.bridge import (
     RuntimeBridge,
     NATIVE_TOOL_CALLING_REMINDER,
     RuntimeLLMModelClient,
 )
-from app.services.contracts.models import (
+from app.contracts.models import (
     RuntimeCompletionMode,
     RuntimeMemoryBundle,
     RuntimeMessageRole,
@@ -21,7 +21,7 @@ from app.services.contracts.models import (
     TranscriptItem,
     TurnExecutionResult,
 )
-from app.services.tooling.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.tool_gateway.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
 
 
 @pytest.fixture(autouse=True)
@@ -143,7 +143,7 @@ def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):
         return RuntimeMemoryBundle()
 
     monkeypatch.setattr(
-        "app.services.runtime.adapters.session.RuntimeSessionAdapter.run",
+        "app.execution_plane.runtime.adapters.session.RuntimeSessionAdapter.run",
         fake_adapter_run,
     )
     monkeypatch.setattr(
@@ -219,15 +219,15 @@ def test_bridge_run_requires_terminal_action_for_main_audit_runner(monkeypatch):
         return self._session_store.load_session_snapshot(session_id), {"findings": [], "summary": "stub"}
 
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeRunner.__init__",
+        "app.execution_plane.runtime.bridge.RuntimeRunner.__init__",
         fake_runner_init,
     )
     monkeypatch.setattr(
-        "app.services.runtime.adapters.session.RuntimeSessionAdapter.run",
+        "app.execution_plane.runtime.adapters.session.RuntimeSessionAdapter.run",
         fake_adapter_run,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
+        "app.execution_plane.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
 
@@ -402,9 +402,9 @@ def test_bridge_exposes_restored_style_runtime_tools():
 
 
 def test_bridge_exposes_shell_runtime_tools_when_shell_backend_is_available(monkeypatch):
-    monkeypatch.setattr("app.services.tooling.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
-    monkeypatch.setattr("app.services.tooling.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
-    monkeypatch.setattr("app.services.tooling.registry.is_powershell_runtime_tool_enabled", lambda: True)
+    monkeypatch.setattr("app.tool_gateway.registry.detect_bash_executable", lambda: "D:/tools/bash.exe")
+    monkeypatch.setattr("app.tool_gateway.registry.detect_powershell_executable", lambda: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    monkeypatch.setattr("app.tool_gateway.registry.is_powershell_runtime_tool_enabled", lambda: True)
 
     bridge = RuntimeBridge(
         llm_service=FakeLLMService([]),
@@ -426,7 +426,7 @@ def test_bridge_skips_system_transcript_messages_when_building_model_payload():
     runtime_client = client.__class__.__dict__  # keep bridge imported
     del runtime_client
 
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -614,11 +614,11 @@ def test_bridge_continue_session_refreshes_skill_catalog(monkeypatch):
         fake_skill_preload,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeRunner.run_once",
+        "app.execution_plane.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
+        "app.execution_plane.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
 
@@ -701,11 +701,11 @@ def test_bridge_continue_session_uses_discovery_selected_skill(monkeypatch):
         fake_skill_preload,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeRunner.run_once",
+        "app.execution_plane.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeBridge._ensure_payload",
+        "app.execution_plane.runtime.bridge.RuntimeBridge._ensure_payload",
         fake_ensure_payload,
     )
     monkeypatch.setattr(
@@ -749,7 +749,7 @@ def test_runtime_model_client_classifies_max_output_tokens_responses():
             "tool_calls": [],
         }
     ])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -778,7 +778,7 @@ def test_runtime_model_client_classifies_prompt_too_long_errors():
             "error_message": "context too large",
         }
     ])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -807,11 +807,11 @@ def test_bridge_skips_finalizer_for_non_finalizable_terminal_reason(monkeypatch)
         return TurnExecutionResult(turn_id="turn-1", stop_reason=RuntimeStopReason.PROMPT_TOO_LONG)
 
     monkeypatch.setattr(
-        "app.services.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
+        "app.execution_plane.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
         fake_refresh_session_context,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeRunner.run_once",
+        "app.execution_plane.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
 
@@ -857,7 +857,7 @@ def test_runtime_model_client_passes_max_output_tokens_override_to_llm_service()
             "tool_calls": [],
         }
     ])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -884,11 +884,11 @@ def test_continue_session_until_payload_adds_auto_finalizer_prompt(monkeypatch):
         return TurnExecutionResult(turn_id="turn-1", stop_reason=RuntimeStopReason.COMPLETED)
 
     monkeypatch.setattr(
-        "app.services.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
+        "app.execution_plane.runtime.adapters.session.RuntimeSessionAdapter.refresh_session_context",
         fake_refresh_session_context,
     )
     monkeypatch.setattr(
-        "app.services.runtime.bridge.RuntimeRunner.run_once",
+        "app.execution_plane.runtime.bridge.RuntimeRunner.run_once",
         fake_run_once,
     )
 
@@ -941,7 +941,7 @@ def test_runtime_model_client_stream_complete_emits_tool_call_events_before_done
             yield {"type": "done", "content": "Need tool", "finish_reason": "stop"}
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -982,7 +982,7 @@ def test_runtime_model_client_stream_complete_does_not_reemit_done_tool_calls():
             }
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )
@@ -1020,7 +1020,7 @@ def test_runtime_model_client_stream_complete_passthroughs_llm_retry_events():
             yield {"type": "done", "content": "恢复完成", "finish_reason": "stop"}
 
     llm = StreamingLLMService([])
-    llm_client = __import__("app.services.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
+    llm_client = __import__("app.execution_plane.runtime.bridge", fromlist=["RuntimeLLMModelClient"]).RuntimeLLMModelClient(
         llm_service=llm,
         agent_type="review:security",
     )

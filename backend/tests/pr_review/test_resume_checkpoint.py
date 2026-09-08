@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from app.services.pr_review import command_router as cr
+from app.execution_plane.review import command_router as cr
 
 # 新增行 2..4(import json / x=1 / y=2), 供 findings 落在 enforce_lines 保留范围内
 DIFF = """diff --git a/a.py b/a.py

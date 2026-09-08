@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.services.contracts.review_execution import (
+from app.contracts.review_execution import (
     ArtifactRef,
     ExecutionContext,
     ReviewRunIdentity,
