@@ -25,5 +25,6 @@ def test_agent_worker_settings_use_arq_queue():
     assert WorkerSettings.queue_name == settings.AGENT_TASK_QUEUE_NAME
     assert WorkerSettings.max_jobs == settings.AGENT_WORKER_CONCURRENCY
     assert WorkerSettings.job_timeout == settings.AGENT_WORKER_JOB_TIMEOUT_SECONDS
+    assert WorkerSettings.job_timeout == 3600
     assert WorkerSettings.max_tries == settings.AGENT_WORKER_MAX_TRIES
     assert WorkerSettings.functions[0].name == AGENT_TASK_JOB_NAME

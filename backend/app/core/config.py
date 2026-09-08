@@ -129,8 +129,8 @@ class Settings(BaseSettings):
     AGENT_TASK_EXECUTION_MODE: str = "worker"
     AGENT_TASK_QUEUE_NAME: str = "CodeSage:arq:agent_tasks"
     AGENT_WORKER_CONCURRENCY: int = 2
-    # ARQ 在 worker 进程硬退出后按 job timeout 重新投递；60s 保证单消息 90s 内接管。
-    AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 60
+    # 正常审查可持续数十分钟；故障验收的 60s timeout 只能由独立 profile 显式配置。
+    AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 3600
     AGENT_WORKER_MAX_TRIES: int = 3
     AGENT_EVENT_STREAM_ENABLED: bool = False
     AGENT_EVENT_STREAM_MAXLEN: int = 5000

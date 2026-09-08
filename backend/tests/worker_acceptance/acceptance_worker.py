@@ -11,8 +11,8 @@ from uuid import uuid4
 from arq.connections import RedisSettings
 from arq.worker import func
 
-from app.services.pr_review.execution import QuickReviewDependencies, execute_quick_review
-from app.services.agent.task_queue import AGENT_TASK_JOB_NAME
+from app.execution_plane.review.execution import QuickReviewDependencies, execute_quick_review
+from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.worker.agent_worker import execute_agent_task_job
 
 
@@ -93,6 +93,10 @@ async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None
         f"acceptance:{task_id}",
         mapping={"worker_id": worker_id, "started": str(time.time())},
     )
+    await redis.hincrby(f"acceptance:executor_calls:{task_id}", "count", 1)
+    delay = await redis.hget(f"acceptance:control:{task_id}", "healthy_delay_seconds")
+    if delay:
+        await asyncio.sleep(float(delay))
     async def observe(event: dict) -> None:
         await redis.rpush(
             f"acceptance:attempts:{task_id}", json.dumps(event, sort_keys=True)
@@ -128,5 +132,7 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(os.environ["REDIS_URL"])
     queue_name = os.environ["AGENT_TASK_QUEUE_NAME"]
     max_jobs = 1
-    job_timeout = 60
+    # Fault-takeover suites use 60 explicitly; the healthy-long-task suite uses
+    # the production profile and proves 60 seconds is not a normal execution cap.
+    job_timeout = int(os.getenv("CODESAGE_ACCEPTANCE_JOB_TIMEOUT", "60"))
     max_tries = 20
