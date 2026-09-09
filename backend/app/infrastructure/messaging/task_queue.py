@@ -4,6 +4,7 @@ import inspect
 from typing import Any, Optional
 
 from app.core.config import settings
+from app.infrastructure.observability.tracing import get_meter, get_tracer, inject_trace_context, span_attributes
 
 AGENT_TASK_JOB_NAME = "execute_agent_task"
 
@@ -42,18 +43,33 @@ class AgentTaskQueue:
         return self.arq_pool
 
     async def enqueue(self, task_id: str, *, delivery_id: str | None = None) -> None:
-        pool = await self._pool()
-        job_id = f"agent-task:{task_id}"
-        args: tuple[str, ...] = (str(task_id),)
-        if delivery_id:
-            job_id = f"{job_id}:{delivery_id}"
-            args = (str(task_id), str(delivery_id))
-        await pool.enqueue_job(
-            AGENT_TASK_JOB_NAME,
-            *args,
-            _job_id=job_id,
-            _queue_name=self.queue_name,
-        )
+        tracer = get_tracer()
+        with tracer.start_as_current_span("task.publish") as span:
+            span.set_attributes(span_attributes(task_id=str(task_id), delivery_id=delivery_id))
+            pool = await self._pool()
+            job_id = f"agent-task:{task_id}"
+            args: tuple[Any, ...] = (str(task_id),)
+            if delivery_id:
+                job_id = f"{job_id}:{delivery_id}"
+                args = (str(task_id), str(delivery_id))
+            carrier = inject_trace_context()
+            if carrier:
+                if not delivery_id:
+                    args = (str(task_id), None)
+                args = (*args, carrier)
+            try:
+                await pool.enqueue_job(
+                    AGENT_TASK_JOB_NAME,
+                    *args,
+                    _job_id=job_id,
+                    _queue_name=self.queue_name,
+                )
+                get_meter().create_counter("codesage.task.publish").add(1, {"status": "success"})
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_attribute("codesage.status", "failed")
+                get_meter().create_counter("codesage.task.publish").add(1, {"status": "failed"})
+                raise
 
     async def close(self) -> None:
         if not self._owns_pool or self.arq_pool is None:

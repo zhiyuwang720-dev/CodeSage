@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.api.v1.api import api_router
 from app.db.session import AsyncSessionLocal
 from app.db.init_db import init_db
+from app.infrastructure.observability import configure_observability
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,15 @@ async def lifespan(app: FastAPI):
     启动时初始化数据库（创建默认账户等）
     """
     logger.info("CodeSage 后端服务启动中...")
+    observability = configure_observability(
+        service_name=f"{settings.OTEL_SERVICE_NAME}-api",
+        enabled=settings.OTEL_ENABLED,
+        endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT,
+        local_trace_path=settings.OTEL_LOCAL_TRACE_PATH,
+        local_metric_path=settings.OTEL_LOCAL_METRIC_PATH,
+        export_timeout_seconds=settings.OTEL_EXPORT_TIMEOUT_SECONDS,
+        max_attribute_bytes=settings.OTEL_CAPTURE_MAX_BYTES,
+    )
 
     # 11-P6 启动自愈建表: 主库幂等 create_all(Postgres), 防未来新表缺表事故复发
     # (09 生产事故即无启动建表 → audit_stages 缺失)。
@@ -101,9 +111,12 @@ async def lifespan(app: FastAPI):
     logger.info("演示账户: demo@example.com / demo123")
     logger.info("=" * 50)
 
-    yield
-
-    logger.info("CodeSage 后端服务已关闭")
+    try:
+        yield
+    finally:
+        observability.force_flush(5000)
+        observability.shutdown()
+        logger.info("CodeSage 后端服务已关闭")
 
 
 app = FastAPI(

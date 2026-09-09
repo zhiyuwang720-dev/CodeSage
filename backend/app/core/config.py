@@ -134,6 +134,14 @@ class Settings(BaseSettings):
     AGENT_WORKER_MAX_TRIES: int = 3
     AGENT_EVENT_STREAM_ENABLED: bool = False
     AGENT_EVENT_STREAM_MAXLEN: int = 5000
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "codesage"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://127.0.0.1:6006/v1/traces"
+    OTEL_EXPORT_TIMEOUT_SECONDS: float = 3.0
+    OTEL_LOCAL_TRACE_PATH: str = ".auditai/observability/traces.otlp.jsonl"
+    OTEL_LOCAL_METRIC_PATH: str = ".auditai/observability/metrics.otlp.jsonl"
+    OTEL_CAPTURE_CONTENT: bool = False
+    OTEL_CAPTURE_MAX_BYTES: int = 8192
     AGENT_EVENT_STREAM_BLOCK_MS: int = 15000
     REDIS_URL: str = "redis://localhost:6379/0"
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"
