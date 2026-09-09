@@ -17,7 +17,12 @@ def stable_id(prefix: str, value: str) -> str:
     return f"{prefix}-{sha256_bytes(value.encode('utf-8'))[:16]}"
 
 
-def load_dataset(path: str | Path, fixture_overrides: dict[str, Any] | None = None) -> list[DatasetCase]:
+def load_dataset(
+    path: str | Path,
+    fixture_overrides: dict[str, Any] | None = None,
+    *,
+    fixture_base: str | Path | None = None,
+) -> list[DatasetCase]:
     source = Path(path)
     payload = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -38,7 +43,10 @@ def load_dataset(path: str | Path, fixture_overrides: dict[str, Any] | None = No
                 )
             )
         override = dict(overrides.get(pr_url) or {})
-        fixture_path = Path(override["path"]).resolve() if override.get("path") else None
+        fixture_path = Path(override["path"]) if override.get("path") else None
+        if fixture_path and not fixture_path.is_absolute():
+            fixture_path = Path(fixture_base or Path.cwd()) / fixture_path
+        fixture_path = fixture_path.resolve() if fixture_path else None
         fixture_hash = hash_fixture(fixture_path) if fixture_path and fixture_path.exists() else None
         mode = str(override.get("source_mode") or "fixture_unverified")
         if mode not in {"full_source", "diff_only", "fixture_unverified"}:
@@ -82,6 +90,8 @@ def load_dataset(path: str | Path, fixture_overrides: dict[str, Any] | None = No
                 diff_sha256=diff_hash,
                 changed_lines=changed_lines,
                 golden_sha256=golden_hash,
+                fixture_provenance=dict(override.get("provenance") or {}),
+                baseline_eligible=bool(override.get("baseline_eligible", mode == "full_source")),
             )
         )
     return cases

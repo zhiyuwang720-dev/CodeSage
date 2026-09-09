@@ -35,6 +35,8 @@ class DatasetCase(BaseModel):
     diff_sha256: str | None = None
     golden_sha256: str
     changed_lines: int | None = None
+    fixture_provenance: dict[str, Any] = Field(default_factory=dict)
+    baseline_eligible: bool = False
 
 
 class CandidateFinding(BaseModel):
@@ -73,6 +75,7 @@ class EvalRunManifest(BaseModel):
     budget: dict[str, Any] = Field(default_factory=dict)
     hardware_fingerprint: str | None = None
     fixture_fingerprints: dict[str, str] = Field(default_factory=dict)
+    baseline_eligible: bool = False
     concurrency: int = 2
     timeout_seconds: int = 3600
     phoenix_dataset_version: str | None = None

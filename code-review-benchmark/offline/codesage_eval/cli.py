@@ -17,10 +17,12 @@ from codesage_eval.judge import OpenAICompatiblePairJudge, judge_case
 from codesage_eval.report import build_summary, write_report
 from codesage_eval.runner import ControlPlaneHttpAdapter, run_cases
 from codesage_eval.storage import read_jsonl, write_jsonl_atomic
+from codesage_eval.fixtures import fetch_current_pr_fixtures
 
 OFFLINE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = OFFLINE_ROOT.parents[1]
 DEFAULT_DATASET = OFFLINE_ROOT / "results" / "benchmark_data.json"
+DEFAULT_FIXTURE_MAP = OFFLINE_ROOT / "fixtures" / "current-fixtures.json"
 
 
 def _json(path: str | Path) -> dict:
@@ -36,13 +38,34 @@ def _git_fingerprints() -> tuple[str, str]:
 
 
 def command_prepare(args) -> None:
-    overrides = _json(args.fixture_map) if args.fixture_map else {}
-    cases = load_dataset(args.dataset, overrides)
+    fixture_map = Path(args.fixture_map or DEFAULT_FIXTURE_MAP)
+    if not fixture_map.exists():
+        raise SystemExit(
+            "fixture map is missing. Fetch current smoke fixtures with:\n"
+            "docker compose --profile eval run --rm eval-cli fixtures fetch --suite smoke"
+        )
+    overrides = _json(fixture_map)
+    cases = load_dataset(args.dataset, overrides, fixture_base=fixture_map.parent)
     selected = select_suite(cases, args.suite)
     selected = [prepare_detached_worktree(item, args.fixtures_root) for item in selected]
     write_jsonl_atomic(args.output, selected)
     verified = sum(item.source_mode != "fixture_unverified" for item in selected)
     print(f"prepared {len(selected)} cases ({verified} verified) at {args.output}")
+
+
+def command_fixtures_fetch(args) -> None:
+    all_cases = load_dataset(args.dataset)
+    selected = select_suite(all_cases, args.suite) if not args.case else [item for item in all_cases if item.case_id == args.case]
+    if args.case and not selected:
+        raise SystemExit(f"unknown case id: {args.case}")
+    fetched = fetch_current_pr_fixtures(
+        dataset_path=args.dataset,
+        output_map=args.output_map,
+        fixtures_root=args.fixtures_root,
+        case_ids={item.case_id for item in selected},
+    )
+    print(f"fetched {len(selected)} current_pr/diff_only fixtures into {args.output_map}")
+    print("These fixtures are suitable for smoke testing, but are not a certified historical baseline.")
 
 
 def _create_manifest(args, cases: list[DatasetCase]) -> EvalRunManifest:
@@ -81,6 +104,7 @@ def command_run(args) -> Path:
     manifest.fixture_fingerprints = {
         item.case_id: item.diff_sha256 or item.fixture_sha256 or "missing" for item in cases
     }
+    manifest.baseline_eligible = all(item.baseline_eligible for item in cases)
     missing = [name for name in ("model_fingerprint", "prompt_fingerprint", "tool_fingerprint", "flow_fingerprint") if not getattr(manifest, name)]
     if missing:
         raise SystemExit(f"baseline fingerprint fields are required: {', '.join(missing)}")
@@ -214,6 +238,15 @@ def command_calibrate(args) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codesage-eval")
     commands = parser.add_subparsers(dest="command", required=True)
+    fixtures = commands.add_parser("fixtures")
+    fixture_commands = fixtures.add_subparsers(dest="fixture_command", required=True)
+    fetch = fixture_commands.add_parser("fetch")
+    fetch.add_argument("--dataset", default=str(DEFAULT_DATASET))
+    fetch.add_argument("--suite", choices=["smoke", "calibration", "holdout", "full"], default="smoke")
+    fetch.add_argument("--case")
+    fetch.add_argument("--output-map", default=str(DEFAULT_FIXTURE_MAP))
+    fetch.add_argument("--fixtures-root", default=str(OFFLINE_ROOT / "fixtures"))
+    fetch.set_defaults(func=command_fixtures_fetch)
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--dataset", default=str(DEFAULT_DATASET))
     prepare.add_argument("--fixture-map")
