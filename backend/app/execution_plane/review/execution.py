@@ -11,8 +11,15 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from opentelemetry import trace
+
 from app.core.config import settings
-from app.infrastructure.observability.tracing import get_tracer
+from app.infrastructure.observability.tracing import (
+    bind_evaluation_context,
+    get_tracer,
+    reset_evaluation_context,
+    span_attributes,
+)
 from app.db.session import async_session_factory
 from app.db.session import get_pr_review_sync_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
@@ -118,6 +125,17 @@ async def execute_quick_review(
             task.agent_config = agent_config
             await db.commit()
 
+    review_scope = ((task.audit_scope or {}).get("pr_review") or {})
+    evaluation_token = bind_evaluation_context(
+        eval_run_id=review_scope.get("eval_run_id"),
+        case_id=review_scope.get("case_id"),
+        task_id=task_id,
+        review_run_id=prepared.identity.run_id,
+    )
+    trace.get_current_span().set_attributes(
+        span_attributes(task_id=task_id, review_run_id=prepared.identity.run_id)
+    )
+
     if deps.observer is not None:
         observed = deps.observer(
             {
@@ -201,3 +219,4 @@ async def execute_quick_review(
         current_execution_context.reset(context_token)
         current_execution_lease.reset(lease_token)
         current_review_llm_service.reset(llm_token)
+        reset_evaluation_context(evaluation_token)
