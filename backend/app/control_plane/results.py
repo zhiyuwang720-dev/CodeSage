@@ -127,6 +127,7 @@ class ReviewResultService:
             suggestion=finding.suggestion,
             ai_confidence=finding.confidence,
             is_verified=finding.verdict == "confirmed",
+            source=finding.source,
             finding_metadata={
                 "review_payload_version": 1,
                 "review_payload": finding.model_dump(mode="json"),
@@ -224,7 +225,7 @@ class ReviewResultService:
     async def mark_failed(
         self,
         db,
-        task: AgentTask,
+        task_id: str,
         error: BaseException | str,
         *,
         lease: ExecutionLease | None = None,
@@ -237,7 +238,7 @@ class ReviewResultService:
                 # 旧 owner 和已取消 attempt 均不得写失败收尾。
                 await db.rollback()
                 return
-        task = await db.get(AgentTask, str(task.id))
+        task = await db.get(AgentTask, task_id)
         if task is None or task.status == AgentTaskStatus.CANCELLED:
             return
         task.status = AgentTaskStatus.FAILED

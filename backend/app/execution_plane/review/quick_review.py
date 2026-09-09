@@ -164,11 +164,9 @@ async def execute_review_use_case(
     except BaseException as exc:
         logger.exception("quick review failed: %s", task_id)
         async with deps.async_session_factory() as failure_db:
-            failure_task = await failure_db.get(AgentTask, task_id)
-            if failure_task is not None:
-                await review_result_service.mark_failed(
-                    failure_db, failure_task, exc, lease=lease
-                )
+            await review_result_service.mark_failed(
+                failure_db, task_id, exc, lease=lease
+            )
         return
     finally:
         await event_manager.close()

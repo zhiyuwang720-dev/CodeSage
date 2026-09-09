@@ -314,3 +314,24 @@ async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatc
         assert task.status != AgentTaskStatus.COMPLETED
         assert findings == []
         assert await audit_stage_store.get(db, task_id, "report") is None
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_reloads_task_after_rollback_without_missing_greenlet():
+    task_id, _ = await _new_task("mark-failed-after-rollback")
+
+    async with async_session_factory() as db:
+        loaded = await db.get(AgentTask, task_id)
+        assert loaded is not None
+        await db.rollback()
+        await review_result_service.mark_failed(
+            db,
+            task_id,
+            ValueError("original validation error"),
+        )
+
+    async with async_session_factory() as db:
+        task = await db.get(AgentTask, task_id)
+        assert task is not None
+        assert task.status == AgentTaskStatus.FAILED
+        assert task.error_message == "original validation error"
