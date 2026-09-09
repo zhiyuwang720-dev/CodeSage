@@ -249,6 +249,7 @@ async def run_review_pipeline_async(
             task_id=options.get("task_id"),
             session_factory=session_factory,
             max_turns=options.get("max_turns"),
+            token_budget=options.get("perspective_token_budget"),
             event_sink=event_sink,
         )
     orchestrator = ReviewOrchestrator(

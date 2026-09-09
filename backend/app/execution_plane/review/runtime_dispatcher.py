@@ -111,6 +111,7 @@ class RuntimePerspectiveDispatcher:
         session_factory=None,
         event_sink=None,
         max_turns: int | None = None,
+        token_budget: int | None = None,
     ):
         self._llm_service = llm_service
         self._tools = tools
@@ -120,6 +121,7 @@ class RuntimePerspectiveDispatcher:
         self._session_factory = session_factory
         self._event_sink = event_sink
         self._max_turns = max_turns
+        self._token_budget = token_budget
         self._session_ids: dict[str, str] = {}
 
     @get_tracer().start_as_current_span(
@@ -202,6 +204,7 @@ class RuntimePerspectiveDispatcher:
                     "（findings+summary），不要只用自然语言结束。"
                 ),
                 on_session_created=on_session_created,
+                runtime_metadata={"provider_token_budget": self._token_budget} if self._token_budget else None,
             )
         final_payload = result.get("final_payload") or {}
         # 12-P2.1: 兜底 payload(run 与 continue 两分支共用 _ensure_payload 产出)若自标

@@ -88,6 +88,7 @@ class AgentTaskCreate(BaseModel):
     target_files: Optional[List[str]] = Field(None, description="Explicit file targets for the audit")
 
     max_iterations: int = Field(50, ge=1, le=200, description="Maximum agent iterations")
+    token_budget: int = Field(100000, ge=1000, le=1000000, description="Total provider token budget")
     timeout_seconds: int = Field(1800, ge=60, le=7200, description="Task timeout in seconds")
     finding_runtime_stack: Optional[str] = Field(None, description="Finding runtime stack: legacy or runtime")
 
@@ -803,6 +804,7 @@ async def create_agent_task(
         exclude_patterns=request.exclude_patterns,
         target_files=request.target_files,
         max_iterations=request.max_iterations or 50,
+        token_budget=request.token_budget,
         timeout_seconds=request.timeout_seconds or 1800,
         agent_config={"finding_runtime_stack": runtime_stack},
         created_by=current_user.id,

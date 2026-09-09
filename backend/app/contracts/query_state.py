@@ -19,6 +19,7 @@ class QueryLoopState:
     stop_hook_active: bool | None = None
     turn_count: int = 1
     transition: RuntimeContinueReason | None = None
+    provider_tokens_used: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class QueryLoopState:
             "stop_hook_active": self.stop_hook_active,
             "turn_count": int(self.turn_count),
             "transition": self.transition.value if self.transition is not None else None,
+            "provider_tokens_used": int(self.provider_tokens_used),
         }
 
     @classmethod
@@ -84,4 +86,5 @@ class QueryLoopState:
             stop_hook_active=raw.get("stop_hook_active"),
             turn_count=max(1, int(raw.get("turn_count") or 1)),
             transition=transition,
+            provider_tokens_used=max(0, int(raw.get("provider_tokens_used") or 0)),
         )

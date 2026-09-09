@@ -49,6 +49,7 @@ class RuntimeSessionAdapter:
         model_name: str = "review-runtime",
         on_session_created=None,
         on_user_message_created=None,
+        runtime_metadata: dict[str, Any] | None = None,
     ) -> dict:
         session_id = self._session_store.create_session(
             project_id=project_id,
@@ -100,6 +101,10 @@ class RuntimeSessionAdapter:
             skill_context=skill_context,
             discovery_snapshot=discovery_snapshot,
         )
+        if runtime_metadata:
+            runtime_state = self._session_store.load_runtime_state(session_id)
+            runtime_state.metadata.update({key: value for key, value in runtime_metadata.items() if value is not None})
+            self._session_store.replace_runtime_state(session_id, runtime_state)
 
         user_message_id = self._session_store.append_message(
             session_id,

@@ -180,6 +180,25 @@ def test_query_loop_run_turn_persists_assistant_reply_and_turn():
     assert [item.content for item in client.calls[0]["transcript"]] == ["inspect the repo"]
 
 
+def test_hard_token_budget_blocks_provider_before_request():
+    store = build_store()
+    session_id = store.create_session(
+        project_id="project-1", runtime_stack="runtime", system_prompt="system prompt",
+        recon_payload={"repo": "demo"},
+    )
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="inspect"))
+    runtime_state = store.load_runtime_state(session_id)
+    runtime_state.metadata["provider_token_budget"] = 1
+    store.replace_runtime_state(session_id, runtime_state)
+    client = FakeModelClient()
+    loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry())
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="gpt-test"))
+
+    assert result.stop_reason is RuntimeStopReason.QUOTA_EXHAUSTED
+    assert client.calls == []
+
+
 def test_runner_executes_tool_calls_and_loops_until_final_answer():
     store = build_store()
     session_id = store.create_session(project_id="project-1", system_prompt="system")

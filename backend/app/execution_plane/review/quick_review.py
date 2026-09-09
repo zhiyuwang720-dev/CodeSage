@@ -131,6 +131,7 @@ async def execute_review_use_case(
                         (((task.audit_scope or {}).get("pr_review") or {}).get("max_comments") or 10)
                     ),
                     "max_turns": int(task.max_iterations or 50),
+                    "perspective_token_budget": min(10000, max(1, int(task.token_budget or 100000) // 3)),
                     "session_factory": deps.sync_session_factory(),
                     "workspace_root": config.get("review_execution_source_dir")
                     or context.workspace_root,

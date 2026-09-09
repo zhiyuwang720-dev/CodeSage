@@ -574,6 +574,7 @@ class RuntimeBridge:
         finalizer_tools: list[Any] | None = None,
         terminal_action_nudge_message: str | None = None,
         on_session_created: Callable[[str], Any] | None = None,
+        runtime_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = self._build_tool_registry(tool_allowlist=tool_allowlist)
@@ -600,7 +601,7 @@ class RuntimeBridge:
             memory_manager=RuntimeMemoryManager(session_factory=self._session_store._session_factory),
             agent_type=self._agent_type,
         )
-        result = await adapter.run(
+        adapter_run_kwargs = dict(
             project_id=project_id,
             task_id=task_id,
             system_prompt=system_prompt,
@@ -609,6 +610,9 @@ class RuntimeBridge:
             model_name=model_name,
             on_session_created=on_session_created,
         )
+        if runtime_metadata is not None:
+            adapter_run_kwargs["runtime_metadata"] = runtime_metadata
+        result = await adapter.run(**adapter_run_kwargs)
         snapshot, final_payload = await self._ensure_payload(
             session_id=result["session_id"],
             model_name=model_name,

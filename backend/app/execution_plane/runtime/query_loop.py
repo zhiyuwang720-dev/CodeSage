@@ -177,6 +177,24 @@ class QueryLoop:
         assistant_stream_sequence = (snapshot.messages[-1].sequence if snapshot.messages else 0) + 1
         assistant_stream_placeholder_id = f"streaming-{session_id}-{turn_id}"
 
+        hard_token_budget = int(runtime_state.metadata.get("provider_token_budget") or 0)
+        if hard_token_budget:
+            remaining = hard_token_budget - state.provider_tokens_used
+            estimated_input = max(
+                1,
+                (len(effective_system_prompt) + sum(len(item.content or "") for item in prepared_messages) + 3) // 4,
+            )
+            if remaining <= estimated_input:
+                return self._finalize_terminal_result(
+                    session_id=session_id, turn_id=turn_id, state=state, messages=state.messages,
+                    stop_reason=RuntimeStopReason.QUOTA_EXHAUSTED, status="token_budget_exhausted",
+                    checkpoint_extra={"token_budget": hard_token_budget, "tokens_used": state.provider_tokens_used},
+                )
+            allowed_output = remaining - estimated_input
+            state.max_output_tokens_override = min(
+                state.max_output_tokens_override or allowed_output, allowed_output
+            )
+
         try:
             collected = None
             last_model_error: Exception | None = None
@@ -1095,6 +1113,7 @@ class QueryLoop:
                 )
             )
             self._record_provider_usage(model_response.usage, model_name=model_name)
+            state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
             assistant_message_id = None
             working_messages = list(state.messages)
             if model_response.content or model_response.reasoning_content or model_response.tool_calls:
@@ -1382,6 +1401,7 @@ class QueryLoop:
             }
         )
         self._record_provider_usage(model_response.usage, model_name=model_name)
+        state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
         if assistant_message_id is not None:
             assistant_message = self._session_store.get_message(assistant_message_id)
             if assistant_message is not None:
@@ -1473,6 +1493,16 @@ class QueryLoop:
             span.set_attribute(f"codesage.usage.{token_type}", count)
             token_counter.add(count, {"model": model_name, "token_type": token_type, "usage_source": "provider"})
         span.set_attribute("codesage.usage_source", "provider" if values else "missing")
+
+    @staticmethod
+    def _provider_total_tokens(usage: dict | None) -> int:
+        values = dict(usage or {})
+        explicit = values.get("total_tokens")
+        if explicit is not None:
+            return max(0, int(explicit))
+        input_tokens = values.get("input_tokens", values.get("prompt_tokens", 0)) or 0
+        output_tokens = values.get("output_tokens", values.get("completion_tokens", 0)) or 0
+        return max(0, int(input_tokens)) + max(0, int(output_tokens))
 
     @staticmethod
     def _format_stream_error_for_exception(event: dict[str, Any]) -> str:
