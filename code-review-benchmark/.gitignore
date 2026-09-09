@@ -24,6 +24,9 @@ target/
 output/
 results/
 analysis/*
+runs/
+.cache/
+fixtures/
 
 # Local scripts
 online/etl/scripts/
