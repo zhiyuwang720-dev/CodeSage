@@ -399,7 +399,9 @@ def test_runner_finalize_review_tool_marks_terminal_completion():
     assert result.stop_reason is RuntimeStopReason.COMPLETED
     assert result.terminal_action is RuntimeTerminalAction.FINALIZE_REVIEW
     assert result.completion_mode is RuntimeCompletionMode.FINALIZE_TOOL
-    assert result.final_payload == _valid_review_input()
+    expected = _valid_review_input()
+    expected["findings"][0]["contributing_sources"] = ["security"]
+    assert result.final_payload == expected
 
 
 def test_finalize_review_description_explains_terminal_contract_and_required_fields():

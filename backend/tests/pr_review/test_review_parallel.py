@@ -73,7 +73,8 @@ def test_merged_dedup_same_file_line_category():
     assert len(review.comments) == 1, "同 key 去重"
     merged = review.comments[0]
     assert merged.severity == "critical", "严重度取最高"
-    assert "security" in merged.source and "architecture" in merged.source, "来源标注保留"
+    assert merged.source == "architecture", "主来源属于确定性保留项"
+    assert merged.contributing_sources == ["security", "architecture", "quality"], "来源标注保留"
     benchmark = review.benchmark_comments[0]
     assert set(benchmark) >= {"path", "line", "body", "severity", "category"}
 

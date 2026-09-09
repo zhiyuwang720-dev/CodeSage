@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ReviewSeverity = Literal["low", "medium", "high", "critical"]
 ReviewCategory = Literal[
@@ -24,6 +24,13 @@ ReviewCategory = Literal[
 ]
 ReviewPerspective = Literal["security", "architecture", "quality", "rules"]
 ReviewVerdict = Literal["confirmed", "suspected", "info"]
+
+PERSPECTIVE_ORDER: dict[str, int] = {
+    "security": 0,
+    "architecture": 1,
+    "quality": 2,
+    "rules": 3,
+}
 
 SEVERITY_RANK: dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
@@ -47,6 +54,17 @@ class ReviewFinding(BaseModel):
     needs_verification: bool
     verdict: ReviewVerdict
     source: ReviewPerspective  # 视角标记(spec 03 分视角评估归因依据)
+    contributing_sources: list[ReviewPerspective] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_contributing_sources(self) -> "ReviewFinding":
+        sources = set(self.contributing_sources)
+        sources.add(self.source)
+        self.contributing_sources = sorted(
+            sources,
+            key=lambda value: PERSPECTIVE_ORDER[value],
+        )
+        return self
 
     @field_validator("file_path")
     @classmethod

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from app.domains.pr_review.diff_lines import added_line_index
 from app.contracts.final_review_contract import (
+    PERSPECTIVE_ORDER,
     SEVERITY_RANK,
     ReviewFinding,
 )
@@ -28,6 +29,40 @@ SOURCE_LABELS = {
 
 def source_label(source: str) -> str:
     return SOURCE_LABELS.get(str(source or "").lower(), str(source or "Unattributed").capitalize())
+
+
+def _merge_sources(*findings: ReviewFinding) -> list[str]:
+    sources: list[str] = []
+    for finding in findings:
+        for source in finding.contributing_sources:
+            if source not in sources:
+                sources.append(source)
+    return sources
+
+
+def _with_contributors(
+    finding: ReviewFinding,
+    contributors: list[str],
+) -> ReviewFinding:
+    return ReviewFinding.model_validate(
+        {
+            **finding.model_dump(mode="python"),
+            "contributing_sources": contributors,
+        }
+    )
+
+
+def _preference_key(finding: ReviewFinding) -> tuple:
+    """稳定选择主 Finding；前两项保持既有严重度、置信度语义。"""
+    return (
+        -SEVERITY_RANK[finding.severity],
+        -finding.confidence,
+        PERSPECTIVE_ORDER[finding.source],
+        finding.rule_id,
+        finding.title,
+        finding.description,
+        finding.line_end,
+    )
 
 
 @dataclass
@@ -68,16 +103,10 @@ def merge_dedup(findings: list[ReviewFinding]) -> tuple[list[ReviewFinding], int
             order.append(key)
             continue
         kept = best[key]
-        if SEVERITY_RANK[item.severity] > SEVERITY_RANK[kept.severity] or (
-            SEVERITY_RANK[item.severity] == SEVERITY_RANK[kept.severity]
-            and item.confidence > kept.confidence
-        ):
-            merged_source = f"{kept.source}+{item.source}" if item.source not in kept.source else kept.source
-            best[key] = item.model_copy(update={"source": merged_source})
+        if _preference_key(item) < _preference_key(kept):
+            best[key] = _with_contributors(item, _merge_sources(kept, item))
         else:
-            kept_source = kept.source
-            if item.source not in kept_source:
-                best[key] = kept.model_copy(update={"source": f"{kept_source}+{item.source}"})
+            best[key] = _with_contributors(kept, _merge_sources(kept, item))
     return [best[key] for key in order], len(findings) - len(best)
 
 
@@ -154,7 +183,8 @@ def finding_to_comment(finding: ReviewFinding) -> dict:
     spec 03 §7.105: body 以 "[Security]/[Architecture]/[Quality]/[Rules]" 前缀开头,
     供 `codesage_eval` 通过结构化 source 字段做非互斥视角归因。
     """
-    body_lines = [f"[{source_label(finding.source)}] **{finding.title}**", "", finding.description]
+    source_summary = " + ".join(source_label(source) for source in finding.contributing_sources)
+    body_lines = [f"[{source_summary}] **{finding.title}**", "", finding.description]
     if finding.suggestion:
         body_lines += ["", f"建议: {finding.suggestion}"]
     if finding.code_snippet:
