@@ -30,7 +30,7 @@
 
 ## 实施证据（2026-09-09）
 
-- `codesage_eval` 提供 prepare/run/judge/calibrate/report/compare/all/cleanup-legacy；自动测试 19 passed。
+- `codesage_eval` 提供 prepare/run/judge/calibrate/report/compare/all/cleanup-legacy；自动测试 20 passed。
 - runner 只调用正式 AgentTask create/start/get/findings，最多两个在途；task 创建后先原子登记，恢复不重复 POST；Phoenix experiment 强制 `retries=0`。
 - 固定 Git refs、clean 状态、merge-base→head diff 和前后漂移校验；diff_only/full_source 不允许混合比较，fixture_unverified 拒绝成为 run。
 - 20 对人工标签校准模板已入库；校准命令做两轮 uncached 判断。当前未提供真实 judge，因此报告状态仍是 `judge_uncalibrated`，不发布质量提升结论。

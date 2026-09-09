@@ -177,6 +177,8 @@ async def run_cases(
     output_path: str | Path,
     concurrency: int = 2,
 ) -> list[EvalCaseResult]:
+    if concurrency not in {1, 2}:
+        raise ValueError("evaluation concurrency must be 1 or 2")
     existing = {
         item.case_id: item
         for item in read_jsonl(output_path, EvalCaseResult)

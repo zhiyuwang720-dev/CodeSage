@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from codesage_eval.contracts import DatasetCase, EvalCaseResult
 from codesage_eval.runner import ControlPlaneHttpAdapter, run_cases
@@ -64,3 +65,14 @@ def test_resume_registered_task_does_not_create_or_start_again(tmp_path):
     result = asyncio.run(adapter.run_case(_case(tmp_path / "input.diff"), eval_run_id="run", project_id="project", existing=existing))
     assert result.status == "completed"
     assert all(method == "GET" for method, _ in requests)
+
+
+def test_runner_rejects_more_than_two_in_flight(tmp_path):
+    adapter = ControlPlaneHttpAdapter(base_url="https://api.test", token="secret")
+    with pytest.raises(ValueError, match="concurrency"):
+        asyncio.run(
+            run_cases(
+                cases=[], eval_run_id="run", adapter=adapter, project_ids={},
+                output_path=tmp_path / "cases.jsonl", concurrency=3,
+            )
+        )

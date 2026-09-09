@@ -18,7 +18,7 @@ python -m codesage_eval report --run-dir runs/RUN --prepared prepared/smoke.json
 
 - `prepare` 解析固定 base/head/merge-base，要求源仓库无已跟踪修改，为每个 full_source case 创建独立 detached worktree，并记录源码、diff、golden 哈希；无法证明一致时标 `fixture_unverified`。
 - smoke 为前两仓库各一例；calibration 为每仓库按变更规模选择最小/最大各一例；holdout 是剩余 40；full 是全部 50。
-- runner 最多两个 case 并发，只调用 `/api/v1/agent-tasks` 创建、启动、轮询和读取正式 findings。创建 task 后立即原子登记，续跑先查询已登记 task，不让 Phoenix retry 创建第二个业务任务。
+- runner 最多两个 case 并发，只调用 `/api/v1/agent-tasks` 创建、启动、轮询和读取正式 findings。创建 task 后立即原子登记，续跑先查询已登记 task，不让 Phoenix retry 创建第二个业务任务。manifest 固定模型参数、预算、价格表、硬件标识以及 case→task/run/trace 映射。
 - golden、judge 结果和第三方评论只在评测进程中使用，不进入产品任务的 workspace、消息或 `audit_scope`。
 
 ## 评分、报告与校准

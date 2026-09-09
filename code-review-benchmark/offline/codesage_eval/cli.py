@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from uuid import uuid4
 
-from codesage_eval.compare import paired_bootstrap, validate_comparable
+from codesage_eval.compare import paired_bootstrap, performance_comparison_mode, validate_comparable
 from codesage_eval.calibration import run_calibration
 from codesage_eval.contracts import DatasetCase, EvalCaseResult, EvalRunManifest, JudgmentRecord
 from codesage_eval.dataset import load_dataset, prepare_detached_worktree, select_suite
@@ -58,9 +58,13 @@ def _create_manifest(args, cases: list[DatasetCase]) -> EvalRunManifest:
         concurrency=args.concurrency,
         timeout_seconds=args.timeout,
         model_fingerprint=args.model_fingerprint,
+        model_parameters=_json(args.model_parameters_json) if args.model_parameters_json else {},
         prompt_fingerprint=args.prompt_fingerprint,
         tool_fingerprint=args.tool_fingerprint,
         flow_fingerprint=args.flow_fingerprint,
+        price_table_version=args.price_table_version,
+        budget=_json(args.budget_json) if args.budget_json else {},
+        hardware_fingerprint=args.hardware_fingerprint,
     )
 
 
@@ -95,6 +99,15 @@ def command_run(args) -> Path:
             concurrency=args.concurrency,
         )
     )
+    manifest.task_run_trace_map = {
+        item.case_id: {
+            "task_id": item.task_id,
+            "review_run_id": item.review_run_id,
+            "trace_id": item.trace_id,
+        }
+        for item in results
+    }
+    write_jsonl_atomic(run_dir / "manifest.jsonl", [manifest])
     write_jsonl_atomic(
         run_dir / "findings.jsonl",
         (
@@ -150,6 +163,9 @@ def command_compare(args) -> None:
     baseline_f1 = {item["case_id"]: float(item["f1"]) for item in baseline["cases"]}
     candidate_f1 = {item["case_id"]: float(item["f1"]) for item in candidate["cases"]}
     comparison = paired_bootstrap(baseline_f1, candidate_f1)
+    comparison["performance_mode"] = performance_comparison_mode(
+        baseline_manifest, candidate_manifest
+    )
     write_jsonl_atomic(Path(args.candidate) / "comparison.jsonl", [comparison])
     print(json.dumps(comparison, ensure_ascii=False))
 
@@ -221,6 +237,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--prompt-fingerprint", required=True)
     run.add_argument("--tool-fingerprint", required=True)
     run.add_argument("--flow-fingerprint", required=True)
+    run.add_argument("--model-parameters-json")
+    run.add_argument("--budget-json")
+    run.add_argument("--hardware-fingerprint")
+    run.add_argument("--price-table-version")
     run.add_argument("--allow-model-calls", action="store_true")
     run.set_defaults(func=command_run)
 
@@ -259,6 +279,10 @@ def build_parser() -> argparse.ArgumentParser:
     all_command.add_argument("--prompt-fingerprint", required=True)
     all_command.add_argument("--tool-fingerprint", required=True)
     all_command.add_argument("--flow-fingerprint", required=True)
+    all_command.add_argument("--model-parameters-json")
+    all_command.add_argument("--budget-json")
+    all_command.add_argument("--hardware-fingerprint")
+    all_command.add_argument("--price-table-version")
     all_command.add_argument("--allow-model-calls", action="store_true")
     all_command.add_argument("--judge-base-url", required=True)
     all_command.add_argument("--judge-api-key", required=True)

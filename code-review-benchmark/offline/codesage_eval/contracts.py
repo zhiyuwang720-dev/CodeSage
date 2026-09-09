@@ -65,6 +65,7 @@ class EvalRunManifest(BaseModel):
     serializer_version: str = "finding_serializer_v1"
     judge_fingerprint: str | None = None
     model_fingerprint: str | None = None
+    model_parameters: dict[str, Any] = Field(default_factory=dict)
     prompt_fingerprint: str | None = None
     tool_fingerprint: str | None = None
     flow_fingerprint: str | None = None
