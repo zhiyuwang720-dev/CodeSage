@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
+from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.tool_gateway.interactive.todo import TodoWriteRuntimeTool
 from app.execution_plane.session.store import AuditSessionStore
@@ -105,11 +105,11 @@ def test_tool_orchestrator_times_out_slow_runtime_tools():
 
     snapshot = store.load_session_snapshot(session_id)
 
-    assert records[0].status == AuditToolCallStatus.FAILED.value
+    assert records[0].status == ToolExecutionReceiptStatus.FAILED.value
     assert records[0].result.is_error is True
     assert records[0].result.metadata["error_kind"] == "timeout_error"
     assert "path/glob/pattern" in records[0].error_message
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.FAILED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.FAILED.value
     assert snapshot.tool_calls[0].error_message == records[0].error_message
 
 
@@ -157,9 +157,9 @@ def test_shared_tool_runtime_enforces_allowed_tools_and_records_denial_hooks():
 
     snapshot = store.load_session_snapshot(session_id)
 
-    assert records[0].status == AuditToolCallStatus.DENIED.value
+    assert records[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert "allowed_tools" in (records[0].error_message or "")
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.DENIED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert snapshot.checkpoints[0].checkpoint_type == AuditCheckpointType.AUTO.value
     assert snapshot.checkpoints[0].state_payload["event"] == "PermissionDenied"
     assert snapshot.checkpoints[0].state_payload["tool_name"] == "Write"
@@ -188,7 +188,7 @@ def test_shared_tool_runtime_emits_pre_and_post_hooks_for_allowed_tool():
         if checkpoint.state_payload.get("kind") == "runtime_hook"
     ]
 
-    assert records[0].status == AuditToolCallStatus.COMPLETED.value
+    assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert records[0].result.output_payload == {"echo": "alpha", "agent": "review:security"}
     assert hook_events == ["PreToolUse", "PostToolUse"]
 
@@ -242,7 +242,7 @@ def test_shared_tool_runtime_serializes_conflicting_concurrency_keys():
         )
     )
 
-    assert [record.status for record in records] == [AuditToolCallStatus.COMPLETED.value] * 3
+    assert [record.status for record in records] == [ToolExecutionReceiptStatus.COMPLETED.value] * 3
     assert events[0] == ("start", "fs:alpha")
     assert events[1] == ("end", "fs:alpha")
     assert events[2] == ("start", "fs:beta")
@@ -273,9 +273,9 @@ def test_shared_tool_runtime_converts_ask_permission_rules_into_denied_tool_reco
 
     snapshot = store.load_session_snapshot(session_id)
 
-    assert records[0].status == AuditToolCallStatus.DENIED.value
+    assert records[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert "approval" in (records[0].error_message or "").lower()
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.DENIED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert snapshot.checkpoints[0].state_payload["event"] == "PermissionDenied"
     assert snapshot.checkpoints[0].state_payload["source"] == "permission_rule"
 
@@ -305,7 +305,7 @@ def test_shared_tool_runtime_keeps_system_interaction_tools_available_under_skil
     runtime_state = store.load_runtime_state(session_id)
     agent_state = runtime_state.agent_states["review:security"]
 
-    assert records[0].status == AuditToolCallStatus.COMPLETED.value
+    assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert agent_state.pending_todos[0]["title"] == "Capture exploit chain"
     assert agent_state.pending_todos[0]["details"] == "Confirm auth bypass path"
 
@@ -326,7 +326,7 @@ def test_shared_tool_runtime_keeps_skill_tool_available_under_skill_permissions(
         )
     )
 
-    assert records[0].status == AuditToolCallStatus.COMPLETED.value
+    assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert records[0].result.output_payload == {"skill": "code-audit-finding"}
 
 
@@ -367,7 +367,7 @@ def test_canonical_write_tool_writes_artifacts_under_managed_output_dir():
         written_file = project_root / ".auditai" / "outputs" / "report.md"
         snapshot = store.load_session_snapshot(session_id)
 
-        assert records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert written_file.read_text(encoding="utf-8") == "# report"
         assert snapshot.tool_calls[0].output_payload["artifact_type"] == "managed_output"
         assert snapshot.tool_calls[0].output_payload["resolved_path"] == str(written_file.resolve())
@@ -412,7 +412,7 @@ def test_canonical_write_tool_treats_any_dot_auditai_path_as_managed_output():
         written_file = project_root / ".auditai" / "reports" / "report.md"
         snapshot = store.load_session_snapshot(session_id)
 
-        assert records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert written_file.read_text(encoding="utf-8") == "# report"
         assert snapshot.tool_calls[0].output_payload["artifact_type"] == "managed_output"
         assert snapshot.tool_calls[0].output_payload["resolved_path"] == str(written_file.resolve())
@@ -459,7 +459,7 @@ def test_canonical_write_tool_prefers_configured_project_root_over_session_paylo
     written_file = project_root / ".auditai" / "tasks" / "task-1" / "report.md"
     stale_file = stale_root / ".auditai" / "tasks" / "task-1" / "report.md"
 
-    assert records[0].status == AuditToolCallStatus.COMPLETED.value
+    assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert written_file.read_text(encoding="utf-8") == "# report"
     assert not stale_file.exists()
     assert records[0].result.output_payload["resolved_path"] == str(written_file.resolve())
@@ -504,7 +504,7 @@ def test_canonical_write_tool_requires_approval_for_source_tree_writes():
         )
         snapshot = store.load_session_snapshot(session_id)
 
-        assert records[0].status == AuditToolCallStatus.DENIED.value
+        assert records[0].status == ToolExecutionReceiptStatus.DENIED.value
         assert "批准" in (records[0].error_message or "")
         assert snapshot.tool_calls[0].output_payload["permission_mode"] == "ask"
         assert snapshot.tool_calls[0].output_payload["guardrail_code"] == "source_write_requires_approval"
@@ -548,7 +548,7 @@ def test_canonical_write_tool_allows_source_tree_write_when_guardrails_are_disab
         )
         written_file = project_root / "src" / "app.py"
 
-        assert records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert written_file.read_text(encoding="utf-8") == "print('mutate')"
     finally:
         shutil.rmtree(project_root, ignore_errors=True)
@@ -599,7 +599,7 @@ def test_canonical_write_tool_allows_session_approved_source_tree_write():
         )
         written_file = project_root / "src" / "app.py"
 
-        assert records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert written_file.read_text(encoding="utf-8") == "print('approved')"
         assert records[0].result.output_payload["resolved_path"] == str(written_file.resolve())
     finally:
@@ -648,7 +648,7 @@ def test_canonical_write_tool_requires_approval_before_overwriting_existing_arti
         )
         snapshot = store.load_session_snapshot(session_id)
 
-        assert records[0].status == AuditToolCallStatus.DENIED.value
+        assert records[0].status == ToolExecutionReceiptStatus.DENIED.value
         assert snapshot.tool_calls[0].output_payload["permission_mode"] == "ask"
         assert snapshot.tool_calls[0].output_payload["guardrail_code"] == "overwrite_existing_requires_approval"
         assert existing_file.read_text(encoding="utf-8") == "old"
@@ -720,10 +720,10 @@ def test_canonical_write_tool_consumes_single_use_source_write_approval_after_fi
         )
         second_snapshot = store.load_session_snapshot(session_id)
 
-        assert first_records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert first_records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert persisted_state.metadata["write_approvals"][0]["scope"] == "single_use"
         assert persisted_state.metadata["write_approvals"][0].get("consumed_at")
-        assert second_records[0].status == AuditToolCallStatus.DENIED.value
+        assert second_records[0].status == ToolExecutionReceiptStatus.DENIED.value
         assert second_snapshot.tool_calls[-1].output_payload["guardrail_code"] == "source_write_requires_approval"
     finally:
         shutil.rmtree(project_root, ignore_errors=True)
@@ -793,8 +793,8 @@ def test_canonical_write_tool_keeps_session_scope_source_write_approval_reusable
         persisted_state = store.load_runtime_state(session_id)
         written_file = project_root / "src" / "app.py"
 
-        assert first_records[0].status == AuditToolCallStatus.COMPLETED.value
-        assert second_records[0].status == AuditToolCallStatus.COMPLETED.value
+        assert first_records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
+        assert second_records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
         assert persisted_state.metadata["write_approvals"][0]["scope"] == "session"
         assert persisted_state.metadata["write_approvals"][0].get("consumed_at") is None
         assert written_file.read_text(encoding="utf-8") == "print('session two')"

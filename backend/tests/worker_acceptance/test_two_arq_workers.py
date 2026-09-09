@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.db.session import async_session_factory
-from app.models.audit_session import AuditSession, AuditToolCall
+from app.models.audit_session import AuditSession, ToolExecutionReceipt
 from app.models.checkpoint import AuditStageORM
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.project import Project
@@ -149,9 +149,9 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
                 )
                 assert session_count == 3
                 read_calls = await db.scalar(
-                    select(func.count(AuditToolCall.id))
-                    .join(AuditSession, AuditToolCall.session_id == AuditSession.id)
-                    .where(AuditSession.task_id == task_id, AuditToolCall.tool_name == "Read")
+                    select(func.count(ToolExecutionReceipt.id))
+                    .join(AuditSession, ToolExecutionReceipt.session_id == AuditSession.id)
+                    .where(AuditSession.task_id == task_id, ToolExecutionReceipt.tool_name == "Read")
                 )
                 assert read_calls == 3
     finally:

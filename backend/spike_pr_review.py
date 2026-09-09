@@ -448,10 +448,9 @@ def db_stats(session_id: str) -> dict:
             ("audit_sessions", app.models.audit_session.AuditSession),
             ("audit_session_messages", app.models.audit_session.AuditSessionMessage),
             ("audit_session_turns", app.models.audit_session.AuditSessionTurn),
-            ("audit_tool_calls", app.models.audit_session.AuditToolCall),
+            ("audit_tool_calls", app.models.audit_session.ToolExecutionReceipt),
             ("audit_checkpoints", app.models.audit_session.AuditCheckpoint),
             ("audit_handoffs", app.models.audit_session.AuditHandoff),
-            ("audit_model_stream_attempts", app.models.audit_session.AuditModelStreamAttempt),
         ]:
             if table_name == "audit_sessions":
                 count = db.scalar(select(func.count()).select_from(model).where(model.id == session_id))

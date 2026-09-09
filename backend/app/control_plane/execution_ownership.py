@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
 from app.contracts.review_execution import ExecutionContext, ReviewRunIdentity
+from app.infrastructure.observability.tracing import get_tracer
 
 
 LEASE_SECONDS = 20
@@ -166,6 +167,7 @@ class ReviewExecutionOwnership:
             )
         return persisted
 
+    @get_tracer().start_as_current_span("ownership.claim")
     async def claim(
         self,
         db,

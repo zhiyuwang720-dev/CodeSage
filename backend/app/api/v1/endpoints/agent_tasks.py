@@ -32,7 +32,7 @@ from app.models.agent_task import (
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
     VulnerabilitySeverity, FindingStatus,
 )
-from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, AuditToolCall
+from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, ToolExecutionReceipt
 from app.execution_plane.runtime.config import RuntimeStack, coerce_runtime_stack
 from app.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
@@ -467,8 +467,8 @@ async def _load_runtime_task_stats(db: AsyncSession, task_ids: List[str]) -> Dic
             stats.setdefault(str(task_id), {"total_iterations": 0, "tool_calls_count": 0, "tokens_used": 0})["total_iterations"] = int(count or 0)
 
     tool_rows = await db.execute(
-        select(AuditSession.task_id, func.count(AuditToolCall.id))
-        .join(AuditToolCall, AuditToolCall.session_id == AuditSession.id)
+        select(AuditSession.task_id, func.count(ToolExecutionReceipt.id))
+        .join(ToolExecutionReceipt, ToolExecutionReceipt.session_id == AuditSession.id)
         .where(AuditSession.task_id.in_(task_ids))
         .group_by(AuditSession.task_id)
     )

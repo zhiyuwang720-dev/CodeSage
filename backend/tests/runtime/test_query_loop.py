@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditSkillInvocationStatus, AuditToolCallStatus
+from app.models.audit_session import AuditSkillInvocationStatus, ToolExecutionReceiptStatus
 from app.contracts.models import (
     RuntimeCompletionMode,
     RuntimeContinueReason,
@@ -222,7 +222,7 @@ def test_runner_executes_tool_calls_and_loops_until_final_answer():
     assert visible_messages[2].payload["tool_name"] == "echo"
     assert visible_messages[3].payload["output"] == {"echo": "repo summary"}
     assert len(snapshot.tool_calls) == 1
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.COMPLETED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert client.calls[0]["tool_definitions"][0]["name"] == "echo"
 
 
@@ -437,7 +437,7 @@ def test_runner_rejects_reason_only_finalize_review_payload_without_terminal_com
     assert result.terminal_action is None
     assert result.completion_mode is None
     assert len(client.calls) == 2
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.COMPLETED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert snapshot.tool_calls[0].output_payload["finalization_rejected"] is True
     assert snapshot.tool_calls[0].output_payload["validation_errors"]
 
@@ -489,7 +489,7 @@ def test_runner_invalid_finalize_review_continues_with_tool_error_feedback():
     assert result.terminal_action is None
     assert result.completion_mode is None
     assert len(client.calls) == 2
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.COMPLETED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert snapshot.tool_calls[0].output_payload["finalization_rejected"] is True
     assert snapshot.messages[-2].role == RuntimeMessageRole.TOOL_RESULT.value
     assert snapshot.messages[-2].message_metadata["is_error"] is False
@@ -2019,10 +2019,6 @@ def test_query_loop_preserves_raw_stream_error_in_event_sink_and_checkpoint():
     assert attempt_checkpoints[-1].state_payload["status"] == "tombstone"
     assert snapshot.checkpoints[-1].state_payload["checkpoint_kind"] == "resumable_failed"
     assert snapshot.checkpoints[-1].state_payload["resumable"] is True
-    assert len(snapshot.model_stream_attempts) == QueryLoop.MODEL_STREAM_MAX_RETRIES + 1
-    assert snapshot.model_stream_attempts[0].status == "superseded"
-    assert snapshot.model_stream_attempts[-1].status == "tombstone"
-    assert all(item.provider_request_count == 1 for item in snapshot.model_stream_attempts)
 
 
 def test_query_loop_treats_provider_tpd_rate_limit_as_non_retryable_quota_exhaustion():
@@ -2046,6 +2042,5 @@ def test_query_loop_treats_provider_tpd_rate_limit_as_non_retryable_quota_exhaus
 
     assert result.stop_reason is RuntimeStopReason.QUOTA_EXHAUSTED
     assert len(client.calls) == 1
-    assert snapshot.model_stream_attempts[-1].status == "tombstone"
-    assert snapshot.model_stream_attempts[-1].error_kind == "quota_exhausted"
+    assert snapshot.checkpoints[-1].state_payload["error_kind"] == "quota_exhausted"
     assert snapshot.checkpoints[-1].state_payload["error_kind"] == "quota_exhausted"

@@ -11,13 +11,12 @@ from app.models.audit_session import (
     AuditCheckpointType,
     AuditHandoff,
     AuditMemory,
-    AuditModelStreamAttempt,
     AuditSession,
     AuditSessionMessage,
     AuditSessionTurn,
     AuditSkill,
     AuditSkillInvocation,
-    AuditToolCall,
+    ToolExecutionReceipt,
 )
 from app.contracts.models import RuntimeMemoryRecord, RuntimeSessionSnapshot, RuntimeSessionState, TranscriptItem
 from app.contracts.query_state import QueryLoopState
@@ -189,45 +188,6 @@ class AuditSessionStore:
             db.commit()
             db.refresh(turn)
             return turn.id
-
-    def start_model_stream_attempt(
-        self,
-        *,
-        attempt_id: str,
-        session_id: str,
-        turn_id: str,
-        attempt_number: int,
-    ) -> None:
-        with self._session_factory() as db:
-            db.add(
-                AuditModelStreamAttempt(
-                    id=attempt_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    attempt_number=attempt_number,
-                    status="running",
-                    provider_request_count=1,
-                )
-            )
-            db.commit()
-
-    def complete_model_stream_attempt(
-        self,
-        attempt_id: str,
-        *,
-        status: str,
-        error_kind: str | None = None,
-        error_message: str | None = None,
-    ) -> None:
-        with self._session_factory() as db:
-            attempt = db.get(AuditModelStreamAttempt, attempt_id)
-            if attempt is None:
-                raise LookupError(f"Unknown model stream attempt: {attempt_id}")
-            attempt.status = status
-            attempt.error_kind = error_kind
-            attempt.error_message = error_message
-            attempt.completed_at = datetime.now(timezone.utc)
-            db.commit()
 
     def close_turn(self, turn_id: str, *, status: str = "completed") -> None:
         with self._session_factory() as db:
@@ -405,8 +365,8 @@ class AuditSessionStore:
         is_concurrency_safe: bool,
     ) -> str:
         with self._session_factory() as db:
-            sequence = self._next_sequence(db, AuditToolCall, AuditToolCall.session_id, session_id)
-            tool_call = AuditToolCall(
+            sequence = self._next_sequence(db, ToolExecutionReceipt, ToolExecutionReceipt.session_id, session_id)
+            tool_call = ToolExecutionReceipt(
                 session_id=session_id,
                 turn_id=turn_id,
                 sequence=sequence,
@@ -430,24 +390,25 @@ class AuditSessionStore:
         error_message: str | None = None,
         duration_ms: int | None = None,
     ) -> None:
+        # Compatibility input only; precise duration is emitted by the tool span.
+        del duration_ms
         with self._session_factory() as db:
-            tool_call = db.get(AuditToolCall, tool_call_id)
+            tool_call = db.get(ToolExecutionReceipt, tool_call_id)
             if tool_call is None:
                 raise LookupError(f"Unknown audit tool call: {tool_call_id}")
             tool_call.status = status
             tool_call.output_payload = dict(output_payload or {})
             tool_call.error_message = error_message
-            tool_call.duration_ms = duration_ms
             tool_call.completed_at = datetime.now(timezone.utc)
             db.commit()
 
-    def list_tool_calls(self, session_id: str) -> list[AuditToolCall]:
+    def list_tool_calls(self, session_id: str) -> list[ToolExecutionReceipt]:
         with self._session_factory() as db:
             return list(
                 db.scalars(
-                    select(AuditToolCall)
-                    .where(AuditToolCall.session_id == session_id)
-                    .order_by(AuditToolCall.sequence)
+                    select(ToolExecutionReceipt)
+                    .where(ToolExecutionReceipt.session_id == session_id)
+                    .order_by(ToolExecutionReceipt.sequence)
                 )
             )
 
@@ -500,9 +461,9 @@ class AuditSessionStore:
             )
             tool_calls = list(
                 db.scalars(
-                    select(AuditToolCall)
-                    .where(AuditToolCall.session_id == session_id)
-                    .order_by(AuditToolCall.sequence)
+                    select(ToolExecutionReceipt)
+                    .where(ToolExecutionReceipt.session_id == session_id)
+                    .order_by(ToolExecutionReceipt.sequence)
                 )
             )
             skills = list(
@@ -533,13 +494,6 @@ class AuditSessionStore:
                     .order_by(AuditHandoff.created_at)
                 )
             )
-            model_stream_attempts = list(
-                db.scalars(
-                    select(AuditModelStreamAttempt)
-                    .where(AuditModelStreamAttempt.session_id == session_id)
-                    .order_by(AuditModelStreamAttempt.started_at)
-                )
-            )
             return RuntimeSessionSnapshot(
                 session=session,
                 messages=messages,
@@ -550,7 +504,6 @@ class AuditSessionStore:
                 skill_invocations=skill_invocations,
                 memories=memories,
                 handoffs=handoffs,
-                model_stream_attempts=model_stream_attempts,
             )
 
     @staticmethod

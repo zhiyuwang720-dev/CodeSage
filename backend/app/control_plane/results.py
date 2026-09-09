@@ -19,6 +19,7 @@ from app.control_plane.execution_ownership import (
     review_execution_ownership,
 )
 from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.infrastructure.observability.tracing import get_tracer
 
 
 QUICK_REVIEW_STAGES = [
@@ -134,6 +135,7 @@ class ReviewResultService:
         row.fingerprint = row.generate_fingerprint()
         return row
 
+    @get_tracer().start_as_current_span("result.commit")
     async def commit_success(
         self,
         db,
@@ -218,6 +220,7 @@ class ReviewResultService:
             raise
         return len(normalized)
 
+    @get_tracer().start_as_current_span("result.commit")
     async def mark_failed(
         self,
         db,

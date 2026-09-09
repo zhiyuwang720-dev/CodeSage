@@ -25,13 +25,12 @@ from app.models.audit_session import (
     AuditHandoff,
     AuditCheckpoint,
     AuditMemory,
-    AuditModelStreamAttempt,
     AuditSession,
     AuditSessionMessage,
     AuditSessionTurn,
     AuditSkill,
     AuditSkillInvocation,
-    AuditToolCall,
+    ToolExecutionReceipt,
 )
 from app.models.project import Project
 from app.models.user import User
@@ -94,21 +93,6 @@ class AuditSessionToolCallResponse(BaseModel):
     output_payload: dict[str, Any]
     error_message: Optional[str] = None
     duration_ms: Optional[int] = None
-    started_at: datetime
-    completed_at: Optional[datetime] = None
-
-    model_config = {"from_attributes": True}
-
-
-class AuditModelStreamAttemptResponse(BaseModel):
-    id: str
-    session_id: str
-    turn_id: str
-    attempt_number: int
-    status: str
-    error_kind: Optional[str] = None
-    error_message: Optional[str] = None
-    provider_request_count: int
     started_at: datetime
     completed_at: Optional[datetime] = None
 
@@ -537,28 +521,23 @@ async def list_audit_session_tool_calls(
         raise HTTPException(status_code=404, detail="Audit session not found")
 
     result = await db.execute(
-        select(AuditToolCall)
-        .where(AuditToolCall.session_id == session_id)
-        .order_by(AuditToolCall.sequence)
+        select(ToolExecutionReceipt)
+        .where(ToolExecutionReceipt.session_id == session_id)
+        .order_by(ToolExecutionReceipt.sequence)
     )
-    return [AuditSessionToolCallResponse.model_validate(tool_call) for tool_call in result.scalars().all()]
-
-
-@router.get("/{session_id}/model-attempts", response_model=list[AuditModelStreamAttemptResponse])
-async def list_audit_session_model_attempts(
-    session_id: str,
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(deps.get_current_user),
-) -> list[AuditModelStreamAttemptResponse]:
-    session = await db.get(AuditSession, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Audit session not found")
-    result = await db.execute(
-        select(AuditModelStreamAttempt)
-        .where(AuditModelStreamAttempt.session_id == session_id)
-        .order_by(AuditModelStreamAttempt.started_at)
-    )
-    return [AuditModelStreamAttemptResponse.model_validate(item) for item in result.scalars().all()]
+    responses = []
+    for receipt in result.scalars().all():
+        duration_ms = None
+        if receipt.completed_at is not None and receipt.started_at is not None:
+            duration_ms = max(
+                0, int((receipt.completed_at - receipt.started_at).total_seconds() * 1000)
+            )
+        responses.append(
+            AuditSessionToolCallResponse.model_validate(receipt).model_copy(
+                update={"duration_ms": duration_ms}
+            )
+        )
+    return responses
 
 
 @router.get("/{session_id}/skills", response_model=list[AuditSessionSkillResponse])

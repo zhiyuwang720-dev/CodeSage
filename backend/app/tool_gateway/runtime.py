@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from time import perf_counter
+
+from opentelemetry import trace
 from typing import Any, AsyncGenerator, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from app.models.audit_session import AuditCheckpointType, AuditToolCallStatus
+from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
+from app.infrastructure.observability.tracing import get_tracer, span_attributes
 from app.tool_gateway.permission.runtime import RuntimePermissionRuntime, ToolPermissionDecision
 from app.contracts.models import (
     ToolCallRequest,
@@ -430,6 +433,9 @@ class ToolGateway:
             active_keys = set()
         return batches
 
+    @get_tracer().start_as_current_span(
+        "tool.invoke", attributes={"openinference.span.kind": "TOOL"}
+    )
     async def _execute_prepared_call(
         self,
         prepared_call: _PreparedToolCall,
@@ -442,6 +448,12 @@ class ToolGateway:
         skip_execution_reason: str | None = None,
     ) -> ToolExecutionRecord:
         request = prepared_call.request
+        trace.get_current_span().set_attributes(
+            {
+                "tool.name": request.name,
+                **span_attributes(session_id=session_id),
+            }
+        )
         tool_call_id = self._session_store.start_tool_call(
             session_id=session_id,
             turn_id=turn_id,
@@ -456,7 +468,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.MISSING.value,
+                status=ToolExecutionReceiptStatus.MISSING.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=f"Unknown tool: {request.name}",
@@ -466,7 +478,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.INVALID.value,
+                status=ToolExecutionReceiptStatus.INVALID.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=prepared_call.validation_error,
@@ -478,7 +490,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.FAILED.value,
+                status=ToolExecutionReceiptStatus.FAILED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=skip_execution_reason,
@@ -534,7 +546,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.DENIED.value,
+                status=ToolExecutionReceiptStatus.DENIED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=runtime_permission.reason or "Tool permission denied",
@@ -573,7 +585,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.DENIED.value,
+                status=ToolExecutionReceiptStatus.DENIED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=permission.reason or "Tool permission denied",
@@ -624,7 +636,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.FAILED.value,
+                status=ToolExecutionReceiptStatus.FAILED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=message,
@@ -642,7 +654,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.FAILED.value,
+                status=ToolExecutionReceiptStatus.FAILED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message="Tool execution interrupted",
@@ -660,7 +672,7 @@ class ToolGateway:
             return self._finalize_error_record(
                 tool_call_id=tool_call_id,
                 request=request,
-                status=AuditToolCallStatus.FAILED.value,
+                status=ToolExecutionReceiptStatus.FAILED.value,
                 is_concurrency_safe=prepared_call.is_concurrency_safe,
                 started=started,
                 message=str(exc),
@@ -671,12 +683,13 @@ class ToolGateway:
         self._emit_hook_event(event_name="PostToolUse", context=context, tool_name=request.name)
         context.report_progress(event="tool_complete", message=f"Completed {prepared_call.tool.user_facing_name(prepared_call.parsed_input)}")
         duration_ms = max(0, int((perf_counter() - started) * 1000))
+        trace.get_current_span().set_attribute("codesage.status", "completed")
         output_payload = dict(result.output_payload or {})
         if result.context_modifier is not None:
             output_payload.setdefault("context_modifier", dict(result.context_modifier))
         self._session_store.complete_tool_call(
             tool_call_id,
-            status=AuditToolCallStatus.COMPLETED.value,
+            status=ToolExecutionReceiptStatus.COMPLETED.value,
             output_payload=output_payload,
             error_message=None,
             duration_ms=duration_ms,
@@ -703,7 +716,7 @@ class ToolGateway:
         return ToolExecutionRecord(
             tool_call_id=tool_call_id,
             request=request,
-            status=AuditToolCallStatus.COMPLETED.value,
+            status=ToolExecutionReceiptStatus.COMPLETED.value,
             is_concurrency_safe=prepared_call.is_concurrency_safe,
             result=result,
             error_message=None,
@@ -803,6 +816,8 @@ class ToolGateway:
         lifecycle: dict[str, Any] | None = None,
     ) -> ToolExecutionRecord:
         duration_ms = max(0, int((perf_counter() - started) * 1000))
+        trace.get_current_span().set_attribute("codesage.status", status)
+        trace.get_current_span().set_attribute("codesage.error", True)
         result = ToolExecutionPayload(
             content=message,
             output_payload=dict(output_payload or {}),

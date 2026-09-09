@@ -38,8 +38,8 @@ from .audit_session import (
     AuditSkill,
     AuditSkillInvocation,
     AuditSkillInvocationStatus,
-    AuditToolCall,
-    AuditToolCallStatus,
+    ToolExecutionReceipt,
+    ToolExecutionReceiptStatus,
 )
 
 __all__ = [
@@ -74,6 +74,6 @@ __all__ = [
     "AuditSkill",
     "AuditSkillInvocation",
     "AuditSkillInvocationStatus",
-    "AuditToolCall",
-    "AuditToolCallStatus",
+    "ToolExecutionReceipt",
+    "ToolExecutionReceiptStatus",
 ]

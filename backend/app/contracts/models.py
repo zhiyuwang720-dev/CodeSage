@@ -156,7 +156,6 @@ class RuntimeSessionSnapshot:
     skill_invocations: list[Any] = field(default_factory=list)
     memories: list[Any] = field(default_factory=list)
     handoffs: list[Any] = field(default_factory=list)
-    model_stream_attempts: list[Any] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -5,6 +5,9 @@ import inspect
 import re
 import uuid
 from datetime import datetime, timezone
+from time import perf_counter
+
+from opentelemetry import context as otel_context, trace
 
 from app.models.audit_session import AuditCheckpointType
 from app.execution_plane.harness.json_parser import AgentJsonParser
@@ -43,6 +46,7 @@ from app.execution_plane.runtime.query_messages import normalize_messages_for_mo
 from app.contracts.query_state import QueryLoopState
 from app.execution_plane.session.store import AuditSessionPersistenceError
 from app.tool_gateway.search import TOOL_SEARCH_TOOL_NAME
+from app.infrastructure.observability.tracing import get_meter, get_tracer, span_attributes
 
 # 终点工具名(阶段 02 §3.4.1 参数化): 各领域的终结工具在此登记,
 # 桥接层的 continue_session_until_payload(finalizer_tools=...) 走完全参数化路径。
@@ -111,7 +115,13 @@ class QueryLoop:
         self._terminal_action_nudge_limit = max(0, int(terminal_action_nudge_limit or 0))
         self._terminal_action_nudge_message = str(terminal_action_nudge_message or "").strip() or None
 
+    @get_tracer().start_as_current_span(
+        "harness.turn", attributes={"openinference.span.kind": "CHAIN"}
+    )
     async def run_turn(self, *, session_id: str, model_name: str) -> TurnExecutionResult:
+        trace.get_current_span().set_attributes(
+            span_attributes(session_id=session_id, model=model_name)
+        )
         snapshot = self._session_store.load_session_snapshot(session_id)
         runtime_state = self._session_store.load_runtime_state(session_id)
         state = self._load_query_loop_state(session_id=session_id, snapshot=snapshot)
@@ -173,12 +183,18 @@ class QueryLoop:
             for attempt_number in range(1, self.MODEL_STREAM_MAX_RETRIES + 2):
                 attempt_id = str(uuid.uuid4())
                 attempt_placeholder_id = f"{assistant_stream_placeholder_id}-{attempt_id}"
-                self._session_store.start_model_stream_attempt(
-                    attempt_id=attempt_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    attempt_number=attempt_number,
+                attempt_span = get_tracer().start_span(
+                    "model.attempt",
+                    attributes={
+                        "openinference.span.kind": "CHAIN",
+                        **span_attributes(
+                            session_id=session_id,
+                            attempt_id=attempt_id,
+                            attempt_number=attempt_number,
+                        ),
+                    },
                 )
+                attempt_context_token = otel_context.attach(trace.set_span_in_context(attempt_span))
                 try:
                     collected = await self._collect_model_turn(
                         session_id=session_id,
@@ -193,23 +209,16 @@ class QueryLoop:
                         assistant_stream_sequence=assistant_stream_sequence,
                         attempt_id=attempt_id,
                     )
-                    self._session_store.complete_model_stream_attempt(attempt_id, status="committed")
+                    attempt_span.set_attribute("codesage.status", "committed")
                     break
                 except AuditSessionPersistenceError as exc:
-                    self._session_store.complete_model_stream_attempt(
-                        attempt_id,
-                        status="tombstone",
-                        error_kind="persistence_error",
-                        error_message=str(exc).strip() or repr(exc),
-                    )
+                    attempt_span.set_attribute("codesage.status", "tombstone")
+                    attempt_span.set_attribute("codesage.error_kind", "persistence_error")
+                    attempt_span.record_exception(exc)
                     raise
                 except asyncio.CancelledError:
-                    self._session_store.complete_model_stream_attempt(
-                        attempt_id,
-                        status="tombstone",
-                        error_kind="cancelled",
-                        error_message="Model stream attempt cancelled",
-                    )
+                    attempt_span.set_attribute("codesage.status", "tombstone")
+                    attempt_span.set_attribute("codesage.error_kind", "cancelled")
                     raise
                 except Exception as exc:
                     last_model_error = exc
@@ -217,12 +226,9 @@ class QueryLoop:
                     retryable = self._is_retryable_model_stream_error(exc)
                     exhausted = attempt_number > self.MODEL_STREAM_MAX_RETRIES
                     attempt_status = "superseded" if retryable and not exhausted else "tombstone"
-                    self._session_store.complete_model_stream_attempt(
-                        attempt_id,
-                        status=attempt_status,
-                        error_kind=error_kind,
-                        error_message=str(exc).strip() or repr(exc),
-                    )
+                    attempt_span.set_attribute("codesage.status", attempt_status)
+                    attempt_span.set_attribute("codesage.error_kind", error_kind)
+                    attempt_span.record_exception(exc)
                     self._session_store.create_checkpoint(
                         session_id=session_id,
                         turn_id=turn_id,
@@ -258,6 +264,9 @@ class QueryLoop:
                         }
                     )
                     await asyncio.sleep(min(4.0, float(2 ** (attempt_number - 1))))
+                finally:
+                    otel_context.detach(attempt_context_token)
+                    attempt_span.end()
             if collected is None:
                 raise last_model_error or RuntimeError("Model stream failed without an error detail")
         except asyncio.CancelledError:
@@ -1047,6 +1056,9 @@ class QueryLoop:
             }
         )
 
+    @get_tracer().start_as_current_span(
+        "provider.request", attributes={"openinference.span.kind": "LLM"}
+    )
     async def _collect_model_turn(
         self,
         *,
@@ -1063,6 +1075,13 @@ class QueryLoop:
         attempt_id: str = "",
     ) -> dict[str, Any]:
         attempt_id = attempt_id or str(uuid.uuid4())
+        provider_span = trace.get_current_span()
+        provider_span.set_attributes(
+            {
+                "gen_ai.request.model": model_name,
+                **span_attributes(session_id=session_id, attempt_id=attempt_id),
+            }
+        )
         stream_fn = getattr(self._model_client, "stream_complete", None)
         if not callable(stream_fn):
             model_response = self._normalize_model_response(
@@ -1075,6 +1094,7 @@ class QueryLoop:
                     max_output_tokens_override=state.max_output_tokens_override,
                 )
             )
+            self._record_provider_usage(model_response.usage, model_name=model_name)
             assistant_message_id = None
             working_messages = list(state.messages)
             if model_response.content or model_response.reasoning_content or model_response.tool_calls:
@@ -1169,6 +1189,8 @@ class QueryLoop:
         assistant_reasoning_content = ""
         stream_done: dict[str, Any] | None = None
         assistant_stream_started = False
+        provider_started = perf_counter()
+        first_response_event_seen = False
         async for event in stream_fn(
             system_prompt=effective_system_prompt,
             recon_payload=snapshot.session.recon_payload or {},
@@ -1178,6 +1200,13 @@ class QueryLoop:
             max_output_tokens_override=state.max_output_tokens_override,
         ):
             event_type = str((event or {}).get("type") or "").strip().lower()
+            if not first_response_event_seen and event_type in {
+                "content_delta", "reasoning_delta", "tool_call_delta", "tool_use_delta", "done"
+            }:
+                first_response_event_seen = True
+                provider_span.set_attribute(
+                    "codesage.time_to_first_event_ms", max(0.0, (perf_counter() - provider_started) * 1000)
+                )
             if event_type == "content_delta":
                 assistant_content = str((event or {}).get("accumulated") or (assistant_content + str((event or {}).get("content") or "")))
                 if not assistant_stream_started:
@@ -1352,6 +1381,7 @@ class QueryLoop:
                 "usage": dict((stream_done or {}).get("usage") or {}),
             }
         )
+        self._record_provider_usage(model_response.usage, model_name=model_name)
         if assistant_message_id is not None:
             assistant_message = self._session_store.get_message(assistant_message_id)
             if assistant_message is not None:
@@ -1421,6 +1451,28 @@ class QueryLoop:
             "tool_uses_appended": False,
             "legacy_text_tool_calls": legacy_text_tool_calls,
         }
+
+    @staticmethod
+    def _record_provider_usage(usage: dict | None, *, model_name: str) -> None:
+        """Record provider-returned usage only; missing and explicit zero stay distinct."""
+        values = dict(usage or {})
+        span = trace.get_current_span()
+        aliases = {
+            "input_tokens": ("input_tokens", "prompt_tokens"),
+            "output_tokens": ("output_tokens", "completion_tokens"),
+            "cache_read_tokens": ("cache_read_tokens", "cache_read_input_tokens"),
+            "cache_write_tokens": ("cache_write_tokens", "cache_creation_input_tokens"),
+        }
+        meter = get_meter()
+        token_counter = meter.create_counter("codesage.model.tokens")
+        for token_type, keys in aliases.items():
+            raw = next((values[key] for key in keys if key in values and values[key] is not None), None)
+            if raw is None:
+                continue
+            count = int(raw)
+            span.set_attribute(f"codesage.usage.{token_type}", count)
+            token_counter.add(count, {"model": model_name, "token_type": token_type, "usage_source": "provider"})
+        span.set_attribute("codesage.usage_source", "provider" if values else "missing")
 
     @staticmethod
     def _format_stream_error_for_exception(event: dict[str, Any]) -> str:

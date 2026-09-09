@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditToolCallStatus
+from app.models.audit_session import ToolExecutionReceiptStatus
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.execution_plane.session.store import AuditSessionStore
 from app.tool_gateway.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
@@ -155,6 +155,6 @@ def test_streaming_tool_executor_cancels_sibling_tools_after_shell_error():
     updates = asyncio.run(collect_updates())
 
     records = [update.record for update in updates if update.kind == "record"]
-    assert [record.status for record in records] == [AuditToolCallStatus.FAILED.value, AuditToolCallStatus.FAILED.value]
+    assert [record.status for record in records] == [ToolExecutionReceiptStatus.FAILED.value, ToolExecutionReceiptStatus.FAILED.value]
     assert records[0].result.metadata["error_kind"] == "execution_error"
     assert records[1].result.metadata["error_kind"] == "interrupted"

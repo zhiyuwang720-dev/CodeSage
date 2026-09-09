@@ -9,8 +9,11 @@ import inspect
 from dataclasses import dataclass
 from typing import Any
 
+from opentelemetry import trace
+
 from app.domains.pr_review.prompts import build_followup_prompt
 from app.domains.pr_review.orchestrator import PERSPECTIVE_PROMPTS, TOOL_MATRICES
+from app.infrastructure.observability.tracing import get_tracer, span_attributes
 
 REVIEW_FINALIZER_PROMPTS = [
     "如果审查已经充分完成：调用 FinalizeReview 提交结构化评论集(findings+summary)；"
@@ -119,6 +122,9 @@ class RuntimePerspectiveDispatcher:
         self._max_turns = max_turns
         self._session_ids: dict[str, str] = {}
 
+    @get_tracer().start_as_current_span(
+        "review.perspective", attributes={"openinference.span.kind": "AGENT"}
+    )
     async def __call__(
         self,
         perspective: str,
@@ -127,6 +133,13 @@ class RuntimePerspectiveDispatcher:
         *,
         resume_session_id: str | None = None,
     ) -> dict:
+        trace.get_current_span().set_attributes(
+            span_attributes(
+                task_id=self._task_id,
+                perspective=perspective,
+                session_resumed=bool(resume_session_id),
+            )
+        )
         from app.execution_plane.runtime.bridge import RuntimeBridge, RuntimeCompletionMode
         from app.tool_gateway.finalize_review import FinalizeReviewTool
 

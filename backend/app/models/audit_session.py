@@ -15,7 +15,7 @@ class AuditCheckpointType(StrEnum):
     MANUAL = "manual"
 
 
-class AuditToolCallStatus(StrEnum):
+class ToolExecutionReceiptStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -61,12 +61,6 @@ class AuditSession(Base):
         cascade="all, delete-orphan",
         order_by="AuditSessionTurn.sequence",
     )
-    model_stream_attempts = relationship(
-        "AuditModelStreamAttempt",
-        back_populates="session",
-        cascade="all, delete-orphan",
-        order_by="AuditModelStreamAttempt.started_at",
-    )
     checkpoints = relationship(
         "AuditCheckpoint",
         back_populates="session",
@@ -74,10 +68,10 @@ class AuditSession(Base):
         order_by="AuditCheckpoint.created_at",
     )
     tool_calls = relationship(
-        "AuditToolCall",
+        "ToolExecutionReceipt",
         back_populates="session",
         cascade="all, delete-orphan",
-        order_by="AuditToolCall.sequence",
+        order_by="ToolExecutionReceipt.sequence",
     )
     skills = relationship(
         "AuditSkill",
@@ -127,33 +121,8 @@ class AuditSessionTurn(Base):
 
     session = relationship("AuditSession", back_populates="turns")
     checkpoints = relationship("AuditCheckpoint", back_populates="turn")
-    tool_calls = relationship("AuditToolCall", back_populates="turn", order_by="AuditToolCall.sequence")
+    tool_calls = relationship("ToolExecutionReceipt", back_populates="turn", order_by="ToolExecutionReceipt.sequence")
     skill_invocations = relationship("AuditSkillInvocation", back_populates="turn", order_by="AuditSkillInvocation.sequence")
-    model_stream_attempts = relationship(
-        "AuditModelStreamAttempt",
-        back_populates="turn",
-        order_by="AuditModelStreamAttempt.attempt_number",
-    )
-
-
-class AuditModelStreamAttempt(Base):
-    __tablename__ = "audit_model_stream_attempts"
-
-    id = Column(String(36), primary_key=True)
-    session_id = Column(String(36), ForeignKey("audit_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    turn_id = Column(String(36), ForeignKey("audit_session_turns.id", ondelete="CASCADE"), nullable=False, index=True)
-    attempt_number = Column(Integer, nullable=False)
-    status = Column(String(32), nullable=False, default="running")
-    error_kind = Column(String(64), nullable=True)
-    error_message = Column(Text, nullable=True)
-    provider_request_count = Column(Integer, nullable=False, default=1)
-    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-
-    session = relationship("AuditSession", back_populates="model_stream_attempts")
-    turn = relationship("AuditSessionTurn", back_populates="model_stream_attempts")
-
-
 class AuditCheckpoint(Base):
     __tablename__ = "audit_checkpoints"
 
@@ -168,7 +137,7 @@ class AuditCheckpoint(Base):
     turn = relationship("AuditSessionTurn", back_populates="checkpoints")
 
 
-class AuditToolCall(Base):
+class ToolExecutionReceipt(Base):
     __tablename__ = "audit_tool_calls"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -177,12 +146,11 @@ class AuditToolCall(Base):
     sequence = Column(Integer, nullable=False)
     tool_use_id = Column(String(255), nullable=False)
     tool_name = Column(String(255), nullable=False)
-    status = Column(String(32), nullable=False, default=AuditToolCallStatus.PENDING.value)
+    status = Column(String(32), nullable=False, default=ToolExecutionReceiptStatus.PENDING.value)
     is_concurrency_safe = Column(Boolean, nullable=False, default=False)
     input_payload = Column(JSON, nullable=False, default=dict)
     output_payload = Column(JSON, nullable=False, default=dict)
     error_message = Column(Text, nullable=True)
-    duration_ms = Column(Integer, nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

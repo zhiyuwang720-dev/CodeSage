@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from app.core.config import settings
+from app.infrastructure.observability.tracing import get_tracer
 from app.db.session import async_session_factory
 from app.db.session import get_pr_review_sync_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
@@ -69,6 +70,9 @@ async def _heartbeat(
             raise
 
 
+@get_tracer().start_as_current_span(
+    "review.quick", attributes={"openinference.span.kind": "CHAIN"}
+)
 async def execute_quick_review(
     task_id: str,
     dependencies: QuickReviewDependencies | None = None,

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditToolCallStatus
+from app.models.audit_session import ToolExecutionReceiptStatus
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.execution_plane.session.store import AuditSessionStore
 from app.tool_gateway.runtime import (
@@ -82,7 +82,7 @@ def test_tool_orchestrator_batches_concurrency_safe_tools_and_persists_results()
         )
     )
 
-    assert [record.status for record in records] == [AuditToolCallStatus.COMPLETED.value, AuditToolCallStatus.COMPLETED.value]
+    assert [record.status for record in records] == [ToolExecutionReceiptStatus.COMPLETED.value, ToolExecutionReceiptStatus.COMPLETED.value]
     assert events[:2] == [("start", "alpha"), ("start", "beta")]
     snapshot = store.load_session_snapshot(session_id)
     assert len(snapshot.tool_calls) == 2
@@ -105,10 +105,10 @@ def test_tool_orchestrator_records_permission_denials_without_running_tool():
         )
     )
 
-    assert records[0].status == AuditToolCallStatus.DENIED.value
+    assert records[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert records[0].error_message == "write access denied"
     snapshot = store.load_session_snapshot(session_id)
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.DENIED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.DENIED.value
     assert snapshot.tool_calls[0].error_message == "write access denied"
 
 
@@ -161,7 +161,7 @@ def test_tool_orchestrator_persists_progress_events_and_context_modifier_metadat
     )
     snapshot = store.load_session_snapshot(session_id)
 
-    assert records[0].status == AuditToolCallStatus.COMPLETED.value
+    assert records[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert records[0].result.context_modifier == {"cache": "updated"}
     assert records[0].result.metadata["progress_event_count"] == 4
     assert records[0].lifecycle["context_modifier"] == {"cache": "updated"}
@@ -185,7 +185,7 @@ def test_tool_orchestrator_formats_validation_errors_with_error_kind_metadata():
         )
     )
 
-    assert records[0].status == AuditToolCallStatus.INVALID.value
+    assert records[0].status == ToolExecutionReceiptStatus.INVALID.value
     assert records[0].result.metadata["error_kind"] == "validation_error"
     assert "text" in records[0].error_message
 

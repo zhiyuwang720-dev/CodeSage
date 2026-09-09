@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditCheckpointType, AuditMemoryKind, AuditSkillInvocationStatus, AuditToolCallStatus
+from app.models.audit_session import AuditCheckpointType, AuditMemoryKind, AuditSkillInvocationStatus, ToolExecutionReceiptStatus
 from app.contracts.models import RuntimeMemoryRecord, RuntimeMessageRole, RuntimeSessionState, TranscriptItem
 from app.execution_plane.session.store import AuditSessionStore
 
@@ -129,7 +129,7 @@ def test_open_turn_checkpoint_tool_call_skill_invocation_and_memories_round_trip
     )
     store.complete_tool_call(
         tool_call_id,
-        status=AuditToolCallStatus.COMPLETED.value,
+        status=ToolExecutionReceiptStatus.COMPLETED.value,
         output_payload={"text": "demo"},
         duration_ms=12,
     )
@@ -167,7 +167,7 @@ def test_open_turn_checkpoint_tool_call_skill_invocation_and_memories_round_trip
     assert snapshot.memories[1].relevance_score == 52
     assert len(snapshot.tool_calls) == 1
     assert snapshot.tool_calls[0].id == tool_call_id
-    assert snapshot.tool_calls[0].status == AuditToolCallStatus.COMPLETED.value
+    assert snapshot.tool_calls[0].status == ToolExecutionReceiptStatus.COMPLETED.value
     assert len(snapshot.skill_invocations) == 1
     assert snapshot.skill_invocations[0].id == invocation_id
     assert snapshot.skill_invocations[0].status == AuditSkillInvocationStatus.COMPLETED.value
