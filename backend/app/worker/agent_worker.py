@@ -42,6 +42,7 @@ async def run_worker() -> None:
         job_timeout=WorkerSettings.job_timeout,
         max_tries=WorkerSettings.max_tries,
         retry_jobs=WorkerSettings.retry_jobs,
+        health_check_key=WorkerSettings.health_check_key,
     )
     await worker.async_run()
 
@@ -107,6 +108,7 @@ class WorkerSettings:
     job_timeout = settings.AGENT_WORKER_JOB_TIMEOUT_SECONDS
     max_tries = settings.AGENT_WORKER_MAX_TRIES
     retry_jobs = True
+    health_check_key = settings.AGENT_WORKER_HEALTH_CHECK_KEY
     on_startup = startup_observability
     on_shutdown = shutdown_observability
 

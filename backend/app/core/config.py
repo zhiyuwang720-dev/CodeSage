@@ -129,6 +129,7 @@ class Settings(BaseSettings):
     AGENT_TASK_EXECUTION_MODE: str = "worker"
     AGENT_TASK_QUEUE_NAME: str = "CodeSage:arq:agent_tasks"
     AGENT_WORKER_CONCURRENCY: int = 2
+    AGENT_WORKER_HEALTH_CHECK_KEY: str = "codesage:worker:health"
     # 正常审查可持续数十分钟；故障验收的 60s timeout 只能由独立 profile 显式配置。
     AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 3600
     AGENT_WORKER_MAX_TRIES: int = 3
@@ -136,6 +137,7 @@ class Settings(BaseSettings):
     AGENT_EVENT_STREAM_MAXLEN: int = 5000
     OTEL_ENABLED: bool = False
     OTEL_SERVICE_NAME: str = "codesage"
+    OTEL_PROJECT_NAME: str = "codesage"
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://127.0.0.1:6006/v1/traces"
     OTEL_EXPORT_TIMEOUT_SECONDS: float = 3.0
     OTEL_LOCAL_TRACE_PATH: str = ".auditai/observability/traces.otlp.jsonl"

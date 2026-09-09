@@ -1,0 +1,315 @@
+name: codesage
+
+x-backend-build: &backend-build
+  context: .
+  dockerfile: backend/Dockerfile
+
+x-product-environment: &product-environment
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-codesage}:${POSTGRES_PASSWORD:-codesage}@postgres:5432/${POSTGRES_DB:-codesage}
+  REDIS_URL: redis://redis:6379/0
+  MANAGED_PROJECTS_ROOT: /workspace/projects
+  AGENT_TASK_EXECUTION_MODE: worker
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
+  OTEL_PROJECT_NAME: codesage-product
+  CODESAGE_ENV: local-compose
+  NO_PROXY: localhost,127.0.0.1,postgres,redis,phoenix,backend
+
+x-eval-environment: &eval-environment
+  DATABASE_URL: postgresql+asyncpg://codesage_eval:codesage_eval@eval-postgres:5432/codesage_eval
+  REDIS_URL: redis://eval-redis:6379/0
+  MANAGED_PROJECTS_ROOT: /workspace/projects
+  AGENT_TASK_EXECUTION_MODE: worker
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
+  OTEL_PROJECT_NAME: codesage-eval
+  CODESAGE_ENV: eval-compose
+  NO_PROXY: localhost,127.0.0.1,phoenix,eval-api,eval-postgres,eval-redis
+
+x-product-dependencies: &product-dependencies
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  phoenix:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+x-eval-dependencies: &eval-dependencies
+  eval-postgres:
+    condition: service_healthy
+  eval-redis:
+    condition: service_healthy
+  phoenix:
+    condition: service_healthy
+  eval-migrate:
+    condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-codesage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codesage}
+      POSTGRES_DB: ${POSTGRES_DB:-codesage}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  phoenix:
+    image: arizephoenix/phoenix:version-20.8.0
+    ports:
+      - "127.0.0.1:6006:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    volumes:
+      - phoenix_data:/mnt/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    build: *backend-build
+    env_file:
+      - path: .env
+        required: false
+    environment: *product-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: *backend-build
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *product-environment
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/api.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/api.metrics.otlp.jsonl
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./projects:/workspace/projects
+      - product_uploads:/workspace/backend/uploads
+      - product_data:/workspace/backend/data
+      - ./.codesage/observability:/var/lib/codesage/observability
+    depends_on: *product-dependencies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  worker-1:
+    build: *backend-build
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *product-environment
+      AGENT_WORKER_CONCURRENCY: "1"
+      AGENT_WORKER_HEALTH_CHECK_KEY: codesage:product:worker-1
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/worker-1.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/worker-1.metrics.otlp.jsonl
+    command: ["python", "-m", "arq", "app.worker.agent_worker.WorkerSettings"]
+    volumes:
+      - ./projects:/workspace/projects
+      - ./.codesage/observability:/var/lib/codesage/observability
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: *product-dependencies
+    healthcheck:
+      test: ["CMD", "python", "-m", "arq", "app.worker.agent_worker.WorkerSettings", "--check"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+    restart: unless-stopped
+
+  worker-2:
+    extends:
+      service: worker-1
+    environment:
+      <<: *product-environment
+      AGENT_WORKER_CONCURRENCY: "1"
+      AGENT_WORKER_HEALTH_CHECK_KEY: codesage:product:worker-2
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/worker-2.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/worker-2.metrics.otlp.jsonl
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_BASE_URL: /api/v1
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  eval-postgres:
+    image: postgres:16-alpine
+    profiles: ["eval"]
+    environment:
+      POSTGRES_USER: codesage_eval
+      POSTGRES_PASSWORD: codesage_eval
+      POSTGRES_DB: codesage_eval
+    volumes:
+      - eval_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  eval-redis:
+    image: redis:7-alpine
+    profiles: ["eval"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - eval_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  eval-migrate:
+    build: *backend-build
+    profiles: ["eval"]
+    env_file:
+      - path: .env.eval
+        required: false
+    environment: *eval-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      eval-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  eval-api:
+    build: *backend-build
+    profiles: ["eval"]
+    env_file:
+      - path: .env.eval
+        required: false
+    environment:
+      <<: *eval-environment
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/eval-api.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/eval-api.metrics.otlp.jsonl
+    ports:
+      - "127.0.0.1:18000:8000"
+    volumes:
+      - ./code-review-benchmark/offline/eval-projects:/workspace/projects
+      - ./code-review-benchmark/offline/fixtures:/workspace/benchmark/fixtures
+      - ./.codesage/observability:/var/lib/codesage/observability
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: *eval-dependencies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  eval-worker-1:
+    build: *backend-build
+    profiles: ["eval"]
+    env_file:
+      - path: .env.eval
+        required: false
+    environment:
+      <<: *eval-environment
+      AGENT_WORKER_CONCURRENCY: "1"
+      AGENT_WORKER_HEALTH_CHECK_KEY: codesage:eval:worker-1
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/eval-worker-1.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/eval-worker-1.metrics.otlp.jsonl
+    command: ["python", "-m", "arq", "app.worker.agent_worker.WorkerSettings"]
+    volumes:
+      - ./code-review-benchmark/offline/eval-projects:/workspace/projects
+      - ./code-review-benchmark/offline/fixtures:/workspace/benchmark/fixtures
+      - ./.codesage/observability:/var/lib/codesage/observability
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: *eval-dependencies
+    healthcheck:
+      test: ["CMD", "python", "-m", "arq", "app.worker.agent_worker.WorkerSettings", "--check"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+    restart: unless-stopped
+
+  eval-worker-2:
+    extends:
+      service: eval-worker-1
+    profiles: ["eval"]
+    environment:
+      <<: *eval-environment
+      AGENT_WORKER_CONCURRENCY: "1"
+      AGENT_WORKER_HEALTH_CHECK_KEY: codesage:eval:worker-2
+      OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/eval-worker-2.traces.otlp.jsonl
+      OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/eval-worker-2.metrics.otlp.jsonl
+
+  eval-cli:
+    build: *backend-build
+    profiles: ["eval"]
+    env_file:
+      - path: .env.eval
+        required: false
+    environment:
+      <<: *eval-environment
+      CODESAGE_EVAL_API_URL: http://eval-api:8000
+      CODESAGE_PHOENIX_URL: http://phoenix:6006
+      CODESAGE_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
+      PYTHONPATH: /workspace/benchmark
+    working_dir: /workspace/benchmark
+    command: ["python", "-m", "codesage_eval", "--help"]
+    volumes:
+      - ./code-review-benchmark/offline:/workspace/benchmark
+      - ./code-review-benchmark/offline/eval-projects:/workspace/projects
+      - ./.codesage/observability:/var/lib/codesage/observability
+    depends_on:
+      eval-api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: codesage_postgres_data
+  redis_data:
+    name: codesage_redis_data
+  phoenix_data:
+    name: observability_phoenix_data
+  product_uploads:
+    name: codesage_product_uploads
+  product_data:
+    name: codesage_product_data
+  eval_postgres_data:
+    name: codesage_eval_postgres_data
+  eval_redis_data:
+    name: codesage_eval_redis_data

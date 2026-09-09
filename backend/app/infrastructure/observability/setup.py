@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,8 +74,9 @@ def configure_observability(
     resource = Resource.create(
         {
             "service.name": service_name,
-            "service.instance.id": f"{os.getpid()}",
+            "service.instance.id": f"{socket.gethostname()}:{os.getpid()}",
             "deployment.environment.name": os.getenv("CODESAGE_ENV", "local"),
+            "openinference.project.name": os.getenv("OTEL_PROJECT_NAME", "codesage"),
         }
     )
     tracer_provider = TracerProvider(resource=resource)

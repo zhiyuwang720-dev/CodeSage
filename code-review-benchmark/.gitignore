@@ -27,6 +27,7 @@ analysis/*
 runs/
 .cache/
 fixtures/
+offline/eval-projects/
 
 # Local scripts
 online/etl/scripts/
