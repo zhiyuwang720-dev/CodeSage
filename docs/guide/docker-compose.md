@@ -54,6 +54,8 @@ docker compose up -d --build --wait
 
 `migrate` 每次启动前执行 `alembic upgrade head` 并正常退出。不要用 `down -v`，否则会删除数据库卷。Phoenix 继续使用原有 `observability_phoenix_data` 卷。
 
+如果构建阶段出现 `docker.xuanyuan.me ... 403 Forbidden`，这是 Docker Desktop 配置的 registry mirror 拒绝基础镜像 manifest，并非项目 Dockerfile 错误。请在 Docker Desktop 的 Docker Engine 设置中移除或更换失效的 mirror，重启 Docker Desktop 后重新执行标准启动命令。
+
 备份示例：
 
 ```powershell
