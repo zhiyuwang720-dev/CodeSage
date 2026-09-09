@@ -170,6 +170,11 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   eval-postgres:
@@ -292,7 +297,8 @@ services:
       CODESAGE_EVAL_PASSWORD: demo123
       PYTHONPATH: /workspace/benchmark:/workspace/backend
     working_dir: /workspace/benchmark
-    command: ["python", "-m", "codesage_eval", "--help"]
+    entrypoint: ["python", "-m", "codesage_eval"]
+    command: ["--help"]
     volumes:
       - ./code-review-benchmark/offline:/workspace/benchmark
       - ./code-review-benchmark/offline/eval-projects:/workspace/projects
