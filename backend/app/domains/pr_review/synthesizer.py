@@ -152,7 +152,7 @@ def finding_to_comment(finding: ReviewFinding) -> dict:
     """ReviewFinding → benchmark 注入格式 {path, line, body, severity, category, source}。
 
     spec 03 §7.105: body 以 "[Security]/[Architecture]/[Quality]/[Rules]" 前缀开头,
-    供评测管线做分视角归因(step3_5_snapshot / eval_gate.perspective_breakdown)。
+    供 `codesage_eval` 通过结构化 source 字段做非互斥视角归因。
     """
     body_lines = [f"[{source_label(finding.source)}] **{finding.title}**", "", finding.description]
     if finding.suggestion:

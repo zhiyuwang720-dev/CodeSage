@@ -1,65 +1,38 @@
-# 阶段 03 模块说明 — 评测闭环(benchmark 注入 + 回归快照 + 门禁)
+# CodeSage Benchmark 评测闭环
 
-> 规格:`docs/spec/03-evaluation.md`(本地) · 分支:`feat/03-evaluation` · 前置:阶段 01(CLI)/阶段 02(评论契约)
+CodeSage 的唯一正式评测入口位于 `code-review-benchmark/offline/codesage_eval`。它只读加载上游 50-case 数据集，经正式 AgentTask 控制面和生产 ARQ Worker 执行，使用独立 judge 做一对一匹配，并导出可移植 JSONL 与无 CDN 的静态 HTML。评测结果不写产品 PostgreSQL，也不修改 `benchmark_data.json`。
 
-## 1. 交付清单
-
-| 文件 | 内容 |
-|---|---|
-| `backend/app/services/pr_review/eval_gate.py` | 门禁核心(纯逻辑): `compute_metrics`(聚合 precision/recall/TP/FP/FN + 高危 FN 清单)· `check_gate`(recall 降>5% / 新增 FP>基线 10% / 高危 golden TP→FN 任一 → 红)· `snapshot_diff`(两次评测整体+逐 PR delta)· `perspective_breakdown`(按 `[Security]` 前缀分视角归因) |
-| `code-review-benchmark/offline/code_review_benchmark/step1_5_inject_codesage.py` | **官方评测注入通道**(不 fork benchmark): 拉公开 PR diff(patch-diff 端点,落盘缓存)→ 调产品 CLI → 以 `{tool: codesage, pr_url, repo_name, review_comments}` 追加进 `benchmark_data.json`;增量跳过/`--force` 覆盖/预计算 `--results-file` 模式/单 PR 失败不阻断/缺失率 >10% 退出码 2/每 5 PR 周期落盘 |
-| `code-review-benchmark/offline/code_review_benchmark/step3_5_snapshot.py` | 回归快照: 对比两份 `evaluations.json` → 整体 delta + 逐 PR delta + 高危退化清单 + 分视角归因;输出 JSON 或 Markdown;与 eval_gate 同语义(独立实现,不引入 backend 依赖) |
-| `backend/app/services/pr_review/synthesizer.py` | `finding_to_comment` body 增加视角前缀约定(spec §7.105): `[Security]/[Architecture]/[Quality]/[Rules] ` — 评测归约的解析依据 |
-
-配套:`offline/pytest.ini`(钉 rootdir,防工作区根部无关 shim 干扰)+ `offline/tests/__init__.py`。
-
-## 2. 评测链路(spec §3)
-
-```
-benchmark_data.json 50 PR(original_url + golden)
-  → step1.5 注入脚本(diff 缓存 → CLI rules/runtime → reviews += codesage 条目)
-  → step2_extract_comments(LLM 提取候选) → step2.5 去重 → step3_judge_comments(LLM judge)
-  → results/{judge_model}/evaluations.json
-  → step3.5 快照(基线 vs 当前) + eval_gate.check_gate(门禁) → 分视角报告
-```
-
-## 3. 基线跑批手册(spec §5,需 LLM key,人工执行)
+## 命令与安全边界
 
 ```powershell
-# ① 全量注入(rules 引擎,离线;首次联网拉 diff 后全程可离线)
 cd code-review-benchmark/offline
-python -m code_review_benchmark.step1_5_inject_codesage `
-  --backend-root E:/Mac/CodeSage/backend `
-  --benchmark-data results/benchmark_data.json --cache-dir results/diffs_cache
-
-# ② 提取 + judge(step2/3 为 benchmark 原生管线,需 OpenAI-compatible key)
-$env:MARTIAN_API_KEY = "<key>"   # 或指向 DeepSeek 等 OpenAI 兼容端点的对应变量
-python -m code_review_benchmark.step2_extract_comments --tool codesage
-python -m code_review_benchmark.step2_5_dedup_candidates --tool codesage
-python -m code_review_benchmark.step3_judge_comments --tool codesage
-
-# ③ 基线固化 + 回归对比
-python -m code_review_benchmark.step3_5_snapshot `
-  --baseline results/{judge}/evaluations.json --current results/{judge}/evaluations_v2.json `
-  --output snapshot.json
+python -m codesage_eval prepare --fixture-map fixtures.json --suite smoke --output prepared/smoke.jsonl
+python -m codesage_eval run --prepared prepared/smoke.jsonl --api-url http://127.0.0.1:8000 --api-token $env:CODESAGE_TOKEN --project-map projects.json --model-fingerprint MODEL --prompt-fingerprint PROMPT --tool-fingerprint TOOLS --flow-fingerprint FLOW --allow-model-calls
+python -m codesage_eval judge --run-dir runs/RUN --prepared prepared/smoke.jsonl --judge-base-url ENDPOINT --judge-api-key KEY --judge-model MODEL
+python -m codesage_eval report --run-dir runs/RUN --prepared prepared/smoke.jsonl --public
 ```
 
-**本阶段验证口径**:评分机械层(注入/快照/门禁/分视角)以合成数据确定性测试覆盖(20 用例,含"禁规则层→recall 降≥5% 必须被拦"的退化区分力用例);真实 LLM judge 全量跑批为人工步骤(§3 手册),其分数依赖外部 key 配额与 judge 方差,不进 CI。
+`all` 只串联 run/judge/report，不联网准备 fixture。真实审查必须传 `--allow-model-calls`；judge 端点、密钥和模型也必须显式给出。缺指纹、未验证 fixture、混合 full_source/diff_only 或损坏 JSONL 都会阻止基线认证。
 
-## 4. 门禁规则(spec §3.3 全部落地)
+## 固定数据与恢复
 
-| 规则 | 阈值 | 行为 |
-|---|---|---|
-| recall 回归 | 下降 >5% | 阻塞 |
-| FP 膨胀 | 超基线 10% | 阻塞(基线 0 时任何新增 FP 即超限) |
-| 高危回归 | high/critical golden TP→FN | 直接阻塞 |
-| 缺失率 | >10% PR 失败 | 评测无效(退出码 2) |
+- `prepare` 解析固定 base/head/merge-base，要求源仓库无已跟踪修改，为每个 full_source case 创建独立 detached worktree，并记录源码、diff、golden 哈希；无法证明一致时标 `fixture_unverified`。
+- smoke 为前两仓库各一例；calibration 为每仓库按变更规模选择最小/最大各一例；holdout 是剩余 40；full 是全部 50。
+- runner 最多两个 case 并发，只调用 `/api/v1/agent-tasks` 创建、启动、轮询和读取正式 findings。创建 task 后立即原子登记，续跑先查询已登记 task，不让 Phoenix retry 创建第二个业务任务。
+- golden、judge 结果和第三方评论只在评测进程中使用，不进入产品任务的 workspace、消息或 `audit_scope`。
 
-后续接 CI:阶段 04 或独立脚本把 `inject → step2/3 → snapshot → check_gate` 串成门禁 job。
+## 评分、报告与校准
 
-## 5. 测试(24 用例)
+- `codesage_matching_v1` 对 judge 的 `match=true` 边先最大化配对数量，再最大化 confidence，最后按稳定 ID 决胜；每个 golden/candidate 至多配对一次。
+- `golden_coverage_v1` 单独展示一个 candidate 覆盖多个 golden 的情形，不用于计算 precision。未配对 candidate 称 benchmark-unmatched，不宣称现实误报。
+- 执行、质量判断、Trace、usage 四种完整性分别报告。失败 case 不从分母消失；缺判断为 unknown；未知 token/价格不补零为零。
+- `codesage_eval/data/calibration_v1.jsonl` 固定 20 个匹配、非匹配、多问题、重复和有效额外发现样例。`calibrate` 对每一对做两次不走缓存的判断并输出一致率；未完成时状态为 `judge_uncalibrated`。
+- `report --public` 生成离线单文件 HTML，转义内嵌 JSON/HTML/Unicode，不包含密钥、内部端点、机器绝对路径、prompt 或源码。
 
-- 后端 `tests/pr_review/test_eval_gate.py`(14): 指标聚合/skipped 排除/recall -6% 红/FP +8% 绿/+>10% 红/高危退化红/同数据绿/快照 delta/高危退化清单/分视角归因/前缀解析/CLI body 前缀约定/**已知退化区分力**(合成 rules-off 对照)
-- benchmark `offline/tests/test_step1_5.py`(6): 注入结构与既有 tool 条目同构/增量+force/预计算模式/diff 缓存离线命中/缺失率退出码/真 CLI 规则引擎单 PR 注入
-- 全量回归 **192 passed / 0 failed**(178 + 14)
-- 边界对齐 spec §7: 无网用 diff 缓存;单 PR 崩溃不阻断;judge 换模型须重记基线(score 不可跨 judge 比)
+`cleanup-legacy` 默认为 dry-run，且只接受 `offline/results` 下显式列出的路径；必须再传 `--apply` 才删除。它不会触碰 golden、数据集或并发运行目录。
+
+## 自动验收与真实基线
+
+自动测试覆盖 fixture 固定、suite 划分、匹配边界、judge unknown/cache、原子 JSONL、公开报告、控制平面恢复与 Phoenix `retries=0`。仓库已有双生产 Worker 确定性验收覆盖真实队列、工具、Session、StageResult 和终态。
+
+自动验收不调用付费模型。首次真实质量基线仍需按 smoke 2 → calibration 10 → 人工校准 → 三次 calibration 方差 → holdout/full 的顺序，由用户显式提供端点、预算和 `--allow-model-calls` 后执行。
