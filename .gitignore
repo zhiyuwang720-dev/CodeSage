@@ -30,6 +30,9 @@ pi
 # docs: only modules/ is public; specs/ideas/intent/analyses stay local
 /docs/*
 !/docs/modules/
+!/docs/guide/
+/docs/guide/*
+!/docs/guide/docker-compose.md
 Kode-CLI/
 .omc/
 

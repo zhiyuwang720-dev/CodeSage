@@ -69,6 +69,8 @@ def command_fixtures_fetch(args) -> None:
         case_ids={item.case_id for item in selected},
     )
     print(f"fetched {len(selected)} current_pr/diff_only fixtures into {args.output_map}")
+    for item in selected:
+        print(f"  {item.case_id}  {item.pr_url}")
     print("These fixtures are suitable for smoke testing, but are not a certified historical baseline.")
 
 
