@@ -10,10 +10,14 @@ from codesage_eval.runner import ControlPlaneHttpAdapter, run_cases
 from codesage_eval.storage import read_jsonl
 
 
-def _case(case_id="case"):
+def _case(fixture_path, case_id="case"):
+    fixture_path.write_text("diff --git a/a b/a\n+x\n", encoding="utf-8")
+    from codesage_eval.dataset import hash_fixture
+
+    digest = hash_fixture(fixture_path)
     return DatasetCase(
         case_id=case_id, pr_url="url", repo="repo", pr_title="", golden=[], golden_sha256="hash",
-        source_mode="diff_only", fixture_path="C:/fixtures/input.diff", fixture_sha256="fixture", diff_sha256="fixture",
+        source_mode="diff_only", fixture_path=str(fixture_path), fixture_sha256=digest, diff_sha256=digest,
     )
 
 
@@ -34,18 +38,19 @@ def test_runner_uses_control_plane_without_leaking_golden_and_registers_before_s
 
     adapter = ControlPlaneHttpAdapter(base_url="https://api.test", token="secret", transport=httpx.MockTransport(handler), poll_interval=0)
     output = tmp_path / "cases.jsonl"
-    results = asyncio.run(run_cases(cases=[_case()], eval_run_id="run", adapter=adapter, project_ids={"repo": "project"}, output_path=output))
+    fixture = tmp_path / "input.diff"
+    results = asyncio.run(run_cases(cases=[_case(fixture)], eval_run_id="run", adapter=adapter, project_ids={"repo": "project"}, output_path=output))
     assert results[0].status == "completed"
     create_body = next(item[2] for item in requests if item[0] == "POST" and item[1].endswith("/agent-tasks/"))
     serialized = json.dumps(create_body)
     assert "golden" not in serialized
     assert create_body["audit_scope"]["pr_review"] == {
-        "diff_file_path": "C:/fixtures/input.diff", "eval_run_id": "run", "case_id": "case"
+        "diff_file_path": str(fixture), "eval_run_id": "run", "case_id": "case"
     }
     assert read_jsonl(output)[0]["task_id"] == "task-1"
 
 
-def test_resume_registered_task_does_not_create_or_start_again():
+def test_resume_registered_task_does_not_create_or_start_again(tmp_path):
     requests = []
 
     def handler(request: httpx.Request):
@@ -56,6 +61,6 @@ def test_resume_registered_task_does_not_create_or_start_again():
 
     adapter = ControlPlaneHttpAdapter(base_url="https://api.test", token="secret", transport=httpx.MockTransport(handler), poll_interval=0)
     existing = EvalCaseResult(eval_run_id="run", case_id="case", status="running", task_id="task-1")
-    result = asyncio.run(adapter.run_case(_case(), eval_run_id="run", project_id="project", existing=existing))
+    result = asyncio.run(adapter.run_case(_case(tmp_path / "input.diff"), eval_run_id="run", project_id="project", existing=existing))
     assert result.status == "completed"
     assert all(method == "GET" for method, _ in requests)

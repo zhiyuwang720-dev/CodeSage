@@ -26,6 +26,7 @@ class DatasetCase(BaseModel):
     golden: list[GoldenFinding]
     source_mode: Literal["full_source", "diff_only", "fixture_unverified"] = "fixture_unverified"
     fixture_path: str | None = None
+    source_repository_path: str | None = None
     fixture_sha256: str | None = None
     base_ref: str | None = None
     head_ref: str | None = None

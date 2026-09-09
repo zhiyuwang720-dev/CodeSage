@@ -12,7 +12,7 @@ from uuid import uuid4
 from codesage_eval.compare import paired_bootstrap, validate_comparable
 from codesage_eval.calibration import run_calibration
 from codesage_eval.contracts import DatasetCase, EvalCaseResult, EvalRunManifest, JudgmentRecord
-from codesage_eval.dataset import load_dataset, select_suite
+from codesage_eval.dataset import load_dataset, prepare_detached_worktree, select_suite
 from codesage_eval.judge import OpenAICompatiblePairJudge, judge_case
 from codesage_eval.report import build_summary, write_report
 from codesage_eval.runner import ControlPlaneHttpAdapter, run_cases
@@ -39,6 +39,7 @@ def command_prepare(args) -> None:
     overrides = _json(args.fixture_map) if args.fixture_map else {}
     cases = load_dataset(args.dataset, overrides)
     selected = select_suite(cases, args.suite)
+    selected = [prepare_detached_worktree(item, args.fixtures_root) for item in selected]
     write_jsonl_atomic(args.output, selected)
     verified = sum(item.source_mode != "fixture_unverified" for item in selected)
     print(f"prepared {len(selected)} cases ({verified} verified) at {args.output}")
@@ -202,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--fixture-map")
     prepare.add_argument("--suite", choices=["smoke", "calibration", "holdout", "full"], default="smoke")
     prepare.add_argument("--output", default=str(OFFLINE_ROOT / "prepared" / "dataset.jsonl"))
+    prepare.add_argument("--fixtures-root", default=str(OFFLINE_ROOT / "fixtures"))
     prepare.set_defaults(func=command_prepare)
 
     run = commands.add_parser("run")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 
-from codesage_eval.dataset import load_dataset, select_suite
+from codesage_eval.dataset import load_dataset, prepare_detached_worktree, select_suite
 
 
 def _dataset(path):
@@ -68,6 +68,14 @@ def test_full_source_resolves_refs_and_exact_diff(tmp_path):
     assert case.merge_base == base
     assert case.diff_sha256
     assert case.changed_lines == 2
+    worktree = prepare_detached_worktree(case, tmp_path / "prepared")
+    assert worktree.fixture_path != case.fixture_path
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=worktree.fixture_path, text=True
+    ).strip() == head
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", worktree.fixture_path], cwd=repository, check=True
+    )
 
 
 def test_claimed_full_source_without_immutable_refs_is_unverified(tmp_path):

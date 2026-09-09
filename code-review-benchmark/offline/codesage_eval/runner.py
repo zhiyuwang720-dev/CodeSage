@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from codesage_eval.contracts import CandidateFinding, DatasetCase, EvalCaseResult
+from codesage_eval.dataset import validate_case_fixture
 from codesage_eval.storage import read_jsonl, upsert_records
 
 TERMINAL_STATES = {"completed", "failed", "cancelled"}
@@ -52,7 +53,7 @@ class ControlPlaneHttpAdapter:
         existing: EvalCaseResult | None = None,
         on_registered: Callable[[EvalCaseResult], Awaitable[None]] | None = None,
     ) -> EvalCaseResult:
-        if case.source_mode == "fixture_unverified" or not case.fixture_path:
+        if case.source_mode == "fixture_unverified" or not case.fixture_path or not validate_case_fixture(case):
             return EvalCaseResult(
                 eval_run_id=eval_run_id,
                 case_id=case.case_id,
@@ -70,6 +71,20 @@ class ControlPlaneHttpAdapter:
                 response.raise_for_status()
                 task = response.json()
             else:
+                review_scope = {
+                    "eval_run_id": eval_run_id,
+                    "case_id": case.case_id,
+                }
+                if case.source_mode == "full_source":
+                    review_scope.update(
+                        {
+                            "repository_path": case.fixture_path,
+                            "base_sha": case.merge_base,
+                            "head_sha": case.head_ref,
+                        }
+                    )
+                else:
+                    review_scope["diff_file_path"] = case.fixture_path
                 response = await client.post(
                     "/api/v1/agent-tasks/",
                     json={
@@ -77,13 +92,7 @@ class ControlPlaneHttpAdapter:
                         "name": f"eval:{eval_run_id}:{case.case_id}",
                         "version_label": eval_run_id,
                         "timeout_seconds": self.timeout_seconds,
-                        "audit_scope": {
-                            "pr_review": {
-                                "diff_file_path": case.fixture_path,
-                                "eval_run_id": eval_run_id,
-                                "case_id": case.case_id,
-                            }
-                        },
+                        "audit_scope": {"pr_review": review_scope},
                     },
                 )
                 response.raise_for_status()
@@ -126,6 +135,14 @@ class ControlPlaneHttpAdapter:
             response = await client.get(f"/api/v1/agent-tasks/{task_id}/findings")
             response.raise_for_status()
             findings = response.json()
+            if not validate_case_fixture(case):
+                return EvalCaseResult(
+                    eval_run_id=eval_run_id,
+                    case_id=case.case_id,
+                    status="failed",
+                    task_id=task_id,
+                    error_kind="fixture_drift",
+                )
             candidates = [
                 CandidateFinding(
                     candidate_id=finding_id(case.case_id, index, item),

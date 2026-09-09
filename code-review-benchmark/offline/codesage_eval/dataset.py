@@ -73,6 +73,7 @@ def load_dataset(path: str | Path, fixture_overrides: dict[str, Any] | None = No
                 golden=golden,
                 source_mode=mode,
                 fixture_path=str(fixture_path) if fixture_path else None,
+                source_repository_path=str(fixture_path) if mode == "full_source" and fixture_path else None,
                 fixture_sha256=fixture_hash,
                 base_ref=base_ref,
                 head_ref=head_ref,
@@ -118,6 +119,8 @@ def verify_git_fixture(
     if not path or not path.is_dir() or not base_ref or not head_ref or not (path / ".git").exists():
         return None
     try:
+        if _git(path, "status", "--porcelain=v1", "--untracked-files=no"):
+            return None
         resolved_base = _git(path, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
         resolved_head = _git(path, "rev-parse", "--verify", f"{head_ref}^{{commit}}")
         merge_base = _git(path, "merge-base", resolved_base, resolved_head)
@@ -144,6 +147,49 @@ def _git(path: Path, *args: str) -> str:
     return subprocess.check_output(
         ["git", *args], cwd=path, text=True, encoding="utf-8", stderr=subprocess.DEVNULL
     ).strip()
+
+
+def validate_case_fixture(case: DatasetCase) -> bool:
+    path = Path(case.fixture_path) if case.fixture_path else None
+    if case.source_mode == "diff_only":
+        return bool(path and path.is_file() and hash_fixture(path) == case.diff_sha256)
+    if case.source_mode != "full_source":
+        return False
+    resolved = verify_git_fixture(path, case.base_ref, case.head_ref, case.merge_base)
+    return bool(
+        resolved
+        and resolved[0] == case.base_ref
+        and resolved[1] == case.head_ref
+        and resolved[2] == case.merge_base
+        and resolved[3] == case.diff_sha256
+    )
+
+
+def prepare_detached_worktree(case: DatasetCase, fixtures_root: str | Path) -> DatasetCase:
+    """Materialize one immutable detached worktree for a prepared full-source case."""
+    if case.source_mode != "full_source" or not case.head_ref:
+        return case
+    repository = Path(case.source_repository_path or case.fixture_path or "").resolve()
+    destination = Path(fixtures_root).resolve() / case.case_id
+    if destination.exists():
+        candidate = case.model_copy(update={"fixture_path": str(destination)})
+        if validate_case_fixture(candidate):
+            return candidate
+        raise ValueError(f"existing fixture worktree does not match manifest: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(destination), case.head_ref],
+        cwd=repository,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    candidate = case.model_copy(
+        update={"fixture_path": str(destination), "fixture_sha256": hash_fixture(destination)}
+    )
+    if not validate_case_fixture(candidate):
+        raise ValueError(f"new fixture worktree failed verification: {destination}")
+    return candidate
 
 
 def select_suite(cases: list[DatasetCase], suite: str) -> list[DatasetCase]:
