@@ -430,8 +430,6 @@ class BashRuntimeTool(RuntimeTool):
             return ToolPermissionDecision(allowed=False, reason="Background shell execution is not implemented in AutoCVE runtime yet")
         if parsed_input.dangerously_disable_sandbox:
             return ToolPermissionDecision(allowed=False, reason="Disabling sandbox execution is not supported by the runtime Bash tool")
-        if self._executable is None and self._backend_tool is None:
-            return ToolPermissionDecision(allowed=False, reason="No Bash execution backend is available for this runtime")
         if not self.is_read_only(parsed_input) and self._session_store is not None:
             runtime_state = self._session_store.load_runtime_state(context.session_id)
             if is_guardrails_enabled(runtime_state):

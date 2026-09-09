@@ -47,14 +47,13 @@ def build_runtime_tool_registry(
     tools.append(WriteRuntimeTool(session_store=session_store, project_root=project_root))
     if project_root:
         bash_executable = detect_bash_executable()
-        if bash_executable:
-            tools.append(
-                BashRuntimeTool(
-                    project_root=project_root,
-                    executable=bash_executable,
-                    session_store=session_store,
-                )
+        tools.append(
+            BashRuntimeTool(
+                project_root=project_root,
+                executable=bash_executable,
+                session_store=session_store,
             )
+        )
         if is_powershell_runtime_tool_enabled():
             powershell_executable = detect_powershell_executable()
             if powershell_executable:

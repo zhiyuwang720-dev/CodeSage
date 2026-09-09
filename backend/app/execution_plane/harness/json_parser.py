@@ -313,6 +313,14 @@ class AgentJsonParser:
             return default
 
         clean = cls.clean_text(text)
+        try:
+            return json.loads(clean)
+        except Exception:
+            pass
+        try:
+            return cls.extract_json_object(clean)
+        except Exception:
+            pass
         json_str = cls.extract_json_string(clean)
 
         # 优先使用 json-repair
