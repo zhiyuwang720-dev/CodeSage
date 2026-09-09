@@ -11,6 +11,8 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+backend/.pytest-*/
+code-review-benchmark/offline/.pytest-*/
 *.egg
 
 # ide
