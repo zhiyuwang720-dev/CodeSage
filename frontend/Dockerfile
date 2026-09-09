@@ -20,23 +20,18 @@ ENV ALL_PROXY=""
 ENV no_proxy="*"
 ENV NO_PROXY="*"
 
-# 配置国内 npm 镜像�?
 RUN npm config set registry https://registry.npmmirror.com && \
-    npm install -g pnpm && \
+    npm install -g pnpm@9.15.9 && \
     pnpm config set registry https://registry.npmmirror.com
 
-# 复制依赖文件
 COPY package.json pnpm-lock.yaml ./
 
-# 增加网络超时设置和并发数限制，防�?ARM 架构构建卡死
-RUN pnpm config set network-timeout 300000 && \
+RUN pnpm config set fetch-timeout 300000 && \
     pnpm config set fetch-retries 5 && \
     pnpm install --no-frozen-lockfile --network-concurrency 1
 
-# 复制源代�?
 COPY . .
 
-# 🔥 构建时使用占位符 - 实现 Build Once Run Anywhere
 ENV VITE_API_BASE_URL=__API_BASE_URL__
 ENV VITE_ENABLE_CHECKMARX_SCAN=${VITE_ENABLE_CHECKMARX_SCAN}
 ENV VITE_APP_VERSION=${VITE_APP_VERSION}

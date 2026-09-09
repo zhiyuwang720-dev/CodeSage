@@ -1,3 +1,6 @@
+packages:
+  - '.'
+
 allowBuilds:
   '@ast-grep/cli': true
   esbuild: true
