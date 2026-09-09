@@ -137,6 +137,15 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
         item.setdefault("report_status", str(item.get("verdict") or "candidate").lower())
         return item
     metadata = finding.finding_metadata or {}
+    review_payload = metadata.get("review_payload", {}) if isinstance(metadata, dict) else {}
+    review_source = review_payload.get("source") if isinstance(review_payload, dict) else None
+    contributing_sources = (
+        review_payload.get("contributing_sources", [])
+        if isinstance(review_payload, dict)
+        else []
+    )
+    if review_source and not contributing_sources:
+        contributing_sources = [review_source]
     raw_finding = metadata.get("raw_finding", {}) if isinstance(metadata, dict) else {}
     raw_poc = raw_finding.get("poc", {}) if isinstance(raw_finding, dict) else {}
     poc = {}
@@ -172,7 +181,8 @@ def serialize_finding(finding: AgentFinding | Dict[str, Any]) -> Dict[str, Any]:
         "ai_explanation": finding.ai_explanation,
         "origin": metadata.get("origin") or raw_finding.get("origin"),
         "evidence_type": metadata.get("evidence_type") or raw_finding.get("evidence_type"),
-        "source": finding.source,
+        "source": review_source or finding.source,
+        "contributing_sources": contributing_sources,
         "sink": finding.sink,
         "poc": poc,
         "exploit_chain": exploit_chain,

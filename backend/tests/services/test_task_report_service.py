@@ -43,6 +43,52 @@ def test_serialize_finding_uses_finding_type_audit_key():
     assert "vulnerability_type" not in payload
 
 
+def test_serialize_pr_finding_restores_structured_sources():
+    finding = AgentFinding(
+        id="finding-pr",
+        task_id="task-pr",
+        severity="high",
+        category="api",
+        title="Shared finding",
+        status="new",
+        is_verified=False,
+        source="architecture",
+        finding_metadata={
+            "review_payload_version": 1,
+            "review_payload": {
+                "source": "architecture",
+                "contributing_sources": ["architecture", "quality"],
+            },
+        },
+    )
+
+    payload = serialize_finding(finding)
+
+    assert payload["source"] == "architecture"
+    assert payload["contributing_sources"] == ["architecture", "quality"]
+
+
+def test_serialize_legacy_pr_finding_defaults_to_primary_source():
+    finding = AgentFinding(
+        id="finding-legacy-pr",
+        task_id="task-pr",
+        severity="medium",
+        category="test_gap",
+        title="Legacy finding",
+        status="new",
+        is_verified=False,
+        finding_metadata={
+            "review_payload_version": 1,
+            "review_payload": {"source": "quality"},
+        },
+    )
+
+    payload = serialize_finding(finding)
+
+    assert payload["source"] == "quality"
+    assert payload["contributing_sources"] == ["quality"]
+
+
 def test_render_report_default_audit_wording_and_pr_block():
     """08-P2: 默认模板为审计语义, 渲染含 PR 基本信息块 + 运行统计参数。"""
     payload = {

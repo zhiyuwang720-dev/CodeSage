@@ -50,6 +50,7 @@ class CandidateFinding(BaseModel):
     line_end: int | None = None
     suggestion: str | None = None
     source: str | None = None
+    contributing_sources: list[str] = Field(default_factory=list)
 
 
 class EvalRunManifest(BaseModel):

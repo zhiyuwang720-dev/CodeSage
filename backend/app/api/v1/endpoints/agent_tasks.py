@@ -214,6 +214,7 @@ class AgentFindingResponse(BaseModel):
     ai_explanation: Optional[str] = None
     poc: Optional[dict] = None
     source: Optional[str] = None
+    contributing_sources: List[str] = Field(default_factory=list)
     sink: Optional[str] = None
     exploit_chain: List[Dict[str, Any]] = Field(default_factory=list)
     impact: Optional[str] = None

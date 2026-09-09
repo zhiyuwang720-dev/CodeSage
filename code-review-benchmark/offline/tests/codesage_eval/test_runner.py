@@ -34,7 +34,12 @@ def test_runner_uses_control_plane_without_leaking_golden_and_registers_before_s
         if request.method == "POST" and request.url.path.endswith("/start"):
             return httpx.Response(200, json={"id": "task-1", "status": "running"})
         if request.url.path.endswith("/findings"):
-            return httpx.Response(200, json=[{"title": "issue", "description": "detail"}])
+            return httpx.Response(200, json=[{
+                "title": "issue",
+                "description": "detail",
+                "source": "architecture",
+                "contributing_sources": ["architecture", "quality"],
+            }])
         return httpx.Response(200, json={"id": "task-1", "status": next(states)})
 
     adapter = ControlPlaneHttpAdapter(base_url="https://api.test", token="secret", transport=httpx.MockTransport(handler), poll_interval=0)
@@ -51,6 +56,8 @@ def test_runner_uses_control_plane_without_leaking_golden_and_registers_before_s
     assert create_body["max_iterations"] == 8
     assert create_body["token_budget"] == 30000
     assert read_jsonl(output)[0]["task_id"] == "task-1"
+    assert results[0].candidates[0].source == "architecture"
+    assert results[0].candidates[0].contributing_sources == ["architecture", "quality"]
 
 
 def test_resume_registered_task_does_not_create_or_start_again(tmp_path):

@@ -161,6 +161,7 @@ class ControlPlaneHttpAdapter:
                     line_end=item.get("line_end"),
                     suggestion=item.get("suggestion"),
                     source=item.get("source"),
+                    contributing_sources=item.get("contributing_sources") or [],
                 )
                 for index, item in enumerate(findings)
             ]
