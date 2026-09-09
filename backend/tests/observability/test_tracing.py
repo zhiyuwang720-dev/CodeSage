@@ -15,7 +15,13 @@ from app.infrastructure.observability.exporters import (
     OtlpJsonlSpanExporter,
     SafeSpanExporter,
 )
-from app.infrastructure.observability.tracing import extract_trace_context, inject_trace_context
+from app.infrastructure.observability.tracing import (
+    bind_evaluation_context,
+    extract_trace_context,
+    inject_trace_context,
+    reset_evaluation_context,
+    span_attributes,
+)
 
 
 def build_provider(exporter: SpanExporter) -> TracerProvider:
@@ -40,6 +46,19 @@ def test_w3c_carrier_links_publish_and_worker_spans():
     spans = exporter.get_finished_spans()
     assert [span.name for span in spans] == ["execution.attempt", "task.publish"]
     assert spans[0].parent.span_id == spans[1].context.span_id
+
+
+def test_evaluation_context_is_merged_and_reset():
+    token = bind_evaluation_context(eval_run_id="run-1", case_id="case-1")
+    try:
+        assert span_attributes(task_id="task-1") == {
+            "codesage.eval_run_id": "run-1",
+            "codesage.case_id": "case-1",
+            "codesage.task_id": "task-1",
+        }
+    finally:
+        reset_evaluation_context(token)
+    assert span_attributes(task_id="task-2") == {"codesage.task_id": "task-2"}
 
 
 def test_safe_exporter_redacts_and_writes_standard_otlp_jsonl(tmp_path):

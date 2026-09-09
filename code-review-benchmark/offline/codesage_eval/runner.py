@@ -37,12 +37,16 @@ class ControlPlaneHttpAdapter:
         timeout_seconds: int = 3600,
         transport: httpx.AsyncBaseTransport | None = None,
         poll_interval: float = 0.5,
+        max_iterations: int = 8,
+        token_budget: int = 30000,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.headers = {"Authorization": f"Bearer {token}"}
         self.transport = transport
         self.poll_interval = poll_interval
+        self.max_iterations = max_iterations
+        self.token_budget = token_budget
 
     async def run_case(
         self,
@@ -92,6 +96,8 @@ class ControlPlaneHttpAdapter:
                         "name": f"eval:{eval_run_id}:{case.case_id}",
                         "version_label": eval_run_id,
                         "timeout_seconds": self.timeout_seconds,
+                        "max_iterations": self.max_iterations,
+                        "token_budget": self.token_budget,
                         "audit_scope": {"pr_review": review_scope},
                     },
                 )

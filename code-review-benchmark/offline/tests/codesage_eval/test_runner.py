@@ -48,6 +48,8 @@ def test_runner_uses_control_plane_without_leaking_golden_and_registers_before_s
     assert create_body["audit_scope"]["pr_review"] == {
         "diff_file_path": str(fixture), "eval_run_id": "run", "case_id": "case"
     }
+    assert create_body["max_iterations"] == 8
+    assert create_body["token_budget"] == 30000
     assert read_jsonl(output)[0]["task_id"] == "task-1"
 
 

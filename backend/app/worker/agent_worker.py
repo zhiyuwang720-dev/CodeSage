@@ -12,7 +12,11 @@ from app.core.config import settings
 from app.execution_plane.task_executor import execute_agent_task
 from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.infrastructure.observability import configure_observability, extract_trace_context, get_meter, get_tracer
-from app.infrastructure.observability.tracing import span_attributes
+from app.infrastructure.observability.tracing import (
+    bind_evaluation_context,
+    reset_evaluation_context,
+    span_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,32 +57,48 @@ async def execute_agent_task_job(
     delivery_id: str | None = None,
     trace_carrier: dict[str, str] | None = None,
 ) -> str:
-    parent = extract_trace_context(trace_carrier)
-    with get_tracer().start_as_current_span("execution.attempt", context=parent) as span:
-        span.set_attributes(
-            span_attributes(
-                task_id=task_id,
-                delivery_id=delivery_id,
-                propagation_missing=not bool(trace_carrier),
-            )
-        )
-        logger.info("Agent worker picked task %s", task_id)
-        executor = ctx.get("execute_agent_task", execute_agent_task)
-        try:
-            result = await executor(task_id, delivery_id=delivery_id)
-            span.set_attribute("codesage.status", result)
-            get_meter().create_counter("codesage.execution.attempt").add(
-                1, {"status": str(result)}
-            )
-            if result == "already_owned":
-                from app.control_plane.execution_ownership import LEASE_SECONDS
+    evaluation_values: dict[str, object] = {"task_id": task_id}
+    try:
+        from app.db.session import async_session_factory
+        from app.models.agent_task import AgentTask
 
-                raise Retry(defer=LEASE_SECONDS + 1)
-            return result
-        except Exception as exc:
-            span.record_exception(exc)
-            span.set_attribute("codesage.status", "failed")
-            raise
+        async with async_session_factory() as db:
+            task = await db.get(AgentTask, task_id)
+            review_scope = (((task.audit_scope or {}).get("pr_review") or {}) if task else {})
+            evaluation_values.update(
+                eval_run_id=review_scope.get("eval_run_id"),
+                case_id=review_scope.get("case_id"),
+            )
+    except Exception:
+        logger.warning("Unable to preload evaluation trace context for task %s", task_id, exc_info=True)
+    evaluation_token = bind_evaluation_context(**evaluation_values)
+    parent = extract_trace_context(trace_carrier)
+    try:
+        with get_tracer().start_as_current_span("execution.attempt", context=parent) as span:
+            span.set_attributes(
+                span_attributes(
+                    task_id=task_id,
+                    delivery_id=delivery_id,
+                    propagation_missing=not bool(trace_carrier),
+                )
+            )
+            logger.info("Agent worker picked task %s", task_id)
+            executor = ctx.get("execute_agent_task", execute_agent_task)
+            try:
+                result = await executor(task_id, delivery_id=delivery_id)
+                span.set_attribute("codesage.status", result)
+                get_meter().create_counter("codesage.execution.attempt").add(1, {"status": str(result)})
+                if result == "already_owned":
+                    from app.control_plane.execution_ownership import LEASE_SECONDS
+
+                    raise Retry(defer=LEASE_SECONDS + 1)
+                return result
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_attribute("codesage.status", "failed")
+                raise
+    finally:
+        reset_evaluation_context(evaluation_token)
 
 
 async def startup_observability(ctx: dict[str, Any]) -> None:

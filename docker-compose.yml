@@ -286,8 +286,11 @@ services:
       <<: *eval-environment
       CODESAGE_EVAL_API_URL: http://eval-api:8000
       CODESAGE_PHOENIX_URL: http://phoenix:6006
+      CODESAGE_PHOENIX_PROJECT: codesage-eval
       CODESAGE_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
-      PYTHONPATH: /workspace/benchmark
+      CODESAGE_EVAL_EMAIL: demo@example.com
+      CODESAGE_EVAL_PASSWORD: demo123
+      PYTHONPATH: /workspace/benchmark:/workspace/backend
     working_dir: /workspace/benchmark
     command: ["python", "-m", "codesage_eval", "--help"]
     volumes:

@@ -18,6 +18,9 @@ from codesage_eval.report import build_summary, write_report
 from codesage_eval.runner import ControlPlaneHttpAdapter, run_cases
 from codesage_eval.storage import read_jsonl, write_jsonl_atomic
 from codesage_eval.fixtures import fetch_current_pr_fixtures
+from codesage_eval.doctor import run_doctor
+from codesage_eval.bootstrap import ensure_eval_projects, login
+from codesage_eval.doctor import run_doctor
 
 OFFLINE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = OFFLINE_ROOT.parents[1]
@@ -30,11 +33,12 @@ def _json(path: str | Path) -> dict:
 
 
 def _git_fingerprints() -> tuple[str, str]:
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
-    status = subprocess.check_output(
-        ["git", "status", "--porcelain=v1", "-uall"], cwd=REPO_ROOT
-    )
-    return commit, hashlib.sha256(status).hexdigest()
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
+        status = subprocess.check_output(["git", "status", "--porcelain=v1", "-uall"], cwd=REPO_ROOT)
+        return commit, hashlib.sha256(status).hexdigest()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getenv("CODESAGE_CODE_COMMIT", "container-build"), hashlib.sha256(b"").hexdigest()
 
 
 def command_prepare(args) -> None:
@@ -68,6 +72,91 @@ def command_fixtures_fetch(args) -> None:
     print("These fixtures are suitable for smoke testing, but are not a certified historical baseline.")
 
 
+def command_doctor(args) -> None:
+    result = run_doctor(api_url=args.api_url, phoenix_url=args.phoenix_url, timeout_seconds=args.timeout)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result["healthy"]:
+        raise SystemExit(1)
+
+
+def _fingerprint(value: object) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def command_run_live(args) -> None:
+    if not args.allow_model_calls:
+        raise SystemExit("real review is disabled; pass --allow-model-calls after confirming the 30K budget")
+    if args.token_budget > 30000:
+        raise SystemExit("run-live has a hard maximum of 30000 tokens")
+    fixture_map = Path(args.fixture_map or DEFAULT_FIXTURE_MAP)
+    if not fixture_map.exists():
+        raise SystemExit(
+            f"fixture map is missing; run: docker compose --profile eval run --rm eval-cli fixtures fetch --case {args.case}"
+        )
+    cases = load_dataset(args.dataset, _json(fixture_map), fixture_base=fixture_map.parent)
+    selected = [item for item in cases if item.case_id == args.case]
+    if len(selected) != 1:
+        raise SystemExit(f"unknown case id: {args.case}")
+    case = prepare_detached_worktree(selected[0], args.fixtures_root)
+    if case.source_mode == "fixture_unverified":
+        raise SystemExit(f"case {case.case_id} has no verified fixture")
+    api_url = args.api_url
+    token = login(api_url=api_url, email=args.email, password=args.password)
+    projects = ensure_eval_projects(api_url=api_url, token=token, cases=[case], projects_root=args.projects_root)
+    commit, dirty = _git_fingerprints()
+    eval_run_id = args.eval_run_id or f"eval-{uuid4()}"
+    model_parameters = {
+        "provider": os.getenv("LLM_PROVIDER"), "model": os.getenv("LLM_MODEL"),
+        "base_url": os.getenv("LLM_BASE_URL"), "token_budget": args.token_budget,
+        "per_perspective_token_budget": min(10000, args.token_budget // 3), "max_iterations": 8,
+    }
+    manifest = EvalRunManifest(
+        eval_run_id=eval_run_id, suite="live-single", case_ids=[case.case_id],
+        dataset_sha256=hashlib.sha256(Path(args.dataset).read_bytes()).hexdigest(),
+        code_commit=commit, code_dirty_sha256=dirty, concurrency=1, timeout_seconds=1800,
+        model_fingerprint=_fingerprint(model_parameters), model_parameters=model_parameters,
+        prompt_fingerprint=_fingerprint("quick-review-v1"), tool_fingerprint=_fingerprint("runtime-tool-matrices"),
+        flow_fingerprint=_fingerprint("quick-review-v1:three-perspectives"),
+        budget={"total_tokens": args.token_budget, "per_perspective_tokens": min(10000, args.token_budget // 3)},
+        fixture_fingerprints={case.case_id: case.diff_sha256 or case.fixture_sha256 or "missing"},
+        baseline_eligible=case.baseline_eligible,
+    )
+    run_dir = Path(args.runs_root) / eval_run_id
+    write_jsonl_atomic(run_dir / "manifest.jsonl", [manifest])
+    prepared_path = run_dir / "prepared.jsonl"
+    write_jsonl_atomic(prepared_path, [case])
+    adapter = ControlPlaneHttpAdapter(
+        base_url=api_url, token=token, timeout_seconds=1800, max_iterations=8, token_budget=args.token_budget
+    )
+    results = asyncio.run(run_cases(cases=[case], eval_run_id=eval_run_id, adapter=adapter,
+                                    project_ids=projects, output_path=run_dir / "cases.jsonl", concurrency=1))
+    try:
+        from codesage_eval.phoenix_adapter import PhoenixAdapter
+        phoenix = PhoenixAdapter(base_url=args.phoenix_url)
+        spans = phoenix.wait_for_trace(
+            project_identifier=args.phoenix_project, eval_run_id=eval_run_id, case_id=case.case_id,
+            timeout_seconds=args.trace_timeout,
+        )
+    except Exception as exc:
+        print(f"warning: Phoenix trace lookup failed: {exc}")
+        spans = []
+    for item in results:
+        item.trace_complete = bool(spans)
+        item.trace_id = phoenix.trace_id(spans) if spans else None
+    write_jsonl_atomic(run_dir / "cases.jsonl", results)
+    manifest.task_run_trace_map = {
+        item.case_id: {"task_id": item.task_id, "review_run_id": item.review_run_id, "trace_id": item.trace_id}
+        for item in results
+    }
+    write_jsonl_atomic(run_dir / "manifest.jsonl", [manifest])
+    write_jsonl_atomic(run_dir / "findings.jsonl", (
+        {"eval_run_id": eval_run_id, "case_id": item.case_id, **finding.model_dump(mode="json")}
+        for item in results for finding in item.candidates
+    ))
+    print(run_dir)
+
+
 def _create_manifest(args, cases: list[DatasetCase]) -> EvalRunManifest:
     commit, dirty = _git_fingerprints()
     dataset_hash = hashlib.sha256(Path(args.dataset).read_bytes()).hexdigest()
@@ -88,6 +177,7 @@ def _create_manifest(args, cases: list[DatasetCase]) -> EvalRunManifest:
         price_table_version=args.price_table_version,
         budget=_json(args.budget_json) if args.budget_json else {},
         hardware_fingerprint=args.hardware_fingerprint,
+        baseline_eligible=all(item.baseline_eligible for item in cases),
     )
 
 
@@ -247,6 +337,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--output-map", default=str(DEFAULT_FIXTURE_MAP))
     fetch.add_argument("--fixtures-root", default=str(OFFLINE_ROOT / "fixtures"))
     fetch.set_defaults(func=command_fixtures_fetch)
+    doctor = commands.add_parser("doctor")
+    doctor.add_argument("--api-url", default=os.getenv("CODESAGE_EVAL_API_URL", "http://eval-api:8000"))
+    doctor.add_argument("--phoenix-url", default=os.getenv("CODESAGE_PHOENIX_URL", "http://phoenix:6006"))
+    doctor.add_argument("--timeout", type=float, default=30)
+    doctor.set_defaults(func=command_doctor)
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--dataset", default=str(DEFAULT_DATASET))
     prepare.add_argument("--fixture-map")
@@ -276,6 +371,24 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--price-table-version")
     run.add_argument("--allow-model-calls", action="store_true")
     run.set_defaults(func=command_run)
+
+    live = commands.add_parser("run-live", help="run exactly one opt-in live review without a judge")
+    live.add_argument("--case", required=True)
+    live.add_argument("--dataset", default=str(DEFAULT_DATASET))
+    live.add_argument("--fixture-map")
+    live.add_argument("--fixtures-root", default=str(OFFLINE_ROOT / "fixtures"))
+    live.add_argument("--projects-root", default="/workspace/projects")
+    live.add_argument("--runs-root", default=str(OFFLINE_ROOT / "runs"))
+    live.add_argument("--eval-run-id")
+    live.add_argument("--api-url", default=os.getenv("CODESAGE_EVAL_API_URL", "http://eval-api:8000"))
+    live.add_argument("--email", default=os.getenv("CODESAGE_EVAL_EMAIL", "demo@example.com"))
+    live.add_argument("--password", default=os.getenv("CODESAGE_EVAL_PASSWORD", "demo123"))
+    live.add_argument("--phoenix-url", default=os.getenv("CODESAGE_PHOENIX_URL", "http://phoenix:6006"))
+    live.add_argument("--phoenix-project", default=os.getenv("CODESAGE_PHOENIX_PROJECT", "codesage-eval"))
+    live.add_argument("--trace-timeout", type=float, default=30)
+    live.add_argument("--token-budget", type=int, default=30000)
+    live.add_argument("--allow-model-calls", action="store_true")
+    live.set_defaults(func=command_run_live)
 
     judge = commands.add_parser("judge")
     judge.add_argument("--run-dir", required=True)

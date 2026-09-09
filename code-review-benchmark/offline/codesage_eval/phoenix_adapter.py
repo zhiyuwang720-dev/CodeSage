@@ -55,3 +55,21 @@ class PhoenixAdapter:
                 return spans
             time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
         return []
+
+    @staticmethod
+    def trace_id(spans) -> str | None:
+        if not spans:
+            return None
+        span = spans[0]
+        values = [
+            getattr(span, "trace_id", None),
+            getattr(getattr(span, "context", None), "trace_id", None),
+        ]
+        if isinstance(span, dict):
+            values.extend([span.get("trace_id"), (span.get("context") or {}).get("trace_id")])
+        for value in values:
+            if isinstance(value, int):
+                return f"{value:032x}"
+            if value:
+                return str(value)
+        return None
