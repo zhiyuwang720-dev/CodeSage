@@ -16,7 +16,7 @@ from typing import Any, Callable, List, Optional, Dict, Set
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case, func
@@ -42,12 +42,7 @@ from app.infrastructure.messaging.event_manager import EventManager
 from app.infrastructure.messaging.event_stream import create_agent_event_stream, event_stream_enabled
 from app.infrastructure.messaging.task_queue import enqueue_agent_task, should_use_worker_queue
 from app.execution_plane.task_executor import (
-    _cancelled_tasks,
-    _running_asyncio_tasks,
-    _running_tasks,
-    _watch_task_cancellation,
     clear_task_cancellation,
-    execute_agent_task,
     is_task_cancelled,
     request_agent_task_cancellation,
 )
@@ -278,15 +273,13 @@ _running_event_managers: Dict[str, EventManager] = {}
 
 
 async def _schedule_agent_task(
-    background_tasks: BackgroundTasks,
     task_id: str,
     *,
     delivery_id: str | None = None,
 ) -> None:
-    if should_use_worker_queue():
-        await enqueue_agent_task(task_id, delivery_id=delivery_id)
-        return
-    background_tasks.add_task(_execute_agent_task, task_id, delivery_id)
+    # 执行统一走 Worker; 非 worker 模式明确报错, 不静默降级 inline。
+    should_use_worker_queue()
+    await enqueue_agent_task(task_id, delivery_id=delivery_id)
 
 
 def _resolve_task_runtime_stack(agent_config: Any) -> str:
@@ -539,33 +532,6 @@ def _build_pr_review_event_sink(*args, **kwargs):
     return build_review_event_sink(*args, **kwargs)
 
 
-async def _execute_pr_review_task_impl(db, task, project, event_manager) -> None:
-    """Deprecated adapter; managed execution is owned by quick_review.py."""
-    del db, project, event_manager
-    from app.execution_plane.review.quick_review import execute_review_use_case
-
-    await execute_review_use_case(str(task.id))
-
-
-async def _execute_agent_task_impl(task_id: str):
-    """Deprecated compatibility wrapper; execution belongs to the service layer."""
-    current = asyncio.current_task()
-    if current is not None:
-        _running_asyncio_tasks[task_id] = current
-    try:
-        await execute_agent_task(task_id)
-    finally:
-        _running_asyncio_tasks.pop(task_id, None)
-
-
-async def _execute_agent_task_impl_inner(task_id: str):
-    """Deprecated adapter retained for callers during the Plan 18 transition."""
-    await execute_agent_task(task_id)
-
-
-_execute_agent_task = execute_agent_task
-
-
 async def _get_user_config(db: AsyncSession, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Load merged user config for task execution."""
     if not user_id:
@@ -799,7 +765,6 @@ def build_debug_trace_payload(
 @router.post("/", response_model=AgentTaskResponse)
 async def create_agent_task(
     request: AgentTaskCreate,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
@@ -855,7 +820,6 @@ async def create_agent_task(
 @router.post("/{task_id}/start", response_model=AgentTaskResponse)
 async def start_agent_task(
     task_id: str,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
@@ -873,9 +837,7 @@ async def start_agent_task(
     except InvalidTaskStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     task = command.task
-    await _schedule_agent_task(
-        background_tasks, task.id, delivery_id=command.delivery_id
-    )
+    await _schedule_agent_task(task.id, delivery_id=command.delivery_id)
     logger.info(f"Started pr_review task {task.id}")
     return task
 
@@ -1125,7 +1087,6 @@ async def get_debug_trace(
 @router.post("/{task_id}/resume")
 async def resume_agent_task(
     task_id: str,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
@@ -1145,9 +1106,7 @@ async def resume_agent_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     task = command.task
     clear_task_cancellation(task_id)
-    await _schedule_agent_task(
-        background_tasks, task.id, delivery_id=command.delivery_id
-    )
+    await _schedule_agent_task(task.id, delivery_id=command.delivery_id)
     logger.info(f"Resumed agent task {task.id}")
     return {
         "message": "Task resumed",

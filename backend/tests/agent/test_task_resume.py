@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 import app.api.v1.endpoints.agent_tasks as endpoint
 from app.api.v1.endpoints.agent_tasks import resume_agent_task
@@ -40,18 +40,15 @@ async def test_resume_api_delegates_to_lifecycle_then_schedules(monkeypatch):
         "app.control_plane.lifecycle.task_lifecycle_service.resume", resume
     )
     monkeypatch.setattr(endpoint, "_schedule_agent_task", schedule)
-    background = BackgroundTasks()
 
     response = await resume_agent_task(
-        "task-1", background_tasks=background, db=db,
+        "task-1", db=db,
         current_user=SimpleNamespace(id="user-1"),
     )
 
     assert response["status"] == AgentTaskStatus.RUNNING
     resume.assert_awaited_once_with(db, "task-1")
-    schedule.assert_awaited_once_with(
-        background, "task-1", delivery_id="delivery-test"
-    )
+    schedule.assert_awaited_once_with("task-1", delivery_id="delivery-test")
 
 
 @pytest.mark.asyncio
@@ -72,7 +69,7 @@ async def test_resume_api_maps_invalid_state(monkeypatch):
     )
     with pytest.raises(HTTPException) as captured:
         await resume_agent_task(
-            "task-1", background_tasks=BackgroundTasks(), db=db,
+            "task-1", db=db,
             current_user=SimpleNamespace(id="user-1"),
         )
     assert captured.value.status_code == 400
