@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Review Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0}
+body{font-family:-apple-system,system-ui,sans-serif;display:flex;background:#fff;color:#222}
+.sidebar{width:250px;min-height:100vh;padding:14px;background:#fafafa;border-right:1px solid #e0e0e0;position:fixed;overflow-y:auto;top:0;bottom:0}
+.sidebar h3{margin:14px 0 6px;font-size:13px;color:#333;text-transform:uppercase;letter-spacing:.5px}
+.sidebar h3:first-child{margin-top:0}
+.sidebar label{display:block;font-size:12px;color:#555;margin:5px 0 2px}
+.sidebar input[type="date"],.sidebar input[type="number"]{width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:3px;font-size:12px}
+.row{display:flex;gap:6px}.row>div{flex:1}
+.cb-group{max-height:110px;overflow-y:auto;padding:3px 4px;border:1px solid #e0e0e0;border-radius:3px;background:#fff}
+.search-input{width:100%;padding:3px 6px;border:1px solid #ccc;border-radius:3px;font-size:11px;margin-bottom:2px}
+.cb-group label{display:flex;align-items:center;gap:4px;font-size:11px;padding:1px 0;cursor:pointer}
+.cb-group input{margin:0}
+.main{margin-left:250px;padding:20px 28px;flex:1;max-width:1200px}
+h1{font-size:20px;margin-bottom:16px}
+h2{font-size:16px;margin:20px 0 4px;border-bottom:1px solid #e0e0e0;padding-bottom:4px}
+.caption{color:#888;font-size:11px;margin-bottom:6px}
+table{border-collapse:collapse;width:100%;margin-top:6px}
+th{text-align:left;padding:7px 10px;background:#f5f5f5;border-bottom:2px solid #ddd;font-size:12px}
+td{padding:5px 10px;border-bottom:1px solid #eee;font-size:12px}
+tr:hover td{background:#f9f9f9}
+.n{text-align:right;font-variant-numeric:tabular-nums}
+.chart{width:100%;height:370px}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h3>Filters</h3>
+  <label>Chatbot</label>
+  <div class="cb-group" id="f-chatbot"></div>
+  <label><input type="checkbox" id="include-ignored"> Show ignored chatbots</label>
+  <div class="row">
+    <div><label>Start Date</label><input type="date" id="start-date"></div>
+    <div><label>End Date</label><input type="date" id="end-date"></div>
+  </div>
+  <label>F-beta (&beta;)</label>
+  <input type="number" id="beta" value="1.0" min="0.1" max="10" step="0.1">
+  <label title="Hide bots with fewer than this many total discovered PRs in the selected period">Min PRs (volume)</label>
+  <input type="number" id="min-prs-total" value="0" min="0" step="1">
+  <label title="Hide bots with fewer than this many scored PRs in the selected period">Min scored PRs</label>
+  <input type="number" id="min-scored-prs" value="0" min="0" step="1">
+  <label title="Exclude days where a bot has fewer than this many scored PRs from the score average">Min daily sample size</label>
+  <input type="number" id="min-prs" value="0" min="0" step="1">
+  <label>Diff lines range</label>
+  <div class="row">
+    <div><input type="number" id="diff-min" value="0" min="0" step="50"></div>
+    <div><input type="number" id="diff-max" value="2000" min="0" step="50"></div>
+  </div>
+  <h3>Quality Filters</h3>
+  <label><input type="checkbox" id="exclude-self-authored"> Exclude self-authored</label>
+  <label><input type="checkbox" id="exclude-bot-authored"> Exclude bot-authored</label>
+  <label title="Drop PRs that more than one tracked review bot scored. Judge matching is noisier when multiple bots comment on the same PR."><input type="checkbox" id="require-solo-bot"> Solo-bot PRs only</label>
+  <label><input type="checkbox" id="require-reviews"> Require reviews</label>
+  <label>Min repo contributors</label>
+  <input type="number" id="min-repo-contributors" value="" min="0" step="1" placeholder="e.g. 2">
+  <label>Max PRs per (repo, author, bot)</label>
+  <input type="number" id="max-author-repo-prs" value="" min="0" step="1" placeholder="e.g. 50">
+  <h3>Engagement Filters</h3>
+  <label><input type="checkbox" id="require-human-engagement"> Require human engagement</label>
+  <label>Min human reviewers</label>
+  <input type="number" id="min-human-reviewers" value="" min="0" step="1" placeholder="e.g. 1">
+  <label>Min commits after review</label>
+  <input type="number" id="min-commits-after-review" value="" min="0" step="1" placeholder="e.g. 1">
+  <h3>Label Filters</h3>
+  <label>Domain</label><div class="cb-group" id="f-domain"></div>
+  <label>Language</label><input type="text" class="search-input" placeholder="Type to filter..." oninput="filterCbs('f-language',this.value)"><div class="cb-group" id="f-language"></div>
+  <label>PR Type</label><div class="cb-group" id="f-pr-type"></div>
+  <label>Severity</label><div class="cb-group" id="f-severity"></div>
+</div>
+<div class="main">
+  <h1>PR Review Bot Analysis Dashboard</h1>
+  <h2>F&beta; Score Over Time</h2>
+  <p class="caption">Null precision/recall treated as 0. All analyzed PRs included.</p>
+  <div id="chart-fbeta" class="chart"></div>
+  <h2>PR Volume Over Time</h2>
+  <p class="caption">New unique PRs first reviewed per tool per day (from GitHub Archive).</p>
+  <div id="chart-volumes" class="chart"></div>
+  <h2>Precision / Recall Explorer</h2>
+  <p class="caption">One dot per chatbot, aggregated. Bubble size = PR count.</p>
+  <div id="chart-scatter" class="chart"></div>
+  <h2>Leaderboard</h2>
+  <div id="leaderboard"></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const $$=s=>[...document.querySelectorAll(s)];
+const checked=cls=>$$('.'+cls).filter(e=>e.checked).map(e=>e.value);
+
+// Stable color palette — same colors used across all charts
+const COLORS=['#636EFA','#EF553B','#00CC96','#AB63FA','#FFA15A','#19D3F3','#FF6692','#B6E880','#FF97FF','#FECB52'];
+let botColorMap={};
+let nextColorIdx=0;
+
+function assignColors(botNames){
+  const sorted=[...new Set(botNames)].sort();
+  sorted.forEach(name=>ensureColor(name));
+}
+
+function ensureColor(name){
+  if(botColorMap[name]) return;
+  botColorMap[name]=COLORS[nextColorIdx%COLORS.length];
+  nextColorIdx++;
+}
+
+function filterCbs(id,query){
+  const q=query.toLowerCase();
+  document.getElementById(id).querySelectorAll('label').forEach(lbl=>{
+    lbl.style.display=lbl.textContent.toLowerCase().includes(q)?'':'none';
+  });
+}
+
+function makeCbs(id,vals,cls){
+  const el=document.getElementById(id);
+  el.innerHTML=vals.map(v=>`<label><input type="checkbox" class="${cls}" value="${v}"> ${v}</label>`).join('');
+  el.querySelectorAll('input').forEach(cb=>cb.addEventListener('change',refresh));
+}
+
+function defaultDates(){
+  const end=new Date();
+  const start=new Date();
+  start.setDate(start.getDate()-21);
+  const fmt=d=>d.toISOString().slice(0,10);
+  return {start:fmt(start),end:fmt(end)};
+}
+
+async function init(){
+  const o=await fetch('/api/options').then(r=>r.json());
+  makeCbs('f-chatbot',o.chatbots,'cb-bot');
+  makeCbs('f-domain',o.domains,'cb-dom');
+  makeCbs('f-language',o.languages,'cb-lang');
+  makeCbs('f-pr-type',o.pr_types,'cb-prt');
+  makeCbs('f-severity',o.severities,'cb-sev');
+  // Default to last 3 weeks
+  const d=defaultDates();
+  $('#start-date').value=d.start;
+  $('#end-date').value=d.end;
+  // Build initial color map from all chatbots
+  assignColors(o.chatbots);
+  for(const id of['start-date','end-date','beta','min-prs-total','min-scored-prs','min-prs','diff-min','diff-max','exclude-self-authored','exclude-bot-authored','require-solo-bot','require-reviews','include-ignored','min-repo-contributors','max-author-repo-prs','require-human-engagement','min-human-reviewers','min-commits-after-review'])
+    document.getElementById(id).addEventListener('change',refresh);
+  refresh();
+}
+
+function qs(){
+  const p=new URLSearchParams();
+  const sd=$('#start-date').value, ed=$('#end-date').value;
+  if(sd) p.set('start_date',sd);
+  if(ed) p.set('end_date',ed);
+  p.set('beta',$('#beta').value||'1.0');
+  const mpt=$('#min-prs-total').value;
+  if(mpt&&mpt!=='0') p.set('min_total_prs',mpt);
+  const msp=$('#min-scored-prs').value;
+  if(msp&&msp!=='0') p.set('min_scored_prs',msp);
+  const mp=$('#min-prs').value;
+  if(mp&&mp!=='0') p.set('min_prs_per_day',mp);
+  const dmin=$('#diff-min').value, dmax=$('#diff-max').value;
+  if(dmin&&dmin!=='0') p.set('diff_lines_min',dmin);
+  if(dmax) p.set('diff_lines_max',dmax);
+  if($('#exclude-self-authored').checked) p.set('exclude_self_authored','true');
+  if($('#exclude-bot-authored').checked) p.set('exclude_bot_authored','true');
+  if($('#require-solo-bot').checked) p.set('require_solo_bot','true');
+  if($('#require-reviews').checked) p.set('require_reviews','true');
+  const mrc=$('#min-repo-contributors').value;
+  if(mrc&&mrc!=='0') p.set('min_repo_contributors',mrc);
+  const marp=$('#max-author-repo-prs').value;
+  if(marp&&marp!=='0') p.set('max_author_repo_prs',marp);
+  if($('#require-human-engagement').checked) p.set('require_human_engagement','true');
+  const mhr=$('#min-human-reviewers').value;
+  if(mhr&&mhr!=='0') p.set('min_human_reviewers',mhr);
+  const mcar=$('#min-commits-after-review').value;
+  if(mcar&&mcar!=='0') p.set('min_commits_after_review',mcar);
+  const j=(cls,key)=>{const v=checked(cls);if(v.length)p.set(key,v.join(','));};
+  j('cb-bot','chatbot');j('cb-dom','domain');j('cb-lang','language');j('cb-prt','pr_type');j('cb-sev','severity');
+  if($('#include-ignored').checked) p.set('include_ignored','true');
+  return p.toString();
+}
+
+function volumeQs(){
+  const p=new URLSearchParams();
+  const sd=$('#start-date').value, ed=$('#end-date').value;
+  if(sd) p.set('start_date',sd);
+  if(ed) p.set('end_date',ed);
+  const bots=checked('cb-bot');
+  if(bots.length) p.set('chatbot',bots.join(','));
+  const mpt=$('#min-prs-total').value;
+  if(mpt&&mpt!=='0') p.set('min_total_prs',mpt);
+  if($('#include-ignored').checked) p.set('include_ignored','true');
+  return p.toString();
+}
+
+let seq=0;
+async function refresh(){
+  const id=++seq, q=qs(), vq=volumeQs();
+  const [m,lb,vol]=await Promise.all([
+    fetch('/api/daily-metrics?'+q).then(r=>r.json()),
+    fetch('/api/leaderboard?'+q).then(r=>r.json()),
+    fetch('/api/volumes?'+vq).then(r=>r.json()),
+  ]);
+  if(id!==seq) return;
+  const seenBots=new Set();
+  m.series.forEach(r=>seenBots.add(r.chatbot));
+  lb.rows.forEach(r=>seenBots.add(r.chatbot));
+  vol.series.forEach(r=>seenBots.add(r.chatbot));
+  assignColors([...seenBots]);
+  renderFbeta(m);
+  renderVolumes(vol);
+  renderScatter(lb);
+  renderTable(lb);
+}
+
+function renderFbeta(data){
+  const traces=[];
+  const byBot={};
+  for(const r of data.series){
+    if(!byBot[r.chatbot]) byBot[r.chatbot]={x:[],y:[],text:[]};
+    const t=byBot[r.chatbot];
+    t.x.push(r.date);
+    t.y.push(r.avg_f_beta);
+    t.text.push(`P:${r.avg_precision.toFixed(2)} R:${r.avg_recall.toFixed(2)} n:${r.pr_count}`);
+  }
+  for(const [name,d] of Object.entries(byBot)){
+    traces.push({
+      x:d.x, y:d.y, text:d.text,
+      name, mode:'lines+markers', type:'scatter',
+      marker:{color:botColorMap[name]||'#999'},
+      line:{color:botColorMap[name]||'#999'},
+    });
+  }
+  const b=$('#beta').value||'1.0';
+  Plotly.newPlot('chart-fbeta',traces,{
+    title:`F${b} Score Over Time (Daily Average)`,
+    yaxis:{range:[0,1],title:`F${b} Score`},
+    xaxis:{title:'Date',tickformat:'%Y-%m-%d'},
+    hovermode:'x unified',
+    margin:{t:40,b:40,l:50,r:20},
+    legend:{orientation:'h',y:-0.2},
+  },{responsive:true});
+}
+
+function renderVolumes(data){
+  const traces=[];
+  const byBot={};
+  for(const r of data.series){
+    if(!byBot[r.chatbot]) byBot[r.chatbot]={x:[],y:[]};
+    const t=byBot[r.chatbot];
+    t.x.push(r.date);
+    t.y.push(r.pr_count);
+  }
+  for(const [name,d] of Object.entries(byBot)){
+    traces.push({
+      x:d.x, y:d.y,
+      name, mode:'lines+markers', type:'scatter',
+      marker:{color:botColorMap[name]||'#999'},
+      line:{color:botColorMap[name]||'#999'},
+    });
+  }
+  Plotly.newPlot('chart-volumes',traces,{
+    title:'PRs Reviewed Per Day',
+    yaxis:{title:'PR Count'},
+    xaxis:{title:'Date',tickformat:'%Y-%m-%d'},
+    hovermode:'x unified',
+    margin:{t:40,b:40,l:50,r:20},
+    legend:{orientation:'h',y:-0.2},
+  },{responsive:true});
+}
+
+function renderScatter(data){
+  if(!data.rows.length){Plotly.purge('chart-scatter');return;}
+  const maxPrs=Math.max(...data.rows.map(r=>r.sampled_prs));
+  const traces=data.rows.map(r=>({
+    x:[r.precision], y:[r.recall],
+    text:[`${r.chatbot}<br>F:${r.f_score!=null?r.f_score.toFixed(3):'—'} sampled:${r.sampled_prs} scored:${r.scored_prs} total:${r.total_prs}`],
+    name:r.chatbot,
+    marker:{size:[10+40*r.sampled_prs/maxPrs], color:botColorMap[r.chatbot]||'#999'},
+    mode:'markers', type:'scatter', hoverinfo:'text',
+    showlegend:false,
+  }));
+  const b=$('#beta').value||'1.0';
+  Plotly.newPlot('chart-scatter',traces,{
+    title:'% Acted On vs # Comments Acted On',
+    xaxis:{range:[0,1.05],title:'Precision (% Acted On)'},
+    yaxis:{range:[0,1.05],title:'Recall'},
+    margin:{t:40,b:40,l:50,r:20},
+    hovermode:'closest',
+  },{responsive:true});
+}
+
+function renderTable(data){
+  const b=$('#beta').value||'1.0';
+  let h=`<table><thead><tr><th>Chatbot</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F${b}</th><th class="n">Sampled</th><th class="n">Scored</th><th class="n">Total PRs</th></tr></thead><tbody>`;
+  for(const r of data.rows){
+    const c=botColorMap[r.chatbot]||'#999';
+    h+=`<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};margin-right:6px"></span>${r.chatbot}</td><td class="n">${r.precision.toFixed(4)}</td><td class="n">${r.recall.toFixed(4)}</td><td class="n">${r.f_score!=null?r.f_score.toFixed(4):'—'}</td><td class="n">${r.sampled_prs}</td><td class="n">${r.scored_prs}</td><td class="n">${r.total_prs}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  $('#leaderboard').innerHTML=h;
+}
+
+init();
+</script>
+</body>
+</html>

@@ -33,9 +33,15 @@ def _json(path: str | Path) -> dict:
 
 
 def _git_fingerprints() -> tuple[str, str]:
+    # 容器镜像不携带 .git; git 在非仓库目录会写 fatal 到 stderr 并返回 128。
+    # 吞掉 stderr, 让 fallback 静默生效, 不在终端打印 "not a git repository"。
     try:
-        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
-        status = subprocess.check_output(["git", "status", "--porcelain=v1", "-uall"], cwd=REPO_ROOT)
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain=v1", "-uall"], cwd=REPO_ROOT, stderr=subprocess.DEVNULL
+        )
         return commit, hashlib.sha256(status).hexdigest()
     except (OSError, subprocess.CalledProcessError):
         return os.getenv("CODESAGE_CODE_COMMIT", "container-build"), hashlib.sha256(b"").hexdigest()
