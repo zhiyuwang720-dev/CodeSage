@@ -7,6 +7,7 @@ import logging
 import re
 from copy import deepcopy
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from app.core.config import settings
 from app.execution_plane.models.errors import LLMConnectionError, LLMRateLimitError, LLMTimeoutError
@@ -14,7 +15,8 @@ from app.execution_plane.models.retry import LLM_RETRY_CONFIG, RetryConfig, retr
 
 from .factory import LLMFactory
 from .protocols.registry import canonical_endpoint_protocol, canonical_tool_message_format
-from .types import DEFAULT_MODELS, LLMConfig, LLMMessage, LLMProvider, LLMRequest
+from .types import DEFAULT_MODELS, LLMConfig, LLMMessage, LLMProvider, LLMRequest, LLMResponse
+from .usage import normalize_usage
 
 try:
     from json_repair import repair_json
@@ -36,6 +38,64 @@ class LLMService:
     def __init__(self, user_config: Optional[Dict[str, Any]] = None):
         self._config: Optional[LLMConfig] = None
         self._user_config = user_config or {}
+
+    @staticmethod
+    def _perspective_from_agent_type(agent_type: str | None) -> str | None:
+        value = str(agent_type or "").strip()
+        return value.split(":", 1)[1] if value.startswith("review:") else None
+
+    @staticmethod
+    def _endpoint_id(base_url: str | None) -> str | None:
+        if not base_url:
+            return None
+        parsed = urlsplit(base_url)
+        if not parsed.hostname:
+            return None
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return f"{parsed.scheme}://{parsed.hostname}{port}"
+
+    def _decorate_response_identity(
+        self, response: LLMResponse, *, config: LLMConfig, request: LLMRequest
+    ) -> LLMResponse:
+        if not isinstance(response, LLMResponse):
+            return response
+        response.configured_model = response.configured_model or config.model
+        response.request_model = response.request_model or config.model
+        response.response_model = response.response_model or response.model
+        response.provider = response.provider or config.provider.value
+        response.endpoint_id = response.endpoint_id or self._endpoint_id(config.base_url)
+        response.protocol = response.protocol or config.endpoint_protocol
+        response.perspective = response.perspective or request.perspective
+        response.purpose = response.purpose or request.purpose
+        return response
+
+    def _decorate_stream_event(
+        self, event: Dict[str, Any], *, config: LLMConfig, request: LLMRequest
+    ) -> Dict[str, Any]:
+        payload = dict(event or {})
+        raw_usage = payload.get("usage")
+        if raw_usage is not None and not (
+            isinstance(raw_usage, dict) and raw_usage.get("normalization_version")
+        ):
+            usage = normalize_usage(
+                raw_usage,
+                provider=config.provider.value,
+                protocol=config.endpoint_protocol,
+            )
+            payload["usage"] = usage.to_dict() if usage is not None else None
+        payload.update(
+            {
+                "configured_model": config.model,
+                "request_model": config.model,
+                "response_model": payload.get("response_model") or payload.get("model"),
+                "provider": config.provider.value,
+                "endpoint_id": self._endpoint_id(config.base_url),
+                "protocol": config.endpoint_protocol,
+                "perspective": request.perspective,
+                "purpose": request.purpose,
+            }
+        )
+        return payload
 
     def _resolve_llm_payload(self, agent_type: Optional[str] = None) -> Dict[str, Any]:
         user_llm_config = deepcopy(self._user_config.get("llmConfig", {}) or {})
@@ -375,7 +435,8 @@ class LLMService:
             async with semaphore:
                 await self._await_provider_gap(config)
                 try:
-                    return await adapter.complete(request)
+                    response = await adapter.complete(request)
+                    return self._decorate_response_identity(response, config=config, request=request)
                 except Exception as exc:  # noqa: BLE001
                     raise self._normalize_retryable_llm_error(exc) from exc
 
@@ -436,15 +497,19 @@ class LLMService:
                                     retry_config.calculate_delay(attempt, normalized_error),
                                 )
                                 break
-                            yield self._build_terminal_stream_error_event(
-                                normalized_error,
-                                base_event=event,
-                                max_attempts=retry_config.max_attempts,
-                                attempts_used=attempt + 1,
+                            yield self._decorate_stream_event(
+                                self._build_terminal_stream_error_event(
+                                    normalized_error,
+                                    base_event=event,
+                                    max_attempts=retry_config.max_attempts,
+                                    attempts_used=attempt + 1,
+                                ),
+                                config=config,
+                                request=request,
                             )
                             return
 
-                        yield event
+                        yield self._decorate_stream_event(event, config=config, request=request)
                         if event_type == "done":
                             return
                 except Exception as exc:  # noqa: BLE001
@@ -459,11 +524,15 @@ class LLMService:
                             retry_config.calculate_delay(attempt, normalized_error),
                         )
                     else:
-                        yield self._build_terminal_stream_error_event(
-                            normalized_error,
-                            base_event=None,
-                            max_attempts=retry_config.max_attempts,
-                            attempts_used=attempt + 1,
+                        yield self._decorate_stream_event(
+                            self._build_terminal_stream_error_event(
+                                normalized_error,
+                                base_event=None,
+                                max_attempts=retry_config.max_attempts,
+                                attempts_used=attempt + 1,
+                            ),
+                            config=config,
+                            request=request,
                         )
                         return
 
@@ -628,6 +697,7 @@ class LLMService:
         agent_type: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         parallel_tool_calls: Optional[bool] = None,
+        purpose: str = "review",
     ) -> Dict[str, Any]:
         config = self.get_agent_config(agent_type)
         adapter = LLMFactory.create_adapter(config)
@@ -639,23 +709,29 @@ class LLMService:
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
             stream=False,
+            perspective=self._perspective_from_agent_type(agent_type),
+            purpose=purpose,
         )
         response = await self._execute_chat_completion(adapter, request, config)
         usage = None
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
+        if response.usage is not None:
+            usage = response.usage.to_dict()
         return {
             "content": response.content,
             "model": response.model or config.model,
-            "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "usage": usage,
             "finish_reason": response.finish_reason,
             "tool_calls": getattr(response, "tool_calls", None) or [],
             "reasoning_content": getattr(response, "reasoning_content", None) or "",
             "tools_ignored": False,
+            "configured_model": getattr(response, "configured_model", None) or config.model,
+            "request_model": getattr(response, "request_model", None) or config.model,
+            "response_model": getattr(response, "response_model", None) or response.model,
+            "provider": getattr(response, "provider", None) or config.provider.value,
+            "endpoint_id": getattr(response, "endpoint_id", None) or self._endpoint_id(config.base_url),
+            "protocol": getattr(response, "protocol", None) or config.endpoint_protocol,
+            "perspective": getattr(response, "perspective", None) or self._perspective_from_agent_type(agent_type),
+            "purpose": getattr(response, "purpose", None) or purpose,
         }
 
     async def chat_completion_raw(
@@ -681,6 +757,7 @@ class LLMService:
         tools: Optional[List[Dict[str, Any]]] = None,
         parallel_tool_calls: Optional[bool] = None,
         retry_enabled: bool = True,
+        purpose: str = "review",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         config = self.get_agent_config(agent_type)
         adapter = LLMFactory.create_adapter(config)
@@ -692,6 +769,8 @@ class LLMService:
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
             stream=True,
+            perspective=self._perspective_from_agent_type(agent_type),
+            purpose=purpose,
         )
         stream_complete = getattr(adapter, "stream_complete", None)
         if callable(stream_complete):
@@ -724,10 +803,18 @@ class LLMService:
         yield {
             "type": "done",
             "content": content,
-            "usage": result.get("usage") or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "usage": result.get("usage"),
             "tool_calls": result.get("tool_calls") or [],
             "reasoning_content": result.get("reasoning_content") or "",
             "finish_reason": result.get("finish_reason") or "stop",
+            "configured_model": result.get("configured_model"),
+            "request_model": result.get("request_model"),
+            "response_model": result.get("response_model"),
+            "provider": result.get("provider"),
+            "endpoint_id": result.get("endpoint_id"),
+            "protocol": result.get("protocol"),
+            "perspective": result.get("perspective"),
+            "purpose": result.get("purpose") or purpose,
         }
 
     def _clean_text(self, text: str) -> str:

@@ -160,9 +160,11 @@ async def test_litellm_adapter_complete_estimates_usage_when_gateway_missing(mon
     resp = await adapter.complete(request)
 
     assert resp.usage is not None
-    assert resp.usage.prompt_tokens > 0
-    assert resp.usage.completion_tokens > 0
-    assert resp.usage.total_tokens == resp.usage.prompt_tokens + resp.usage.completion_tokens
+    assert resp.usage.prompt_tokens is None
+    assert resp.usage.completion_tokens is None
+    assert resp.usage.total_tokens is None
+    assert resp.usage.usage_present is False
+    assert resp.usage.estimated_usage["total_tokens"] > 0
 
 
 @pytest.mark.asyncio
@@ -199,8 +201,9 @@ async def test_litellm_adapter_complete_estimates_usage_when_gateway_returns_zer
     resp = await adapter.complete(request)
 
     assert resp.usage is not None
-    assert resp.usage.total_tokens > 0
-    assert resp.usage.total_tokens == resp.usage.prompt_tokens + resp.usage.completion_tokens
+    assert resp.usage.total_tokens is None
+    assert resp.usage.estimated_usage["total_tokens"] > 0
+    assert "usage:synthetic_zero_unverified" in resp.usage.anomalies
 
 
 @pytest.mark.asyncio

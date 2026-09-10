@@ -977,7 +977,15 @@ class QueryLoop:
             stop_reason=str(payload.get("stop_reason")) if payload.get("stop_reason") is not None else None,
             recoverable_error_kind=str(payload.get("recoverable_error_kind")) if payload.get("recoverable_error_kind") else None,
             recoverable_error_message=str(payload.get("recoverable_error_message")) if payload.get("recoverable_error_message") else None,
-            usage=dict(payload.get("usage") or {}),
+            usage=dict(payload["usage"]) if payload.get("usage") is not None else None,
+            configured_model=payload.get("configured_model"),
+            request_model=payload.get("request_model"),
+            response_model=payload.get("response_model") or payload.get("model"),
+            provider=payload.get("provider"),
+            endpoint_id=payload.get("endpoint_id"),
+            protocol=payload.get("protocol"),
+            perspective=payload.get("perspective"),
+            purpose=str(payload.get("purpose") or "review"),
             native_tool_call_count=len(list(payload.get("tool_calls") or [])),
             has_terminal_tool_call=any(
                 str((item or {}).get("name") or "").strip() in TERMINAL_TOOL_NAMES
@@ -1112,7 +1120,10 @@ class QueryLoop:
                     max_output_tokens_override=state.max_output_tokens_override,
                 )
             )
-            self._record_provider_usage(model_response.usage, model_name=model_name)
+            self._record_provider_usage(
+                model_response.usage,
+                model_name=model_response.request_model or model_name,
+            )
             state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
             assistant_message_id = None
             working_messages = list(state.messages)
@@ -1166,7 +1177,15 @@ class QueryLoop:
                                     "payload": dict(assistant_message.payload or {}),
                                     "created_at": assistant_message.created_at.isoformat(),
                                 },
-                                "usage": dict(model_response.usage or {}),
+                                "usage": dict(model_response.usage) if model_response.usage is not None else None,
+                                "configured_model": model_response.configured_model,
+                                "request_model": model_response.request_model,
+                                "response_model": model_response.response_model,
+                                "provider": model_response.provider,
+                                "endpoint_id": model_response.endpoint_id,
+                                "protocol": model_response.protocol,
+                                "perspective": model_response.perspective,
+                                "purpose": model_response.purpose,
                             }
                         )
             raw_tool_calls = list(model_response.tool_calls or [])
@@ -1397,10 +1416,21 @@ class QueryLoop:
                 "stop_reason": (stream_done or {}).get("stop_reason") or RuntimeStopReason.COMPLETED.value,
                 "recoverable_error_kind": (stream_done or {}).get("recoverable_error_kind"),
                 "recoverable_error_message": (stream_done or {}).get("recoverable_error_message"),
-                "usage": dict((stream_done or {}).get("usage") or {}),
+                "usage": dict(stream_done["usage"]) if stream_done.get("usage") is not None else None,
+                "configured_model": stream_done.get("configured_model"),
+                "request_model": stream_done.get("request_model"),
+                "response_model": stream_done.get("response_model"),
+                "provider": stream_done.get("provider"),
+                "endpoint_id": stream_done.get("endpoint_id"),
+                "protocol": stream_done.get("protocol"),
+                "perspective": stream_done.get("perspective"),
+                "purpose": stream_done.get("purpose") or "review",
             }
         )
-        self._record_provider_usage(model_response.usage, model_name=model_name)
+        self._record_provider_usage(
+            model_response.usage,
+            model_name=model_response.request_model or model_name,
+        )
         state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
         if assistant_message_id is not None:
             assistant_message = self._session_store.get_message(assistant_message_id)
@@ -1442,7 +1472,15 @@ class QueryLoop:
                             "payload": dict(assistant_message.payload or {}),
                             "created_at": assistant_message.created_at.isoformat(),
                         },
-                        "usage": dict(model_response.usage or {}),
+                        "usage": dict(model_response.usage) if model_response.usage is not None else None,
+                        "configured_model": model_response.configured_model,
+                        "request_model": model_response.request_model,
+                        "response_model": model_response.response_model,
+                        "provider": model_response.provider,
+                        "endpoint_id": model_response.endpoint_id,
+                        "protocol": model_response.protocol,
+                        "perspective": model_response.perspective,
+                        "purpose": model_response.purpose,
                     }
                 )
         legacy_text_tool_calls: list[dict[str, object]] = []
@@ -1485,14 +1523,29 @@ class QueryLoop:
         }
         meter = get_meter()
         token_counter = meter.create_counter("codesage.model.tokens")
+        field_sources = dict(values.get("field_sources") or {})
+        source_fields = {
+            "input_tokens": "prompt_tokens",
+            "output_tokens": "completion_tokens",
+            "cache_read_tokens": "cache_read_tokens",
+            "cache_write_tokens": "cache_write_tokens",
+        }
         for token_type, keys in aliases.items():
             raw = next((values[key] for key in keys if key in values and values[key] is not None), None)
             if raw is None:
                 continue
+            canonical_field = keys[0]
+            source = str(
+                field_sources.get(canonical_field)
+                or field_sources.get(source_fields[token_type])
+                or "missing"
+            )
+            if source not in {"provider", "derived"}:
+                continue
             count = int(raw)
             span.set_attribute(f"codesage.usage.{token_type}", count)
-            token_counter.add(count, {"model": model_name, "token_type": token_type, "usage_source": "provider"})
-        span.set_attribute("codesage.usage_source", "provider" if values else "missing")
+            token_counter.add(count, {"model": model_name, "token_type": token_type, "usage_source": source})
+        span.set_attribute("codesage.usage_source", "observed" if values.get("usage_present") else "missing")
 
     @staticmethod
     def _provider_total_tokens(usage: dict | None) -> int:
@@ -1500,9 +1553,17 @@ class QueryLoop:
         explicit = values.get("total_tokens")
         if explicit is not None:
             return max(0, int(explicit))
-        input_tokens = values.get("input_tokens", values.get("prompt_tokens", 0)) or 0
-        output_tokens = values.get("output_tokens", values.get("completion_tokens", 0)) or 0
-        return max(0, int(input_tokens)) + max(0, int(output_tokens))
+        estimated = dict(values.get("estimated_usage") or {})
+        estimated_total = estimated.get("total_tokens")
+        if estimated_total is not None:
+            return max(0, int(estimated_total))
+        input_tokens = values.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = values.get("prompt_tokens")
+        output_tokens = values.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = values.get("completion_tokens")
+        return max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
 
     @staticmethod
     def _format_stream_error_for_exception(event: dict[str, Any]) -> str:

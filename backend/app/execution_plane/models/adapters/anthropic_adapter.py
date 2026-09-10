@@ -24,6 +24,7 @@ from ..types import (
     LLMResponse,
     LLMUsage,
 )
+from ..usage import normalize_usage
 from ..protocols.registry import get_model_capabilities
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,7 @@ class AnthropicAdapter(BaseLLMAdapter):
 
         accumulated_content = ""
         accumulated_reasoning = ""
-        prompt_tokens = 0
-        completion_tokens = 0
+        stream_usage: dict[str, Any] = {}
         stop_reason = "stop"
         block_states: dict[int, dict[str, Any]] = {}
         collected_tool_calls: list[dict[str, Any]] = []
@@ -103,7 +103,7 @@ class AnthropicAdapter(BaseLLMAdapter):
                     event_type = str(event.get("type") or "")
                     if event_type == "message_start":
                         usage = ((event.get("message") or {}).get("usage") or {})
-                        prompt_tokens = int(usage.get("input_tokens") or prompt_tokens or 0)
+                        stream_usage.update({key: value for key, value in usage.items() if value is not None})
                     elif event_type == "content_block_start":
                         index = int(event.get("index") or 0)
                         content_block = dict(event.get("content_block") or {})
@@ -149,7 +149,7 @@ class AnthropicAdapter(BaseLLMAdapter):
                         delta = dict(event.get("delta") or {})
                         stop_reason = str(delta.get("stop_reason") or stop_reason or "stop")
                         usage = dict(event.get("usage") or {})
-                        completion_tokens = int(usage.get("output_tokens") or completion_tokens or 0)
+                        stream_usage.update({key: value for key, value in usage.items() if value is not None})
                     elif event_type == "message_stop":
                         done_emitted = True
                         yield self._done_event(
@@ -157,8 +157,7 @@ class AnthropicAdapter(BaseLLMAdapter):
                             reasoning_content=accumulated_reasoning,
                             tool_calls=collected_tool_calls,
                             stop_reason=stop_reason,
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
+                            usage=stream_usage,
                         )
         except LLMError as error:
             done_emitted = True
@@ -177,8 +176,7 @@ class AnthropicAdapter(BaseLLMAdapter):
                 reasoning_content=accumulated_reasoning,
                 tool_calls=collected_tool_calls,
                 stop_reason=stop_reason,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=stream_usage,
             )
 
     def _messages_url(self) -> str:
@@ -374,38 +372,29 @@ class AnthropicAdapter(BaseLLMAdapter):
                 )
         return "".join(text_parts), tool_calls
 
-    @staticmethod
-    def _usage_from_payload(usage: dict[str, Any]) -> LLMUsage | None:
-        if not usage:
-            return None
-        prompt_tokens = int(usage.get("input_tokens") or 0)
-        completion_tokens = int(usage.get("output_tokens") or 0)
-        return LLMUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+    def _usage_from_payload(self, usage: dict[str, Any]) -> LLMUsage | None:
+        return normalize_usage(
+            usage if usage else None,
+            provider=self.config.provider.value,
+            protocol="anthropic_messages",
         )
 
-    @staticmethod
     def _done_event(
+        self,
         *,
         content: str,
         reasoning_content: str,
         tool_calls: list[dict[str, Any]],
         stop_reason: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        usage: dict[str, Any],
     ) -> dict[str, Any]:
+        normalized = self._usage_from_payload(usage)
         return {
             "type": "done",
             "content": content,
             "reasoning_content": reasoning_content,
             "finish_reason": stop_reason,
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
+            "usage": normalized.to_dict() if normalized is not None else None,
             "tool_calls": list(tool_calls),
         }
 

@@ -23,6 +23,7 @@ from ..types import (
 )
 from ..prompt_cache import prompt_cache_manager, estimate_tokens
 from ..protocols.registry import get_model_capabilities
+from ..usage import normalize_usage
 
 logger = logging.getLogger(__name__)
 
@@ -316,10 +317,18 @@ class LiteLLMAdapter(BaseLLMAdapter):
 
         usage = None
         if hasattr(response, "usage") and response.usage:
-            usage = LLMUsage(
-                prompt_tokens=response.usage.prompt_tokens or 0,
-                completion_tokens=response.usage.completion_tokens or 0,
-                total_tokens=response.usage.total_tokens or 0,
+            input_tokens_estimate = sum(
+                estimate_tokens(_token_text(msg.get("content", "")), self.config.model)
+                for msg in messages
+            )
+            output_tokens_estimate = estimate_tokens(choice.message.content or "", self.config.model)
+            usage = normalize_usage(
+                response.usage,
+                provider=self.config.provider.value,
+                protocol=self.config.endpoint_protocol,
+                zero_fidelity="unverified",
+                estimated_input_tokens=input_tokens_estimate,
+                estimated_output_tokens=output_tokens_estimate,
             )
             
             # 🔥 更新 Prompt Cache 统计
@@ -334,15 +343,28 @@ class LiteLLMAdapter(BaseLLMAdapter):
         # 如 llmapi.paratera.com; litellm 会把缺失 usage 合成全零 ModelUsage):
         # 用输入+输出 token 估算兜底, 与流式路径的 estimate_tokens 兜底一致,
         # 保证 token 统计非 0 可进入 sink 的 llm_usage 事件。
-        if usage is None or not usage.total_tokens:
+        if usage is None:
             input_tokens_estimate = sum(
                 estimate_tokens(_token_text(msg.get("content", "")), self.config.model) for msg in messages
             )
             output_tokens_estimate = estimate_tokens(choice.message.content or "", self.config.model)
             usage = LLMUsage(
-                prompt_tokens=input_tokens_estimate,
-                completion_tokens=output_tokens_estimate,
-                total_tokens=input_tokens_estimate + output_tokens_estimate,
+                field_sources={
+                    "prompt_tokens": "missing",
+                    "completion_tokens": "missing",
+                    "total_tokens": "missing",
+                    "cache_read_tokens": "missing",
+                    "cache_write_tokens": "missing",
+                    "reasoning_tokens": "missing",
+                },
+                estimated_usage={
+                    "input_tokens": input_tokens_estimate,
+                    "output_tokens": output_tokens_estimate,
+                    "total_tokens": input_tokens_estimate + output_tokens_estimate,
+                    "method": "tiktoken",
+                    "version": "1",
+                },
+                usage_present=False,
             )
 
         tool_calls = []
@@ -411,6 +433,27 @@ class LiteLLMAdapter(BaseLLMAdapter):
         partial_tool_calls: Dict[int, Dict[str, Any]] = {}
         emitted_tool_calls: set[int] = set()
         collected_tool_calls: List[Dict[str, Any]] = []
+
+        def _estimated_usage(output_text: str) -> dict[str, Any]:
+            output_tokens_estimate = estimate_tokens(output_text, self.config.model)
+            return LLMUsage(
+                field_sources={
+                    "prompt_tokens": "missing",
+                    "completion_tokens": "missing",
+                    "total_tokens": "missing",
+                    "cache_read_tokens": "missing",
+                    "cache_write_tokens": "missing",
+                    "reasoning_tokens": "missing",
+                },
+                estimated_usage={
+                    "input_tokens": input_tokens_estimate,
+                    "output_tokens": output_tokens_estimate,
+                    "total_tokens": input_tokens_estimate + output_tokens_estimate,
+                    "method": "tiktoken",
+                    "version": "1",
+                },
+                usage_present=False,
+            ).to_dict()
 
         def _as_dictish(value, field=None, default=None):
             if isinstance(value, dict):
@@ -519,19 +562,17 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 chunk_count += 1
 
                 if hasattr(chunk, "usage") and chunk.usage:
-                    # 07-P1.1: 忽略"真值但全零"的 usage(网关合成), 让估算兜底生效
-                    chunk_total = (
-                        (chunk.usage.total_tokens or 0)
-                        + (chunk.usage.prompt_tokens or 0)
-                        + (chunk.usage.completion_tokens or 0)
+                    normalized = normalize_usage(
+                        chunk.usage,
+                        provider=self.config.provider.value,
+                        protocol=self.config.endpoint_protocol,
+                        zero_fidelity="unverified",
+                        estimated_input_tokens=input_tokens_estimate,
+                        estimated_output_tokens=estimate_tokens(accumulated_content, self.config.model),
                     )
-                    if chunk_total:
-                        final_usage = {
-                            "prompt_tokens": chunk.usage.prompt_tokens or 0,
-                            "completion_tokens": chunk.usage.completion_tokens or 0,
-                            "total_tokens": chunk.usage.total_tokens or 0,
-                        }
-                        logger.debug(f"Got usage from chunk: {final_usage}")
+                    if normalized is not None:
+                        final_usage = normalized.to_dict()
+                        logger.debug("Got normalized usage from chunk")
 
                 if not getattr(chunk, "choices", None):
                     continue
@@ -568,12 +609,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
                         collected_tool_calls.append(tool_call)
                         yield {"type": "tool_call", "tool_call": tool_call}
                     if not final_usage:
-                        output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model)
-                        final_usage = {
-                            "prompt_tokens": input_tokens_estimate,
-                            "completion_tokens": output_tokens_estimate,
-                            "total_tokens": input_tokens_estimate + output_tokens_estimate,
-                        }
+                        final_usage = _estimated_usage(accumulated_content)
                     if not accumulated_content and not partial_tool_calls:
                         logger.warning(
                             f"Stream completed with no content after {chunk_count} chunks, finish_reason={finish_reason}"
@@ -593,12 +629,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
                         collected_tool_calls.append(tool_call)
                         yield {"type": "tool_call", "tool_call": tool_call}
                     if not final_usage:
-                        output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model)
-                        final_usage = {
-                            "prompt_tokens": input_tokens_estimate,
-                            "completion_tokens": output_tokens_estimate,
-                            "total_tokens": input_tokens_estimate + output_tokens_estimate,
-                        }
+                        final_usage = _estimated_usage(accumulated_content)
                     yield {
                         "type": "done",
                         "content": accumulated_content,
@@ -621,18 +652,13 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 retry_seconds = float(retry_match.group(1)) if retry_match else 60
                 user_message = f"API rate limit reached. Retry after about {int(retry_seconds)} seconds."
 
-            output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model) if accumulated_content else 0
             yield {
                 "type": "error",
                 "error_type": error_type,
                 "error": error_msg,
                 "user_message": user_message,
                 "accumulated": accumulated_content,
-                "usage": {
-                    "prompt_tokens": input_tokens_estimate,
-                    "completion_tokens": output_tokens_estimate,
-                    "total_tokens": input_tokens_estimate + output_tokens_estimate,
-                } if accumulated_content else None,
+                "usage": _estimated_usage(accumulated_content) if accumulated_content else None,
             }
 
         except litellm.exceptions.AuthenticationError as e:
@@ -679,7 +705,6 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 error_type = "unknown"
                 user_message = "LLM streaming request failed. Please retry."
 
-            output_tokens_estimate = estimate_tokens(accumulated_content, self.config.model) if accumulated_content else 0
             yield {
                 "type": "error",
                 "error_type": error_type,
@@ -687,11 +712,7 @@ class LiteLLMAdapter(BaseLLMAdapter):
                 "error_class": e.__class__.__name__,
                 "user_message": user_message,
                 "accumulated": accumulated_content,
-                "usage": {
-                    "prompt_tokens": input_tokens_estimate,
-                    "completion_tokens": output_tokens_estimate,
-                    "total_tokens": input_tokens_estimate + output_tokens_estimate,
-                } if accumulated_content else None,
+                "usage": _estimated_usage(accumulated_content) if accumulated_content else None,
             }
 
     async def validate_config(self) -> bool:

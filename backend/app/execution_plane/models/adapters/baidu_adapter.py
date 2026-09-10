@@ -5,7 +5,8 @@
 import httpx
 from typing import Optional
 from ..base_adapter import BaseLLMAdapter
-from ..types import LLMConfig, LLMRequest, LLMResponse, LLMError, LLMProvider, LLMUsage
+from ..types import LLMConfig, LLMRequest, LLMResponse, LLMError, LLMProvider
+from ..usage import normalize_usage
 
 
 class BaiduAdapter(BaseLLMAdapter):
@@ -124,13 +125,11 @@ class BaiduAdapter(BaseLLMAdapter):
             err = LLMError(f"百度API错误: {error_msg}", self.config.provider, api_response=api_response)
             raise err
         
-        usage = None
-        if "usage" in data:
-            usage = LLMUsage(
-                prompt_tokens=data["usage"].get("prompt_tokens", 0),
-                completion_tokens=data["usage"].get("completion_tokens", 0),
-                total_tokens=data["usage"].get("total_tokens", 0)
-            )
+        usage = normalize_usage(
+            data.get("usage") if "usage" in data else None,
+            provider=self.config.provider.value,
+            protocol=self.config.endpoint_protocol,
+        )
         
         return LLMResponse(
             content=data.get("result", ""),

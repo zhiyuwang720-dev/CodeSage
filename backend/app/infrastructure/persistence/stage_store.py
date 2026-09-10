@@ -143,6 +143,11 @@ class AuditStageStoreImpl:
                 ArtifactRef.model_validate(item)
                 for item in (new_payload.get("artifact_refs") or [])
             ]
+            diagnostic_stats = {
+                key: value
+                for key, value in stats.items()
+                if key not in {"turn_count", "token_usage", "tool_calls", "findings_count"}
+            }
             stage_result = StageResult(
                 run_id=run_id,
                 stage_type=stage_type,
@@ -151,6 +156,7 @@ class AuditStageStoreImpl:
                 findings=findings or [],
                 artifact_refs=artifact_refs,
                 stats={
+                    **diagnostic_stats,
                     "turn_count": row.turn_count,
                     "token_usage": row.token_usage,
                     "tool_calls": row.tool_calls,

@@ -87,15 +87,55 @@ class LLMRequest:
     tools: Optional[List[Dict[str, Any]]] = None
     parallel_tool_calls: Optional[bool] = None
     stream: bool = False
+    perspective: Optional[str] = None
+    purpose: str = "review"
 
 
 @dataclass
 class LLMUsage:
-    """Token usage."""
+    """Normalized token usage without conflating missing, zero, and estimates."""
 
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    field_sources: Dict[str, str] = field(default_factory=dict)
+    estimated_usage: Optional[Dict[str, Any]] = None
+    raw_usage: Optional[Dict[str, Any]] = None
+    normalization_version: str = "1"
+    anomalies: List[str] = field(default_factory=list)
+    usage_present: bool = True
+
+    @property
+    def input_tokens(self) -> Optional[int]:
+        return self.prompt_tokens
+
+    @property
+    def output_tokens(self) -> Optional[int]:
+        return self.completion_tokens
+
+    def to_dict(self, *, include_raw: bool = False) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "input_tokens": self.prompt_tokens,
+            "output_tokens": self.completion_tokens,
+            # Compatibility aliases retained while callers migrate to input/output.
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "field_sources": dict(self.field_sources),
+            "estimated_usage": dict(self.estimated_usage) if self.estimated_usage else None,
+            "normalization_version": self.normalization_version,
+            "anomalies": list(self.anomalies),
+            "usage_present": self.usage_present,
+        }
+        if include_raw:
+            payload["raw_usage"] = dict(self.raw_usage) if self.raw_usage is not None else None
+        return payload
 
 
 @dataclass
@@ -108,6 +148,18 @@ class LLMResponse:
     finish_reason: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     reasoning_content: Optional[str] = None
+    configured_model: Optional[str] = None
+    request_model: Optional[str] = None
+    response_model: Optional[str] = None
+    provider: Optional[str] = None
+    endpoint_id: Optional[str] = None
+    protocol: Optional[str] = None
+    perspective: Optional[str] = None
+    purpose: str = "review"
+
+    def __post_init__(self) -> None:
+        if self.response_model is None and self.model is not None:
+            self.response_model = self.model
 
 
 class LLMError(Exception):

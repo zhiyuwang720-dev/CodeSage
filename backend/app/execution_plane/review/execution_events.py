@@ -27,6 +27,7 @@ def build_review_event_sink(
     iterations = 0
     tool_calls = 0
     per_agent: dict[str, dict[str, int]] = {}
+    model_requests: dict[str, list[dict[str, Any]]] = {}
 
     def metadata(perspective: str | None) -> dict:
         return {
@@ -163,6 +164,20 @@ def build_review_event_sink(
             if perspective:
                 iterations += 1
             normalized = usage(event.get("usage") or {})
+            if perspective:
+                model_requests.setdefault(perspective, []).append(
+                    {
+                        "configured_model": event.get("configured_model"),
+                        "request_model": event.get("request_model"),
+                        "response_model": event.get("response_model"),
+                        "provider": event.get("provider"),
+                        "endpoint_id": event.get("endpoint_id"),
+                        "protocol": event.get("protocol"),
+                        "perspective": perspective,
+                        "purpose": event.get("purpose") or "review",
+                        "usage": dict(event["usage"]) if event.get("usage") is not None else None,
+                    }
+                )
             if perspective and normalized["total"]:
                 previous = per_agent.get(perspective)
                 if not normalized["cached"] and previous and normalized["input"]:
@@ -196,6 +211,7 @@ def build_review_event_sink(
                             "turn_count": int(event.get("turn_count") or 0),
                             "token_usage": int(per_agent.get(perspective, {}).get("total") or total),
                             "tool_calls": tool_calls,
+                            "model_requests": list(model_requests.get(perspective) or []),
                         },
                     )
             await flush_stats()

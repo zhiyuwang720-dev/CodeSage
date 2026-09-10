@@ -265,8 +265,7 @@ async def test_anthropic_adapter_stream_complete_sends_native_messages_and_tools
     assert events[2]["tool_call"]["name"] == "Skill"
     assert json.loads(events[2]["tool_call"]["arguments"]) == {"skill_ref": "code-audit-finding"}
     assert events[-1]["finish_reason"] == "tool_use"
-    assert events[-1]["usage"] == {
-        "prompt_tokens": 12,
-        "completion_tokens": 8,
-        "total_tokens": 20,
-    }
+    assert events[-1]["usage"]["prompt_tokens"] == 12
+    assert events[-1]["usage"]["completion_tokens"] == 8
+    assert events[-1]["usage"]["total_tokens"] == 20
+    assert events[-1]["usage"]["field_sources"]["total_tokens"] == "derived"

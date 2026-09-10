@@ -3,7 +3,8 @@ MiniMax适配器
 """
 
 from ..base_adapter import BaseLLMAdapter
-from ..types import LLMConfig, LLMRequest, LLMResponse, LLMError, LLMProvider, LLMUsage
+from ..types import LLMConfig, LLMRequest, LLMResponse, LLMError, LLMProvider
+from ..usage import normalize_usage
 
 
 class MinimaxAdapter(BaseLLMAdapter):
@@ -75,13 +76,11 @@ class MinimaxAdapter(BaseLLMAdapter):
         if not choice:
             raise Exception("API响应格式异常: 缺少choices字段")
         
-        usage = None
-        if "usage" in data:
-            usage = LLMUsage(
-                prompt_tokens=data["usage"].get("prompt_tokens", 0),
-                completion_tokens=data["usage"].get("completion_tokens", 0),
-                total_tokens=data["usage"].get("total_tokens", 0)
-            )
+        usage = normalize_usage(
+            data.get("usage") if "usage" in data else None,
+            provider=self.config.provider.value,
+            protocol=self.config.endpoint_protocol,
+        )
         
         return LLMResponse(
             content=choice.get("message", {}).get("content", ""),

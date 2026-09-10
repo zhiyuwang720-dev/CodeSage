@@ -9,6 +9,7 @@ import httpx
 from ..base_adapter import BaseLLMAdapter
 from ..protocols.transforms import gemini_native_payload
 from ..types import DEFAULT_BASE_URLS, LLMConfig, LLMError, LLMProvider, LLMRequest, LLMResponse, LLMUsage
+from ..usage import normalize_usage
 
 
 class GeminiNativeAdapter(BaseLLMAdapter):
@@ -86,14 +87,10 @@ class GeminiNativeAdapter(BaseLLMAdapter):
 
     @staticmethod
     def _usage_from_payload(usage: dict[str, Any]) -> LLMUsage | None:
-        if not usage:
-            return None
-        prompt_tokens = int(usage.get("promptTokenCount") or 0)
-        completion_tokens = int(usage.get("candidatesTokenCount") or 0)
-        return LLMUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=int(usage.get("totalTokenCount") or prompt_tokens + completion_tokens),
+        return normalize_usage(
+            usage if usage else None,
+            provider="gemini",
+            protocol="gemini_native",
         )
 
     @staticmethod

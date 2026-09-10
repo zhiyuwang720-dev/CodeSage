@@ -8,6 +8,7 @@ import httpx
 from ..base_adapter import BaseLLMAdapter
 from ..protocols.transforms import openai_responses_payload
 from ..types import DEFAULT_BASE_URLS, LLMConfig, LLMError, LLMProvider, LLMRequest, LLMResponse, LLMUsage
+from ..usage import normalize_usage
 
 
 class OpenAIResponsesAdapter(BaseLLMAdapter):
@@ -86,14 +87,10 @@ class OpenAIResponsesAdapter(BaseLLMAdapter):
 
     @staticmethod
     def _usage_from_payload(usage: dict[str, Any]) -> LLMUsage | None:
-        if not usage:
-            return None
-        prompt_tokens = int(usage.get("input_tokens") or 0)
-        completion_tokens = int(usage.get("output_tokens") or 0)
-        return LLMUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=int(usage.get("total_tokens") or prompt_tokens + completion_tokens),
+        return normalize_usage(
+            usage if usage else None,
+            provider="openai",
+            protocol="openai_responses",
         )
 
     @staticmethod

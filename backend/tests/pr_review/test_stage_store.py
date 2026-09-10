@@ -150,13 +150,30 @@ def test_stage_type_accepts_reserved_deep_entries():
 
 
 @pytest.mark.asyncio
-async def test_sink_writes_review_stage_on_perspective_done(db_session):
+async def test_sink_writes_review_stage_on_perspective_done(db_session, monkeypatch):
     """集成: sink 收到 session_start + perspective_done(findings 本体) → 写 review:* stage。"""
     from app.api.v1.endpoints.agent_tasks import _build_pr_review_event_sink
     from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.review_execution import ReviewExecutionRun
 
     task = AgentTask(id="t-sink", project_id="p", version_label="v1", task_type="pr_review")
     task.status = AgentTaskStatus.RUNNING
+    db_session.add(
+        ReviewExecutionRun(
+            task_id=task.id,
+            identity_json={"run_id": "run-t-sink"},
+            delivery_id="delivery-t-sink",
+        )
+    )
+    await db_session.flush()
+
+    async def allow_test_write(db, task_id):
+        return True
+
+    monkeypatch.setattr(
+        "app.infrastructure.persistence.stage_store._guard_managed_write",
+        allow_test_write,
+    )
 
     class Em:
         def __init__(self):
@@ -171,7 +188,41 @@ async def test_sink_writes_review_stage_on_perspective_done(db_session):
     await sink({"type": "meta", "repo": "o/r", "pr_number": 7})
     await sink({"type": "perspective_start", "perspective": "security"})
     await sink({"type": "session_start", "perspective": "security", "session_id": "sess-sec"})
-    findings = [{"file_path": "a.py", "severity": "high", "title": "t"}]
+    await sink(
+        {
+            "type": "done",
+            "perspective": "security",
+            "configured_model": "deepseek-chat",
+            "request_model": "deepseek-chat",
+            "response_model": "deepseek-chat-202609",
+            "provider": "deepseek",
+            "protocol": "openai_chat",
+            "purpose": "review",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "field_sources": {"total_tokens": "provider"},
+                "usage_present": True,
+            },
+        }
+    )
+    findings = [
+        {
+            "rule_id": "R1",
+            "category": "security",
+            "severity": "high",
+            "title": "t",
+            "description": "d",
+            "file_path": "a.py",
+            "line_start": 1,
+            "line_end": 1,
+            "confidence": 0.9,
+            "needs_verification": False,
+            "verdict": "confirmed",
+            "source": "security",
+        }
+    ]
     await sink({"type": "perspective_done", "perspective": "security", "turn_count": 4, "findings": findings})
 
     stage = await store.get(db_session, task.id, "review:security")
@@ -182,3 +233,23 @@ async def test_sink_writes_review_stage_on_perspective_done(db_session):
     assert stage.findings_count == 1
     assert stage.state_payload["findings"] == findings
     assert stage.state_payload["perspective"] == "security"
+    model_requests = stage.state_payload["stage_result"]["stats"]["model_requests"]
+    assert model_requests == [
+        {
+            "configured_model": "deepseek-chat",
+            "request_model": "deepseek-chat",
+            "response_model": "deepseek-chat-202609",
+            "provider": "deepseek",
+            "endpoint_id": None,
+            "protocol": "openai_chat",
+            "perspective": "security",
+            "purpose": "review",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "field_sources": {"total_tokens": "provider"},
+                "usage_present": True,
+            },
+        }
+    ]

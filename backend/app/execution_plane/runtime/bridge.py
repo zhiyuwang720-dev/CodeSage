@@ -113,7 +113,15 @@ class RuntimeLLMModelClient:
             stop_reason=response.get("finish_reason") or "stop",
             recoverable_error_kind=self._classify_recoverable_error_kind(response),
             recoverable_error_message=str(response.get("error_message") or "").strip() or None,
-            usage=dict(response.get("usage") or {}),
+            usage=dict(response["usage"]) if response.get("usage") is not None else None,
+            configured_model=response.get("configured_model"),
+            request_model=response.get("request_model"),
+            response_model=response.get("response_model") or response.get("model"),
+            provider=response.get("provider"),
+            endpoint_id=response.get("endpoint_id"),
+            protocol=response.get("protocol"),
+            perspective=response.get("perspective"),
+            purpose=str(response.get("purpose") or "review"),
         )
 
     async def complete_stream(
@@ -158,6 +166,15 @@ class RuntimeLLMModelClient:
                     stop_reason="error",
                     recoverable_error_kind=str(event.get("error_type") or "").strip() or None,
                     recoverable_error_message=str(event.get("error") or event.get("user_message") or "").strip() or None,
+                    usage=dict(event["usage"]) if event.get("usage") is not None else None,
+                    configured_model=event.get("configured_model"),
+                    request_model=event.get("request_model"),
+                    response_model=event.get("response_model") or event.get("model"),
+                    provider=event.get("provider"),
+                    endpoint_id=event.get("endpoint_id"),
+                    protocol=event.get("protocol"),
+                    perspective=event.get("perspective"),
+                    purpose=str(event.get("purpose") or "review"),
                 )
 
         final_event = final_event or {}
@@ -168,7 +185,15 @@ class RuntimeLLMModelClient:
             stop_reason=str(final_event.get("finish_reason") or "stop"),
             recoverable_error_kind=self._classify_recoverable_error_kind(final_event),
             recoverable_error_message=str(final_event.get("error") or final_event.get("user_message") or "").strip() or None,
-            usage=dict(final_event.get("usage") or {}),
+            usage=dict(final_event["usage"]) if final_event.get("usage") is not None else None,
+            configured_model=final_event.get("configured_model"),
+            request_model=final_event.get("request_model"),
+            response_model=final_event.get("response_model") or final_event.get("model"),
+            provider=final_event.get("provider"),
+            endpoint_id=final_event.get("endpoint_id"),
+            protocol=final_event.get("protocol"),
+            perspective=final_event.get("perspective"),
+            purpose=str(final_event.get("purpose") or "review"),
         )
 
     async def stream_complete(
@@ -209,7 +234,15 @@ class RuntimeLLMModelClient:
                 "tool_calls": [],
                 # 07-P1.1: 非流式退化的合成 done 必须透传 usage, 否则 query_loop 的
                 # done 事件 usage 恒空 → sink llm_usage 与 tokens_used 恒 0。
-                "usage": dict(response.usage or {}),
+                "usage": dict(response.usage) if response.usage is not None else None,
+                "configured_model": response.configured_model,
+                "request_model": response.request_model,
+                "response_model": response.response_model,
+                "provider": response.provider,
+                "endpoint_id": response.endpoint_id,
+                "protocol": response.protocol,
+                "perspective": response.perspective,
+                "purpose": response.purpose,
             }
             return
         messages = self._build_messages(
@@ -351,7 +384,15 @@ class RuntimeLLMModelClient:
                 "recoverable_error_message": str(payload.get("recoverable_error_message") or payload.get("error_message") or "").strip() or None,
                 "tool_calls": tool_calls,
                 "reasoning_content": str(payload.get("reasoning_content") or "").strip(),
-                "usage": dict(payload.get("usage") or {}),
+                "usage": dict(payload["usage"]) if payload.get("usage") is not None else None,
+                "configured_model": payload.get("configured_model"),
+                "request_model": payload.get("request_model"),
+                "response_model": payload.get("response_model") or payload.get("model"),
+                "provider": payload.get("provider"),
+                "endpoint_id": payload.get("endpoint_id"),
+                "protocol": payload.get("protocol"),
+                "perspective": payload.get("perspective"),
+                "purpose": payload.get("purpose") or "review",
             }
         if event_type == "error":
             return {
@@ -359,6 +400,15 @@ class RuntimeLLMModelClient:
                 "error": str(payload.get("error") or "").strip() or None,
                 "user_message": str(payload.get("user_message") or "").strip() or None,
                 "error_type": str(payload.get("error_type") or "").strip() or None,
+                "usage": dict(payload["usage"]) if payload.get("usage") is not None else None,
+                "configured_model": payload.get("configured_model"),
+                "request_model": payload.get("request_model"),
+                "response_model": payload.get("response_model") or payload.get("model"),
+                "provider": payload.get("provider"),
+                "endpoint_id": payload.get("endpoint_id"),
+                "protocol": payload.get("protocol"),
+                "perspective": payload.get("perspective"),
+                "purpose": payload.get("purpose") or "review",
             }
         return None
 

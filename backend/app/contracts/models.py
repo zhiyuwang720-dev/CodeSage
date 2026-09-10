@@ -110,7 +110,15 @@ class RuntimeModelResponse:
     stop_reason: str | None = None
     recoverable_error_kind: str | None = None
     recoverable_error_message: str | None = None
-    usage: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] | None = None
+    configured_model: str | None = None
+    request_model: str | None = None
+    response_model: str | None = None
+    provider: str | None = None
+    endpoint_id: str | None = None
+    protocol: str | None = None
+    perspective: str | None = None
+    purpose: str = "review"
     native_tool_call_count: int = 0
     has_terminal_tool_call: bool = False
 
