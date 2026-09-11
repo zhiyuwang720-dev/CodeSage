@@ -113,11 +113,16 @@ class LiteLLMCallbackLogger(CustomLogger):
     不创建 span，不写业务状态。失败只记录日志，绝不影响模型调用结果。
     """
 
-    def __init__(self, recorder: CallbackRecorder, price_table: "PriceTable"):
+    def __init__(self, recorder: CallbackRecorder):
         self._recorder = recorder
-        self._price_table = price_table
         self._emitted: set[tuple] = set()
         self._lock = threading.Lock()
+
+    @property
+    def price_table(self) -> "PriceTable":
+        """价格表是启动/验收期可替换的冻结输入；始终读取当前快照。"""
+
+        return get_price_table()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._record("success", kwargs, response_obj)
@@ -145,7 +150,7 @@ class LiteLLMCallbackLogger(CustomLogger):
             usage = _usage_mapping(payload, response_obj)
             model = payload.get("model")
             metadata = _metadata(payload)
-            cost = self._price_table.evaluate(model=model, usage=usage, response_cost=_hidden_cost(payload))
+            cost = self.price_table.evaluate(model=model, usage=usage, response_cost=_hidden_cost(payload))
             self._recorder.append(
                 CallbackRecord(
                     call_id=call_id,
@@ -439,7 +444,7 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
 
 
 def _register_callback_logger() -> None:
-    logger_instance = LiteLLMCallbackLogger(_recorder, _price_table)
+    logger_instance = LiteLLMCallbackLogger(_recorder)
     buckets = [
         litellm.callbacks,
         litellm.success_callback,
