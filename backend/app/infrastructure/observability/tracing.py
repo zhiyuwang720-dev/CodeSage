@@ -7,17 +7,26 @@ from opentelemetry import metrics, propagate, trace
 from opentelemetry.context import Context
 
 INSTRUMENTATION_NAME = "codesage.agent-os"
-_evaluation_context: ContextVar[dict[str, object]] = ContextVar("codesage_evaluation_context", default={})
+_correlation_context: ContextVar[dict[str, object]] = ContextVar("codesage_correlation_context", default={})
 
 
-def bind_evaluation_context(**values: object) -> Token:
-    merged = dict(_evaluation_context.get())
+def bind_observability_context(**values: object) -> Token:
+    merged = dict(_correlation_context.get())
     merged.update({key: value for key, value in values.items() if value is not None})
-    return _evaluation_context.set(merged)
+    return _correlation_context.set(merged)
 
 
-def reset_evaluation_context(token: Token) -> None:
-    _evaluation_context.reset(token)
+def reset_observability_context(token: Token) -> None:
+    _correlation_context.reset(token)
+
+
+def get_observability_context() -> dict[str, object]:
+    return dict(_correlation_context.get())
+
+
+# Backward-compatible aliases: evaluation code used the same context before Plan 20.
+bind_evaluation_context = bind_observability_context
+reset_evaluation_context = reset_observability_context
 
 
 def get_tracer():
@@ -44,7 +53,7 @@ def extract_trace_context(carrier: Mapping[str, str] | None) -> Context:
 
 
 def span_attributes(**values: object) -> dict[str, object]:
-    merged = {**_evaluation_context.get(), **values}
+    merged = {**_correlation_context.get(), **values}
     return {
         f"codesage.{key}": value
         for key, value in merged.items()

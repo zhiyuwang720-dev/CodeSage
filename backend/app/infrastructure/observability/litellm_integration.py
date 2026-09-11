@@ -465,6 +465,15 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
                     ):
                         if value is not None:
                             span.set_attribute(key, value)
+                    metadata = _metadata(dict(kwargs or {}))
+                    for key, value in metadata.items():
+                        if not isinstance(value, (str, bool, int, float)):
+                            continue
+                        if key == "codesage_session_id":
+                            span.set_attribute("session.id", value)
+                            span.set_attribute("codesage.session_id", value)
+                        elif key.startswith("codesage_"):
+                            span.set_attribute("codesage." + key[len("codesage_"):], value)
                 except Exception:
                     logger.debug("failed to enrich OpenInference usage details", exc_info=True)
 

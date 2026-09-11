@@ -46,7 +46,13 @@ from app.execution_plane.runtime.query_messages import normalize_messages_for_mo
 from app.contracts.query_state import QueryLoopState
 from app.execution_plane.session.store import AuditSessionPersistenceError
 from app.tool_gateway.search import TOOL_SEARCH_TOOL_NAME
-from app.infrastructure.observability.tracing import get_meter, get_tracer, span_attributes
+from app.infrastructure.observability.tracing import (
+    bind_observability_context,
+    get_meter,
+    get_tracer,
+    reset_observability_context,
+    span_attributes,
+)
 
 # 终点工具名(阶段 02 §3.4.1 参数化): 各领域的终结工具在此登记,
 # 桥接层的 continue_session_until_payload(finalizer_tools=...) 走完全参数化路径。
@@ -128,6 +134,15 @@ class QueryLoop:
         state = self._merge_runtime_query_context_pipeline(state, runtime_state)
         state = materialize_pending_tool_use_summary(state)
         turn_id = self._session_store.open_turn(session_id, model_name=model_name)
+        perspective = model_name.split(":", 1)[1] if model_name.startswith("review:") else None
+        trace.get_current_span().set_attributes(
+            span_attributes(
+                session_id=session_id,
+                turn_id=turn_id,
+                perspective=perspective,
+                model=model_name,
+            )
+        )
         tool_definitions = self._tool_registry.describe_tools(active_tool_names=self._state_active_tool_names(state)) if self._tool_registry is not None else []
         transcript = list(state.messages)
         prepared_messages = get_messages_after_compact_boundary(transcript, state)
@@ -201,6 +216,13 @@ class QueryLoop:
             for attempt_number in range(1, self.MODEL_STREAM_MAX_RETRIES + 2):
                 attempt_id = str(uuid.uuid4())
                 attempt_placeholder_id = f"{assistant_stream_placeholder_id}-{attempt_id}"
+                correlation_token = bind_observability_context(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    model_attempt_id=attempt_id,
+                    perspective=perspective,
+                    purpose="review",
+                )
                 attempt_span = get_tracer().start_span(
                     "model.attempt",
                     attributes={
@@ -281,9 +303,20 @@ class QueryLoop:
                             "error_type": error_kind,
                         }
                     )
-                    await asyncio.sleep(min(4.0, float(2 ** (attempt_number - 1))))
+                    backoff_seconds = min(4.0, float(2 ** (attempt_number - 1)))
+                    with get_tracer().start_as_current_span(
+                        "retry.backoff",
+                        attributes={
+                            "openinference.span.kind": "CHAIN",
+                            "codesage.retry_layer": "query_loop",
+                            "codesage.error_kind": error_kind,
+                        },
+                    ) as retry_span:
+                        retry_span.set_attribute("codesage.backoff_seconds", backoff_seconds)
+                        await asyncio.sleep(backoff_seconds)
                 finally:
                     otel_context.detach(attempt_context_token)
+                    reset_observability_context(correlation_token)
                     attempt_span.end()
             if collected is None:
                 raise last_model_error or RuntimeError("Model stream failed without an error detail")

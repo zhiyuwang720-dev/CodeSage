@@ -19,6 +19,8 @@ from typing import Any
 
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 
+from app.infrastructure.observability.tracing import get_observability_context
+
 logger = logging.getLogger(__name__)
 
 # LiteLLM 官方 integration 的请求级 span 名（默认名与 gen-ai 语义约定名都会匹配）。
@@ -36,6 +38,13 @@ class ModelSpanEnricher(SpanProcessor):
             context = span.get_span_context()
             span_id = getattr(context, "span_id", None)
             attributes: dict[str, Any] = {"openinference.span.kind": "LLM"}
+            for key, value in get_observability_context().items():
+                if isinstance(value, (str, bool, int, float)):
+                    if key == "session_id":
+                        attributes["session.id"] = value
+                        attributes["codesage.session_id"] = value
+                    else:
+                        attributes[f"codesage.{key}"] = value
             if span_id:
                 attributes["codesage.provider_request_id"] = format(span_id, "016x")
             span.set_attributes(attributes)

@@ -223,6 +223,8 @@ try {
                 "plan20-unit.junit.xml",
                 "evidence/a01/wire_non_stream.json",
                 "evidence/a01/wire_stream.json"
+                "evidence/a02/context_attributes.json",
+                "evidence/a02/retry_request_mapping.json"
                 "evidence/a03/usage_layers.json",
                 "evidence/a04/usage_fidelity.json",
                 "evidence/a05/partial_usage.json",

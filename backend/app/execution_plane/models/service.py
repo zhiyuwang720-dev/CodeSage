@@ -12,10 +12,12 @@ import hashlib
 import json
 import logging
 import re
+import time
 from copy import deepcopy
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.core.config import settings
+from app.infrastructure.observability.tracing import get_tracer
 
 from .client import SDKModelClient, get_sdk_client
 from .config import (
@@ -348,21 +350,39 @@ class LLMService:
             self._provider_gap_locks[key] = lock
         return lock
 
+    async def _acquire_provider_semaphore(self, config: LLMConfig) -> asyncio.Semaphore:
+        semaphore = self._get_provider_semaphore(config)
+        started = time.perf_counter()
+        with get_tracer().start_as_current_span(
+            "model.admission",
+            attributes={"codesage.admission_kind": "semaphore"},
+        ) as span:
+            await semaphore.acquire()
+            span.set_attribute("codesage.admission_wait_seconds", max(0.0, time.perf_counter() - started))
+        return semaphore
+
     async def _await_provider_gap(self, config: LLMConfig) -> None:
         gap_ms = self._get_runtime_llm_limits()["gap_ms"]
         if gap_ms <= 0:
             return
         key = self._build_provider_limit_key(config)
         lock = self._get_provider_gap_lock(config)
-        async with lock:
-            now = asyncio.get_running_loop().time()
-            last_started = self._provider_last_request_at.get(key)
-            if last_started is not None:
-                wait_seconds = (gap_ms / 1000.0) - (now - last_started)
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds)
-                    now = asyncio.get_running_loop().time()
-            self._provider_last_request_at[key] = now
+        with get_tracer().start_as_current_span(
+            "model.admission",
+            attributes={"codesage.admission_kind": "provider_gap"},
+        ) as span:
+            async with lock:
+                now = asyncio.get_running_loop().time()
+                last_started = self._provider_last_request_at.get(key)
+                wait_seconds = 0.0
+                if last_started is not None:
+                    wait_seconds = (gap_ms / 1000.0) - (now - last_started)
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+                        now = asyncio.get_running_loop().time()
+                span.set_attribute("codesage.admission_wait_seconds", max(0.0, wait_seconds))
+                self._provider_last_request_at[key] = now
+
 
     # ------------------------------------------------------------------ 请求执行
     def _retry_overrides(self) -> Dict[str, Any]:
@@ -396,23 +416,28 @@ class LLMService:
         return payload
 
     async def _run_completion(self, config: LLMConfig, request: LLMRequest) -> LLMResponse:
-        semaphore = self._get_provider_semaphore(config)
-        async with semaphore:
+        semaphore = await self._acquire_provider_semaphore(config)
+        try:
             await self._await_provider_gap(config)
             response = await get_sdk_client().complete(
                 config=config, request=request, first_token_timeout=self._retry_overrides()["first_token_timeout"]
             )
+        finally:
+            semaphore.release()
         return self._decorate_response_identity(response, config=config, request=request)
 
     async def _run_stream(self, config: LLMConfig, request: LLMRequest) -> AsyncGenerator[Dict[str, Any], None]:
-        semaphore = self._get_provider_semaphore(config)
+        semaphore = await self._acquire_provider_semaphore(config)
         overrides = self._retry_overrides()
-        async with semaphore:
+        try:
             await self._await_provider_gap(config)
             async for event in get_sdk_client().stream(
                 config=config, request=request, **overrides
             ):
                 yield self._decorate_stream_event(event, config=config, request=request)
+        finally:
+            semaphore.release()
+
 
     # ------------------------------------------------------------------ 公开契约
     async def chat_completion(

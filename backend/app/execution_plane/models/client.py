@@ -15,10 +15,13 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import litellm
+from opentelemetry import context as otel_context
+from opentelemetry import trace
 
 from .config import (
     RETRY_OWNER_SDK,
@@ -39,6 +42,14 @@ from .errors import (
 )
 from .types import LLMResponse
 from .usage import normalize_usage
+
+from app.infrastructure.observability.tracing import (
+    bind_observability_context,
+    get_observability_context,
+    get_tracer,
+    reset_observability_context,
+    span_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +338,16 @@ class SDKModelClient:
         if config.custom_headers:
             kwargs["extra_headers"] = dict(config.custom_headers)
 
-        kwargs["metadata"] = {
+        metadata = {
             "codesage_purpose": config.purpose,
             "codesage_provider": config.provider.value,
             "codesage_transport": config.transport,
             "codesage_model_boundary_version": config.model_boundary_version,
         }
+        for key, value in get_observability_context().items():
+            if isinstance(value, (str, bool, int, float)):
+                metadata[f"codesage_{key}"] = value
+        kwargs["metadata"] = metadata
         return kwargs
 
     async def _send(self, config: LLMConfig, request: LLMRequest, *, stream: bool) -> Any:
@@ -357,6 +372,23 @@ class SDKModelClient:
         last_error: Optional[BaseException] = None
 
         for attempt in range(1, budget + 1):
+            attempt_id = str(uuid.uuid4())
+            attempt_span = None
+            correlation_token = None
+            attempt_context_token = None
+            if scoped.retry_owner == RETRY_OWNER_SDK:
+                correlation_token = bind_observability_context(
+                    model_attempt_id=attempt_id,
+                    retry_owner=scoped.retry_owner,
+                )
+                attempt_span = get_tracer().start_span(
+                    "model.attempt",
+                    attributes={
+                        "openinference.span.kind": "CHAIN",
+                        **span_attributes(model_attempt_id=attempt_id, attempt_number=attempt),
+                    },
+                )
+                attempt_context_token = otel_context.attach(trace.set_span_in_context(attempt_span))
             try:
                 response = await self._send(scoped, request, stream=False)
                 return self._to_llm_response(scoped, request, response)
@@ -373,7 +405,24 @@ class SDKModelClient:
                     budget,
                     mapped.__class__.__name__,
                 )
-                await asyncio.sleep(self._retry_delay(attempt))
+                backoff_seconds = self._retry_delay(attempt)
+                with get_tracer().start_as_current_span(
+                    "retry.backoff",
+                    attributes={
+                        "openinference.span.kind": "CHAIN",
+                        "codesage.retry_layer": "sdk",
+                        "codesage.error_kind": mapped.__class__.__name__,
+                    },
+                ) as retry_span:
+                    retry_span.set_attribute("codesage.backoff_seconds", backoff_seconds)
+                    await asyncio.sleep(backoff_seconds)
+            finally:
+                if attempt_context_token is not None:
+                    otel_context.detach(attempt_context_token)
+                if correlation_token is not None:
+                    reset_observability_context(correlation_token)
+                if attempt_span is not None:
+                    attempt_span.end()
 
         raise last_error if last_error is not None else ModelResponseError("模型请求未执行")
 

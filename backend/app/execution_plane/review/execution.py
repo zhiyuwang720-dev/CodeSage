@@ -16,6 +16,8 @@ from opentelemetry import trace
 from app.core.config import settings
 from app.infrastructure.observability.tracing import (
     bind_evaluation_context,
+    bind_observability_context,
+    reset_observability_context,
     get_tracer,
     reset_evaluation_context,
     span_attributes,
@@ -132,8 +134,21 @@ async def execute_quick_review(
         task_id=task_id,
         review_run_id=prepared.identity.run_id,
     )
+    correlation_token = bind_observability_context(
+        task_id=task_id,
+        review_run_id=prepared.identity.run_id,
+        delivery_id=delivery,
+        execution_attempt_id=lease.attempt_id,
+        lease_epoch=lease.lease_epoch,
+    )
     trace.get_current_span().set_attributes(
-        span_attributes(task_id=task_id, review_run_id=prepared.identity.run_id)
+        span_attributes(
+            task_id=task_id,
+            review_run_id=prepared.identity.run_id,
+            delivery_id=delivery,
+            execution_attempt_id=lease.attempt_id,
+            lease_epoch=lease.lease_epoch,
+        )
     )
 
     if deps.observer is not None:
@@ -219,4 +234,5 @@ async def execute_quick_review(
         current_execution_context.reset(context_token)
         current_execution_lease.reset(lease_token)
         current_review_llm_service.reset(llm_token)
+        reset_observability_context(correlation_token)
         reset_evaluation_context(evaluation_token)
