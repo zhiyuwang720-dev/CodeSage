@@ -119,6 +119,7 @@ class RuntimeModelResponse:
     protocol: str | None = None
     perspective: str | None = None
     purpose: str = "review"
+    provider_request_id: str | None = None
     native_tool_call_count: int = 0
     has_terminal_tool_call: bool = False
 

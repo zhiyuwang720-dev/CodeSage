@@ -1,52 +1,39 @@
-"""
-LLM 服务模块
+"""模型边界模块：唯一 LiteLLM SDK 出口、配置快照与 usage 归一。
 
-提供统一的 LLM 调用接口，支持：
-- 多提供商支持（OpenAI, Claude, Gemini, DeepSeek 等）
-- Prompt Caching（减少 Token 消耗）
-- Memory Compression（对话历史压缩）
-- 流式输出
-- 智能重试
+不允许在此模块之外出现 `litellm.acompletion` 调用或厂商协议分派。
 """
 
-from .service import LLMService
-from .types import (
+from .client import SDKModelClient, get_sdk_client, reset_sdk_client
+from .config import (
+    MODEL_BOUNDARY_VERSION,
     LLMConfig,
-    LLMProvider,
-    LLMMessage,
     LLMRequest,
-    LLMResponse,
-    LLMUsage,
-    LLMError,
+    ModelCatalog,
+    ModelConfigurationError,
+    get_model_capabilities,
+    get_provider_metadata,
 )
-from .prompt_cache import (
-    PromptCacheManager,
-    CacheConfig,
-    CacheStrategy,
-    CacheStats,
-    prompt_cache_manager,
-    estimate_tokens,
-)
-from .memory_compressor import MemoryCompressor
+from .errors import ModelBoundaryError
+from .service import LLMService
+from .types import LLMProvider, LLMResponse, LLMUsage
+from .usage import NORMALIZATION_VERSION, normalize_usage
 
 __all__ = [
-    # Service
     "LLMService",
-    # Types
     "LLMConfig",
-    "LLMProvider",
-    "LLMMessage",
     "LLMRequest",
+    "LLMProvider",
     "LLMResponse",
     "LLMUsage",
-    "LLMError",
-    # Prompt Cache
-    "PromptCacheManager",
-    "CacheConfig",
-    "CacheStrategy",
-    "CacheStats",
-    "prompt_cache_manager",
-    "estimate_tokens",
-    # Memory Compression
-    "MemoryCompressor",
+    "MODEL_BOUNDARY_VERSION",
+    "ModelBoundaryError",
+    "ModelCatalog",
+    "ModelConfigurationError",
+    "NORMALIZATION_VERSION",
+    "SDKModelClient",
+    "get_model_capabilities",
+    "get_provider_metadata",
+    "get_sdk_client",
+    "normalize_usage",
+    "reset_sdk_client",
 ]
