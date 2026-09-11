@@ -1082,8 +1082,10 @@ class QueryLoop:
             }
         )
 
+    # 模型 LLM span 由 LiteLLM SDK integration 负责（含 usage/成本）。这里只是本次
+    # 尝试的容器 span，不能再标成 LLM，否则同一次调用会出现两个计费级模型 span。
     @get_tracer().start_as_current_span(
-        "provider.request", attributes={"openinference.span.kind": "LLM"}
+        "provider.request", attributes={"openinference.span.kind": "CHAIN"}
     )
     async def _collect_model_turn(
         self,

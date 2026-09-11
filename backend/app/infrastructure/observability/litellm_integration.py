@@ -1,10 +1,9 @@
-"""LiteLLM SDK 观测接入（P08）与成本边界（P09）。
+"""LiteLLM SDK 观测接入与成本边界
 
-模型 span 由 LiteLLM 官方 OTel integration 产生，并复用 CodeSage 统一
-TracerProvider/exporter（不启动第二个全局 provider）。本模块只做两件补充：
+模型 span 由 LiteLLM 官方 OTel integration 产生，并复用 CodeSage 统一TracerProvider/exporter。
 
-1. 一个薄 CustomLogger，为每次调用补运行关联、purpose、内容引用、本地请求记录，
-   并作为成本候选值的来源；
+本模块只做两件补充：
+1. 一个薄 CustomLogger，为每次调用补运行关联、purpose、内容引用、本地请求记录，并作为成本候选值的来源；
 2. 严格价格输入与 SDK 成本校验：未知价格保持 `unknown`，SDK 的默认零不当免费。
 
 禁止：新建 Trace 协议、提交业务事务、在 callback 中授予工具权限。
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -25,8 +25,6 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-
-from app.infrastructure.observability.tracing import span_attributes
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +396,12 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
         status.update(_installed=True, callback_logger=True)
         return status
 
+    # LiteLLM 1.98 在「存在父 span」时默认不再新建模型 span，而是把 usage/成本写到父
+    # span（Harness 的 provider.request）上。Spec 20P0 要求模型 span 由 SDK 产生且名称
+    # 取自 SDK，因此在创建 handler 之前显式要求始终创建 litellm_request span。
+    # 这是启动期一次性配置，不在请求期间改动；不识别该标志的版本回退默认行为。
+    os.environ.setdefault("USE_OTEL_LITELLM_REQUEST_SPAN", "true")
+
     provider = trace.get_tracer_provider()
     if not isinstance(provider, TracerProvider):
         # 未启用观测：仅安装本地记录回调，不创建任何 provider。
@@ -481,7 +485,3 @@ def reset_integration_state() -> None:
     _otel_handler = None
     _installed = False
     _recorder.clear()
-
-
-def current_model_attributes(*, purpose: str, provider: Optional[str] = None) -> Dict[str, Any]:
-    return span_attributes(purpose=purpose, provider=provider)

@@ -70,6 +70,10 @@ def configure_observability(
     capture_content: bool = False,
 ) -> ObservabilityRuntime:
     """Process bootstrap entry point. Library modules must not call this function."""
+    # LiteLLM 1.98 在「存在父 span」时默认把 usage/成本写到父 span 而不新建模型 span。
+    # Spec 20P0 要求模型 span 由 SDK integration 产生且名称取自 SDK，因此在任何 bootstrap
+    # 分支之前一次性声明该开关；它在请求期间不再改动。
+    os.environ.setdefault("USE_OTEL_LITELLM_REQUEST_SPAN", "true")
     if not enabled:
         _install_model_observability(capture_content=capture_content)
         return ObservabilityRuntime()
@@ -123,9 +127,9 @@ def configure_observability(
 
 
 def _install_model_observability(*, capture_content: bool) -> None:
-    """在统一 provider 就绪后接入 LiteLLM SDK 观测（P08）。
+    """在统一 provider 就绪后接入 LiteLLM SDK 观测。
 
-    导入失败只告警：观测缺口不能阻断启动，但必须可见。
+    安装失败只告警：观测缺口不能阻断启动，但必须可见。
     """
 
     try:
@@ -134,3 +138,12 @@ def _install_model_observability(*, capture_content: bool) -> None:
         install_litellm_integration(capture_content=capture_content)
     except Exception:  # noqa: BLE001
         logger.warning("LiteLLM observability integration not installed", exc_info=True)
+
+    try:
+        from app.infrastructure.observability.litellm_span_enricher import install_model_span_enricher
+
+        provider = trace.get_tracer_provider()
+        if isinstance(provider, TracerProvider):
+            install_model_span_enricher(provider)
+    except Exception:  # noqa: BLE001
+        logger.warning("model span enricher not installed", exc_info=True)

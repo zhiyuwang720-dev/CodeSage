@@ -38,7 +38,7 @@ $modelFoundationTests = @(
     "tests/observability_acceptance/test_ap15_deletion_and_isolation.py",
     "tests/observability_acceptance/test_usage_normalization.py",
     "tests/observability_acceptance/test_model_identity_flow.py",
-    "tests/observability_acceptance/test_llm_semantics.py",
+    "tests/observability_acceptance/test_model_boundary_evidence.py",
     "tests/observability_acceptance/test_capability_matrix.py"
 )
 

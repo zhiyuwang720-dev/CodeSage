@@ -1,9 +1,8 @@
-"""统一模型出口：唯一 `litellm.acompletion` 调用点（P01/P04/P05）。
+"""统一模型出口：唯一 `litellm.acompletion` 调用点。
 
-本模块只做三件事：把不可变快照变成 SDK 调用参数、消费 SDK 响应/流、把 SDK
-异常映射到既有恢复类别。厂商协议分派、HTTP/SSE 手写、响应解析都不在这里出现。
+本模块只做三件事：把不可变快照变成 SDK 调用参数、消费 SDK 响应/流、把 SDK异常映射到既有恢复类别。厂商协议分派、HTTP/SSE 手写、响应解析都不在这里出现。
 
-约束（Spec 20P0）：
+约束：
 - 不在请求期间修改 `litellm` 全局（cache / drop_params / model / api_base / key）；
 - SDK 自动重试按快照预算显式设置，禁止与业务层倍增；
 - 流事件终态 `done` 至多一次，出错后不再产出 `done`。

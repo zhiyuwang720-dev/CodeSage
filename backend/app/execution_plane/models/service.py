@@ -1,10 +1,8 @@
-"""薄模型服务外观（P01）。
+"""薄模型服务外观。
 
-`LLMService` 只保留三件事：配置快照解析、准入/间隔协调、把 SDK 结果装饰成既有
-runtime 契约。adapter 选择、重试循环、价格计算、OTLP 导出都不在这里。
+`LLMService` 只保留三件事：配置快照解析、准入/间隔协调、把 SDK 结果装饰成既有 runtime 契约。adapter 选择、重试循环、价格计算、OTLP 导出都不在这里。
 
-调用者要么经 `RuntimeBridge`（Harness 拥有重试），要么是独立一次性调用
-（`retry_owner=sdk`，最多 3 次实际请求）。
+调用者要么经 `RuntimeBridge`（Harness 拥有重试），要么是独立一次性调用（`retry_owner=sdk`，最多 3 次实际请求）。
 """
 
 from __future__ import annotations

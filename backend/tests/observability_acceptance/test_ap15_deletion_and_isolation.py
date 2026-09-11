@@ -124,42 +124,40 @@ def test_ap15_no_second_llm_emitting_path_in_observability() -> None:
     assert span_creators == []
 
 
-def test_ap15_llm_semantics_only_accepts_known_provenance() -> None:
-    from app.infrastructure.observability.llm_semantics import llm_span_attributes
+@pytest.mark.asyncio
+async def test_ap15_no_second_llm_span_in_the_harness_turn(model_harness) -> None:
+    """模型 span 只由 SDK 产生：Harness 侧的尝试容器不得再声明 LLM 语义。
 
-    attributes = llm_span_attributes(
-        configured_model="deepseek-chat",
-        request_model="deepseek-chat",
-        response_model="deepseek-chat",
-        provider="deepseek",
-        endpoint_id="https://api.deepseek.com",
-        protocol="openai_chat",
-        perspective="security",
-        purpose="review",
-        usage={
-            "prompt_tokens": 10,
-            "total_tokens": 12,
-            "usage_present": True,
-            "usage_source": "sdk_normalized",
-            "field_sources": {"prompt_tokens": "sdk_normalized", "total_tokens": "derived"},
-            "anomalies": [],
+    证据以源码静态断言给出，避免依赖 SDK 回调在测试事件循环收尾时的落盘时机。
+    """
+
+    from app.execution_plane.runtime import query_loop
+
+    source = Path(query_loop.__file__).read_text(encoding="utf-8")
+    assert '"provider.request"' in source
+    start = source.index('"provider.request"')
+    window = source[max(0, start - 200) : start + 200]
+    assert '"LLM"' not in window, "provider.request 不能声明 LLM 语义（会同次调用产生第二个模型 span）"
+
+    # 仓库内不应再出现其他 LLM 语义的 span 声明（模型 span 由 SDK integration 产生）
+    llm_semantics_sites: list[str] = []
+    for path in APP_ROOT.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8-sig")
+        if '"openinference.span.kind": "LLM"' in text and "span_enricher" not in path.name:
+            llm_semantics_sites.append(path.relative_to(APP_ROOT.parent).as_posix())
+    assert llm_semantics_sites == []
+    model_harness.write_json(
+        "ap15/single_llm_span.json",
+        {
+            "requirement": "P08,P11",
+            "acceptance": "AP15",
+            "harness_container_span": "provider.request (kind=CHAIN)",
+            "llm_span_owner": "litellm.integrations.opentelemetry.OpenTelemetry",
+            "other_llm_kind_sites": llm_semantics_sites,
         },
     )
-    assert attributes["gen_ai.usage.input_tokens"] == 10
-    assert attributes["codesage.usage.source"] == "sdk_normalized"
-    # 旧来源命名不再被当成实测 token
-    legacy = llm_span_attributes(
-        configured_model="m",
-        request_model="m",
-        response_model="m",
-        provider="p",
-        endpoint_id=None,
-        protocol="openai_chat",
-        perspective=None,
-        purpose="review",
-        usage={"prompt_tokens": 10, "field_sources": {"prompt_tokens": "provider"}, "usage_present": True},
-    )
-    assert "gen_ai.usage.input_tokens" not in legacy
 
 
 @pytest.mark.asyncio

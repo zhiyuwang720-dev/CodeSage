@@ -56,12 +56,25 @@ async def test_ap13_one_provider_span_and_one_callback_per_call(model_harness) -
     assert len(records) == 1
     assert len(model_harness.server.requests(CHAT_PATH)) == 1
 
+    attributes = dict(spans[0].attributes)
+    assert attributes["openinference.span.kind"] == "LLM"
+    assert attributes.get("codesage.provider_request_id")
+    # 同一个逻辑调用只能有一个 LLM 级模型 span（不能有外包的第二份计费 span）
+    llm_spans = [
+        span
+        for span in model_harness.spans()
+        if dict(span.attributes).get("openinference.span.kind") == "LLM"
+    ]
+    assert len(llm_spans) == 1, [span.name for span in llm_spans]
+
     model_harness.write_json(
         "ap13/provider_span.json",
         {
             "requirement": "P08",
             "acceptance": "AP13",
             "span_names": [span.name for span in spans],
+            "span_kind": attributes["openinference.span.kind"],
+            "provider_request_id": attributes.get("codesage.provider_request_id"),
             "callback_call_ids": [record.call_id for record in records],
             "http_requests": len(model_harness.server.requests(CHAT_PATH)),
         },

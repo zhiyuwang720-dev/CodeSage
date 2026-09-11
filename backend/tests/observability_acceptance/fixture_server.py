@@ -59,6 +59,14 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - 基类签名
         return
 
+    def handle_one_request(self) -> None:  # noqa: N802 - 基类签名
+        """客户端在中断/取消场景会直接断开；这类连接中止不是测试失败。"""
+
+        try:
+            super().handle_one_request()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
     def do_POST(self) -> None:  # noqa: N802 - 基类签名
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
