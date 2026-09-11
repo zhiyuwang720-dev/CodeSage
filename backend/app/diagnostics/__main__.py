@@ -8,6 +8,7 @@ from pathlib import Path
 from app.infrastructure.observability.pricing import PricingCatalog, sync_catalog_to_file
 
 from .exporter import export_bundle, summarize_bundle
+from .smoke import smoke_payload, run_smoke_sync
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -78,8 +79,18 @@ def main(argv: list[str] | None = None) -> int:
         if not args.allow_paid:
             print("smoke requires --allow-paid", file=sys.stderr)
             return 1
-        print("real smoke is not implemented in the offline diagnostics build", file=sys.stderr)
-        return 2
+        try:
+            result = run_smoke_sync(
+                case_id=args.case_id,
+                allow_paid=True,
+                max_cost=args.max_cost,
+                currency=args.currency,
+            )
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(smoke_payload(result), ensure_ascii=False, sort_keys=True))
+        return 0 if result.status == "passed" else 2
     return 1
 
 
