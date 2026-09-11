@@ -12,7 +12,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor  # noqa: F401
 
 from app.infrastructure.observability.exporters import (
     OtlpJsonlMetricExporter,
@@ -67,10 +67,18 @@ def configure_observability(
     local_metric_path: str | Path | None = None,
     export_timeout_seconds: float = 3.0,
     max_attribute_bytes: int = 8192,
+    capture_content: bool = False,
 ) -> ObservabilityRuntime:
     """Process bootstrap entry point. Library modules must not call this function."""
     if not enabled:
+        _install_model_observability(capture_content=capture_content)
         return ObservabilityRuntime()
+    # 全局 TracerProvider 只能注册一次；重复 bootstrap（测试/多进程内多次初始化）
+    # 必须复用已有 provider，避免模型 span 落到没有 exporter 的孤儿 provider 上。
+    existing = trace.get_tracer_provider()
+    if isinstance(existing, TracerProvider):
+        _install_model_observability(capture_content=capture_content)
+        return ObservabilityRuntime(existing, metrics.get_meter_provider())
     resource = Resource.create(
         {
             "service.name": service_name,
@@ -110,4 +118,19 @@ def configure_observability(
     correlation_filter = TraceCorrelationFilter()
     for handler in logging.getLogger().handlers:
         handler.addFilter(correlation_filter)
+    _install_model_observability(capture_content=capture_content)
     return ObservabilityRuntime(tracer_provider, meter_provider)
+
+
+def _install_model_observability(*, capture_content: bool) -> None:
+    """在统一 provider 就绪后接入 LiteLLM SDK 观测（P08）。
+
+    导入失败只告警：观测缺口不能阻断启动，但必须可见。
+    """
+
+    try:
+        from app.infrastructure.observability.litellm_integration import install_litellm_integration
+
+        install_litellm_integration(capture_content=capture_content)
+    except Exception:  # noqa: BLE001
+        logger.warning("LiteLLM observability integration not installed", exc_info=True)

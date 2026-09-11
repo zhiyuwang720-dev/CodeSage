@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
         local_metric_path=settings.OTEL_LOCAL_METRIC_PATH,
         export_timeout_seconds=settings.OTEL_EXPORT_TIMEOUT_SECONDS,
         max_attribute_bytes=settings.OTEL_CAPTURE_MAX_BYTES,
+        capture_content=settings.OTEL_CAPTURE_CONTENT,
     )
 
     # 11-P6 启动自愈建表: 主库幂等 create_all(Postgres), 防未来新表缺表事故复发

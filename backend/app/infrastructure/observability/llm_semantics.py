@@ -62,11 +62,12 @@ def llm_span_attributes(
         value = normalized.get(field)
         source = str(sources.get(field) or "missing")
         attributes[f"codesage.usage.{field}.source"] = source
-        if value is None or source not in {"provider", "derived"}:
+        if value is None or source not in {"provider_raw", "sdk_normalized", "derived"}:
             continue
         for key in semantic_keys:
             attributes[key] = int(value)
 
     attributes["codesage.usage.present"] = bool(normalized.get("usage_present", False))
+    attributes["codesage.usage.source"] = str(normalized.get("usage_source") or "unknown")
     attributes["codesage.usage.anomaly_count"] = len(list(normalized.get("anomalies") or []))
     return attributes

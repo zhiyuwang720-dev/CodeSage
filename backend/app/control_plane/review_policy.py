@@ -9,6 +9,7 @@ from app.domains.pr_review.prompts import (
     REVIEW_QUALITY_PROMPT,
     REVIEW_SECURITY_PROMPT,
 )
+from app.execution_plane.models.config import MODEL_BOUNDARY_VERSION
 from app.models.agent_task import AgentTask
 
 
@@ -22,6 +23,8 @@ def build_review_compatibility_config(task: AgentTask) -> dict[str, Any]:
     safe_llm = {key: llm[key] for key in fields if key in llm}
     return {
         "flow_version": "quick-review-v1",
+        # 模型边界实现版本参与恢复指纹：边界实现变化后旧身份必须明确拒绝复用。
+        "model_boundary_version": MODEL_BOUNDARY_VERSION,
         "model": safe_llm,
         "runtime": {
             "provider": settings.LLM_PROVIDER,
@@ -29,6 +32,7 @@ def build_review_compatibility_config(task: AgentTask) -> dict[str, Any]:
             "temperature": settings.LLM_TEMPERATURE,
             "max_tokens": settings.LLM_MAX_TOKENS,
             "protocol": settings.LLM_ENDPOINT_PROTOCOL,
+            "model_boundary_version": MODEL_BOUNDARY_VERSION,
         },
         "prompts": {
             "security": REVIEW_SECURITY_PROMPT,

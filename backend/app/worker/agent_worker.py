@@ -110,6 +110,7 @@ async def startup_observability(ctx: dict[str, Any]) -> None:
         local_metric_path=settings.OTEL_LOCAL_METRIC_PATH,
         export_timeout_seconds=settings.OTEL_EXPORT_TIMEOUT_SECONDS,
         max_attribute_bytes=settings.OTEL_CAPTURE_MAX_BYTES,
+        capture_content=settings.OTEL_CAPTURE_CONTENT,
     )
 
 
