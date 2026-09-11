@@ -212,7 +212,7 @@ class DiagnosticContentStore:
 
 
 _store: DiagnosticContentStore | None = None
-_store_lock = threading.Lock()
+_store_lock = threading.RLock()
 
 
 def configure_content_store(

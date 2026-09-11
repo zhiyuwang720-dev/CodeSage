@@ -222,15 +222,24 @@ try {
             $required += @(
                 "plan20-unit.junit.xml",
                 "evidence/a01/wire_non_stream.json",
-                "evidence/a01/wire_stream.json"
+                "evidence/a01/wire_stream.json",
                 "evidence/a02/context_attributes.json",
-                "evidence/a02/retry_request_mapping.json"
+                "evidence/a02/retry_request_mapping.json",
                 "evidence/a03/usage_layers.json",
                 "evidence/a04/usage_fidelity.json",
                 "evidence/a05/partial_usage.json",
                 "evidence/a06/anomalies.json",
                 "evidence/a07/openai_compatible_usage.json",
-                "evidence/a07/anthropic_cache_usage.json"
+                "evidence/a07/anthropic_cache_usage.json",
+                "evidence/a08/pricing.json",
+                "evidence/a10/content_capture.json",
+                "evidence/a10/capture_disabled.json",
+                "evidence/a11/limits.json",
+                "evidence/a12/redaction.json",
+                "evidence/a19/provenance.json",
+                "evidence/a20/metrics.json",
+                "evidence/a23/log.json",
+                "evidence/a27/summary.json"
             )
         }
         foreach ($item in $required) {

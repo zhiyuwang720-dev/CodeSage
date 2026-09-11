@@ -1,4 +1,7 @@
-param([switch]$KeepDependencies)
+param(
+    [switch]$KeepDependencies,
+    [string]$TestPath = "tests/worker_acceptance"
+)
 
 # PowerShell 5.1 turns native stderr into a terminating error when this is Stop.
 # Docker Compose writes progress/warnings to stderr, so native exit codes are checked explicitly.
@@ -71,7 +74,7 @@ try {
     $stderr = Join-Path $artifactRoot "acceptance.stderr.log"
     $acceptanceJunit = Join-Path $artifactRoot "acceptance.junit.xml"
     $testProcess = Start-Process -FilePath "python" -ArgumentList @(
-        "-m", "pytest", "tests/worker_acceptance", "-q", "--junitxml=$acceptanceJunit"
+        "-m", "pytest", $TestPath, "-q", "--junitxml=$acceptanceJunit"
     ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if ($testProcess.ExitCode -ne 0) {
         Get-Content $stdout

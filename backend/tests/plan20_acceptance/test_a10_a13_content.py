@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from app.domains.pr_review.synthesizer import synthesize
@@ -11,11 +12,13 @@ from app.infrastructure.observability.content import (
     CAPTURE_STATUS_DISABLED,
     CAPTURE_STATUS_TRUNCATED,
     DiagnosticContentStore,
+    get_content_store,
+    reset_content_store,
 )
 from app.infrastructure.observability.privacy import redact_text
 
 
-def test_a10_capture_enabled_redacts_and_persists_verified_content(tmp_path: Path) -> None:
+def test_a10_capture_enabled_redacts_and_persists_verified_content(tmp_path: Path, acceptance_artifact_root) -> None:
     store = DiagnosticContentStore(
         tmp_path,
         enabled=True,
@@ -46,20 +49,24 @@ def test_a10_capture_enabled_redacts_and_persists_verified_content(tmp_path: Pat
     assert "visible" in text
     assert store.find_artifact("run-a10", result.artifact.artifact_id) == result.artifact
 
-    target = tmp_path / "a10.json"
+    target = acceptance_artifact_root / "evidence" / "a10" / "content_capture.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"status": result.status, "path": result.artifact.relative_path}), encoding="utf-8")
 
 
-def test_a10_capture_disabled_has_metadata_but_no_body(tmp_path: Path) -> None:
+def test_a10_capture_disabled_has_metadata_but_no_body(tmp_path: Path, acceptance_artifact_root) -> None:
     store = DiagnosticContentStore(tmp_path, enabled=False)
     result = store.capture(run_id="run-off", kind="model_request", content={"prompt": "private"})
     assert result.status == CAPTURE_STATUS_DISABLED
     assert result.artifact is None
     assert result.preview is None
     assert result.original_redacted_bytes > 0
+    target = acceptance_artifact_root / "evidence" / "a10" / "capture_disabled.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"status": result.status, "artifact": None, "original_bytes": result.original_redacted_bytes}), encoding="utf-8")
 
 
-def test_a11_file_limit_and_run_quota_mark_truncated(tmp_path: Path) -> None:
+def test_a11_file_limit_and_run_quota_mark_truncated(tmp_path: Path, acceptance_artifact_root) -> None:
     store = DiagnosticContentStore(
         tmp_path,
         enabled=True,
@@ -76,9 +83,12 @@ def test_a11_file_limit_and_run_quota_mark_truncated(tmp_path: Path) -> None:
     assert second.stored_bytes == 20
     assert second.artifact is not None
     assert len(store.read_verified(second.artifact)) == 20
+    target = acceptance_artifact_root / "evidence" / "a11" / "limits.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"first": first.status, "second": second.status, "stored_bytes": second.stored_bytes, "reason": second.reason}), encoding="utf-8")
 
 
-def test_a12_redaction_covers_json_strings_urls_and_embedded_secrets() -> None:
+def test_a12_redaction_covers_json_strings_urls_and_embedded_secrets(acceptance_artifact_root) -> None:
     text, truncated = redact_text(
         '{"api_key":"sk-abcdefghijklmnop","url":"https://u:p@example.test/x?access_token=abc",'
         '"note":"Authorization: Bearer abcdefghijklmnop"}'
@@ -87,9 +97,12 @@ def test_a12_redaction_covers_json_strings_urls_and_embedded_secrets() -> None:
     assert "sk-abcdefghijklmnop" not in text
     assert "u:p@" not in text
     assert "abcdefghijklmnop" not in text
+    target = acceptance_artifact_root / "evidence" / "a12" / "redaction.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"redacted": text, "truncated": truncated}), encoding="utf-8")
 
 
-def test_a19_finding_provenance_records_ids_and_reasons() -> None:
+def test_a19_finding_provenance_records_ids_and_reasons(acceptance_artifact_root) -> None:
     finding = {
         "rule_id": "security-R",
         "severity": "high",
@@ -111,3 +124,15 @@ def test_a19_finding_provenance_records_ids_and_reasons() -> None:
     assert len(provenance["input_finding_ids"]) == 2
     assert len(provenance["output_finding_ids"]) == 1
     assert provenance["deduped_away"] == 1
+    target = acceptance_artifact_root / "evidence" / "a19" / "provenance.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(provenance), encoding="utf-8")
+
+
+def test_content_store_lazy_init_is_deadlock_free() -> None:
+    reset_content_store()
+    thread = threading.Thread(target=get_content_store)
+    thread.start()
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    reset_content_store()

@@ -1,9 +1,14 @@
+import os
 from pathlib import Path
 from typing import List, Optional, Union
 
 from pydantic import AnyHttpUrl, validator
 from pydantic_settings import BaseSettings
 
+
+# LiteLLM otherwise performs a network cost-map refresh at import/use time.
+# CodeSage uses its own frozen catalog; local SDK data keeps startup deterministic.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
 DEFAULT_MANAGED_PROJECTS_ROOT = str(Path(__file__).resolve().parents[3] / "projects")
 
