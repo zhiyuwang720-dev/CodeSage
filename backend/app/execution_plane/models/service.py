@@ -1,3 +1,12 @@
+"""薄模型服务外观（P01）。
+
+`LLMService` 只保留三件事：配置快照解析、准入/间隔协调、把 SDK 结果装饰成既有
+runtime 契约。adapter 选择、重试循环、价格计算、OTLP 导出都不在这里。
+
+调用者要么经 `RuntimeBridge`（Harness 拥有重试），要么是独立一次性调用
+（`retry_owner=sdk`，最多 3 次实际请求）。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,28 +16,39 @@ import logging
 import re
 from copy import deepcopy
 from typing import Any, AsyncGenerator, Dict, List, Optional
-from urllib.parse import urlsplit
 
 from app.core.config import settings
-from app.execution_plane.models.errors import LLMConnectionError, LLMRateLimitError, LLMTimeoutError
-from app.execution_plane.models.retry import LLM_RETRY_CONFIG, RetryConfig, retry_with_backoff
 
-from .factory import LLMFactory
-from .protocols.registry import canonical_endpoint_protocol, canonical_tool_message_format
-from .types import DEFAULT_MODELS, LLMConfig, LLMMessage, LLMProvider, LLMRequest, LLMResponse
-from .usage import normalize_usage
+from .client import SDKModelClient, get_sdk_client
+from .config import (
+    RETRY_BUDGET_HARNESS,
+    RETRY_BUDGET_INDEPENDENT,
+    RETRY_OWNER_HARNESS,
+    RETRY_OWNER_SDK,
+    LLMConfig,
+    LLMRequest,
+    ModelCatalog,
+    canonical_endpoint_protocol,
+    canonical_tool_message_format,
+    default_base_url,
+    parse_provider,
+    resolve_sdk_model,
+    resolve_tool_message_format,
+)
+from .types import LLMResponse
 
 try:
     from json_repair import repair_json
+
     JSON_REPAIR_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - 可选依赖
     JSON_REPAIR_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    """LLM service with per-agent model override, chat completion, and code analysis helpers."""
+    """兼容调用外观：配置解析 + 准入协调 + 结果装饰。"""
 
     _provider_semaphores: Dict[str, asyncio.Semaphore] = {}
     _provider_semaphore_limits: Dict[str, int] = {}
@@ -36,66 +56,14 @@ class LLMService:
     _provider_last_request_at: Dict[str, float] = {}
 
     def __init__(self, user_config: Optional[Dict[str, Any]] = None):
-        self._config: Optional[LLMConfig] = None
         self._user_config = user_config or {}
+        self._configs: Dict[Optional[str], LLMConfig] = {}
 
+    # ------------------------------------------------------------------ 配置解析
     @staticmethod
     def _perspective_from_agent_type(agent_type: str | None) -> str | None:
         value = str(agent_type or "").strip()
         return value.split(":", 1)[1] if value.startswith("review:") else None
-
-    @staticmethod
-    def _endpoint_id(base_url: str | None) -> str | None:
-        if not base_url:
-            return None
-        parsed = urlsplit(base_url)
-        if not parsed.hostname:
-            return None
-        port = f":{parsed.port}" if parsed.port is not None else ""
-        return f"{parsed.scheme}://{parsed.hostname}{port}"
-
-    def _decorate_response_identity(
-        self, response: LLMResponse, *, config: LLMConfig, request: LLMRequest
-    ) -> LLMResponse:
-        if not isinstance(response, LLMResponse):
-            return response
-        response.configured_model = response.configured_model or config.model
-        response.request_model = response.request_model or config.model
-        response.response_model = response.response_model or response.model
-        response.provider = response.provider or config.provider.value
-        response.endpoint_id = response.endpoint_id or self._endpoint_id(config.base_url)
-        response.protocol = response.protocol or config.endpoint_protocol
-        response.perspective = response.perspective or request.perspective
-        response.purpose = response.purpose or request.purpose
-        return response
-
-    def _decorate_stream_event(
-        self, event: Dict[str, Any], *, config: LLMConfig, request: LLMRequest
-    ) -> Dict[str, Any]:
-        payload = dict(event or {})
-        raw_usage = payload.get("usage")
-        if raw_usage is not None and not (
-            isinstance(raw_usage, dict) and raw_usage.get("normalization_version")
-        ):
-            usage = normalize_usage(
-                raw_usage,
-                provider=config.provider.value,
-                protocol=config.endpoint_protocol,
-            )
-            payload["usage"] = usage.to_dict() if usage is not None else None
-        payload.update(
-            {
-                "configured_model": config.model,
-                "request_model": config.model,
-                "response_model": payload.get("response_model") or payload.get("model"),
-                "provider": config.provider.value,
-                "endpoint_id": self._endpoint_id(config.base_url),
-                "protocol": config.endpoint_protocol,
-                "perspective": request.perspective,
-                "purpose": request.purpose,
-            }
-        )
-        return payload
 
     def _resolve_llm_payload(self, agent_type: Optional[str] = None) -> Dict[str, Any]:
         user_llm_config = deepcopy(self._user_config.get("llmConfig", {}) or {})
@@ -137,28 +105,25 @@ class LLMService:
         env_payload = llm_payload.get("env")
         if not isinstance(env_payload, dict):
             return {}
-        return {
-            str(key): str(value)
-            for key, value in env_payload.items()
-            if value not in (None, "")
-        }
+        return {str(key): str(value) for key, value in env_payload.items() if value not in (None, "")}
 
-    def _provider_env_candidates(self, provider: LLMProvider) -> Dict[str, List[str]]:
+    @staticmethod
+    def _provider_env_candidates(provider) -> Dict[str, List[str]]:
         prefix_map = {
-            LLMProvider.CLAUDE: "ANTHROPIC",
-            LLMProvider.OPENAI: "OPENAI",
-            LLMProvider.GEMINI: "GEMINI",
-            LLMProvider.QWEN: "QWEN",
-            LLMProvider.DEEPSEEK: "DEEPSEEK",
-            LLMProvider.ZHIPU: "ZHIPU",
-            LLMProvider.MOONSHOT: "MOONSHOT",
-            LLMProvider.BAIDU: "BAIDU",
-            LLMProvider.MINIMAX: "MINIMAX",
-            LLMProvider.DOUBAO: "DOUBAO",
-            LLMProvider.MIMO: "MIMO",
-            LLMProvider.OLLAMA: "OLLAMA",
+            "claude": "ANTHROPIC",
+            "openai": "OPENAI",
+            "gemini": "GEMINI",
+            "qwen": "QWEN",
+            "deepseek": "DEEPSEEK",
+            "zhipu": "ZHIPU",
+            "moonshot": "MOONSHOT",
+            "baidu": "BAIDU",
+            "minimax": "MINIMAX",
+            "doubao": "DOUBAO",
+            "mimo": "MIMO",
+            "ollama": "OLLAMA",
         }
-        prefix = prefix_map.get(provider, "LLM")
+        prefix = prefix_map.get(provider.value, "LLM")
         return {
             "api_key": [f"{prefix}_AUTH_TOKEN", f"{prefix}_API_KEY", "LLM_API_KEY"],
             "base_url": [f"{prefix}_BASE_URL", "LLM_BASE_URL"],
@@ -166,7 +131,8 @@ class LLMService:
             "timeout_ms": ["API_TIMEOUT_MS", "LLM_TIMEOUT_MS"],
         }
 
-    def _first_env_value(self, env_payload: Dict[str, str], keys: List[str]) -> Optional[str]:
+    @staticmethod
+    def _first_env_value(env_payload: Dict[str, str], keys: List[str]) -> Optional[str]:
         for key in keys:
             value = env_payload.get(key)
             if value not in (None, ""):
@@ -176,111 +142,89 @@ class LLMService:
     def get_agent_timeout_config(self, agent_type: Optional[str] = None) -> Dict[str, int]:
         user_llm_config = self._resolve_llm_payload(agent_type)
         return {
-            "llm_first_token_timeout": int(user_llm_config.get("llmFirstTokenTimeout") or getattr(settings, "LLM_FIRST_TOKEN_TIMEOUT", 30)),
-            "llm_stream_timeout": int(user_llm_config.get("llmStreamTimeout") or getattr(settings, "LLM_STREAM_TIMEOUT", 60)),
+            "llm_first_token_timeout": int(
+                user_llm_config.get("llmFirstTokenTimeout") or getattr(settings, "LLM_FIRST_TOKEN_TIMEOUT", 30)
+            ),
+            "llm_stream_timeout": int(
+                user_llm_config.get("llmStreamTimeout") or getattr(settings, "LLM_STREAM_TIMEOUT", 60)
+            ),
             "agent_timeout": int(user_llm_config.get("agentTimeout") or getattr(settings, "AGENT_TIMEOUT_SECONDS", 1800)),
-            "sub_agent_timeout": int(user_llm_config.get("subAgentTimeout") or getattr(settings, "SUB_AGENT_TIMEOUT_SECONDS", 600)),
+            "sub_agent_timeout": int(
+                user_llm_config.get("subAgentTimeout") or getattr(settings, "SUB_AGENT_TIMEOUT_SECONDS", 600)
+            ),
             "tool_timeout": int(user_llm_config.get("toolTimeout") or getattr(settings, "TOOL_TIMEOUT_SECONDS", 60)),
         }
 
-    def _parse_provider(self, provider_str: str) -> LLMProvider:
-        provider_map = {
-            "gemini": LLMProvider.GEMINI,
-            "openai": LLMProvider.OPENAI,
-            "claude": LLMProvider.CLAUDE,
-            "qwen": LLMProvider.QWEN,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "zhipu": LLMProvider.ZHIPU,
-            "moonshot": LLMProvider.MOONSHOT,
-            "baidu": LLMProvider.BAIDU,
-            "minimax": LLMProvider.MINIMAX,
-            "doubao": LLMProvider.DOUBAO,
-            "mimo": LLMProvider.MIMO,
-            "xiaomimimo": LLMProvider.MIMO,
-            "ollama": LLMProvider.OLLAMA,
+    @staticmethod
+    def _provider_api_key_from_user_config(provider, user_llm_config: Dict[str, Any]) -> Optional[str]:
+        key_map = {
+            "openai": "openaiApiKey",
+            "gemini": "geminiApiKey",
+            "claude": "claudeApiKey",
+            "qwen": "qwenApiKey",
+            "deepseek": "deepseekApiKey",
+            "zhipu": "zhipuApiKey",
+            "moonshot": "moonshotApiKey",
+            "baidu": "baiduApiKey",
+            "minimax": "minimaxApiKey",
+            "doubao": "doubaoApiKey",
+            "mimo": "mimoApiKey",
         }
-        return provider_map.get((provider_str or "").lower(), LLMProvider.OPENAI)
-
-    def _get_provider_api_key_from_user_config(self, provider: LLMProvider, user_llm_config: Dict[str, Any]) -> Optional[str]:
-        provider_key_map = {
-            LLMProvider.OPENAI: "openaiApiKey",
-            LLMProvider.GEMINI: "geminiApiKey",
-            LLMProvider.CLAUDE: "claudeApiKey",
-            LLMProvider.QWEN: "qwenApiKey",
-            LLMProvider.DEEPSEEK: "deepseekApiKey",
-            LLMProvider.ZHIPU: "zhipuApiKey",
-            LLMProvider.MOONSHOT: "moonshotApiKey",
-            LLMProvider.BAIDU: "baiduApiKey",
-            LLMProvider.MINIMAX: "minimaxApiKey",
-            LLMProvider.DOUBAO: "doubaoApiKey",
-            LLMProvider.MIMO: "mimoApiKey",
-        }
-        key_name = provider_key_map.get(provider)
+        key_name = key_map.get(provider.value)
         return user_llm_config.get(key_name) if key_name else None
 
-    def _get_provider_api_key(self, provider: LLMProvider) -> str:
-        provider_key_map = {
-            LLMProvider.OPENAI: "OPENAI_API_KEY",
-            LLMProvider.GEMINI: "GEMINI_API_KEY",
-            LLMProvider.CLAUDE: "CLAUDE_API_KEY",
-            LLMProvider.QWEN: "QWEN_API_KEY",
-            LLMProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
-            LLMProvider.ZHIPU: "ZHIPU_API_KEY",
-            LLMProvider.MOONSHOT: "MOONSHOT_API_KEY",
-            LLMProvider.BAIDU: "BAIDU_API_KEY",
-            LLMProvider.MINIMAX: "MINIMAX_API_KEY",
-            LLMProvider.DOUBAO: "DOUBAO_API_KEY",
-            LLMProvider.MIMO: "MIMO_API_KEY",
+    @staticmethod
+    def _provider_api_key(provider) -> str:
+        key_map = {
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "claude": "CLAUDE_API_KEY",
+            "qwen": "QWEN_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "zhipu": "ZHIPU_API_KEY",
+            "moonshot": "MOONSHOT_API_KEY",
+            "baidu": "BAIDU_API_KEY",
+            "minimax": "MINIMAX_API_KEY",
+            "doubao": "DOUBAO_API_KEY",
+            "mimo": "MIMO_API_KEY",
         }
-        key_name = provider_key_map.get(provider)
+        key_name = key_map.get(provider.value)
         if key_name:
             return getattr(settings, key_name, "") or ""
         return "ollama"
 
-    def _get_provider_base_url(self, provider: LLMProvider) -> Optional[str]:
-        if provider == LLMProvider.OPENAI:
-            return getattr(settings, "OPENAI_BASE_URL", None)
-        if provider == LLMProvider.OLLAMA:
-            return getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        if provider in {
-            LLMProvider.QWEN,
-            LLMProvider.DEEPSEEK,
-            LLMProvider.ZHIPU,
-            LLMProvider.MOONSHOT,
-            LLMProvider.BAIDU,
-            LLMProvider.MINIMAX,
-            LLMProvider.DOUBAO,
-            LLMProvider.MIMO,
-        }:
-            from .types import DEFAULT_BASE_URLS
-
-            return DEFAULT_BASE_URLS.get(provider)
-        return None
-
-    def get_agent_config(self, agent_type: Optional[str] = None) -> LLMConfig:
+    def get_agent_config(
+        self,
+        agent_type: Optional[str] = None,
+        *,
+        retry_owner: str = RETRY_OWNER_SDK,
+        purpose: str = "review",
+    ) -> LLMConfig:
         user_llm_config = self._resolve_llm_payload(agent_type)
-        provider = self._parse_provider(user_llm_config.get("llmProvider") or getattr(settings, "LLM_PROVIDER", "openai"))
+        provider = parse_provider(user_llm_config.get("llmProvider") or getattr(settings, "LLM_PROVIDER", "openai"))
         runtime_env = self._get_runtime_env(user_llm_config)
         env_candidates = self._provider_env_candidates(provider)
+
         api_key = (
             user_llm_config.get("llmApiKey")
-            or self._get_provider_api_key_from_user_config(provider, user_llm_config)
+            or self._provider_api_key_from_user_config(provider, user_llm_config)
             or self._first_env_value(runtime_env, env_candidates["api_key"])
             or getattr(settings, "LLM_API_KEY", "")
-            or self._get_provider_api_key(provider)
+            or self._provider_api_key(provider)
         )
         model = (
             user_llm_config.get("llmModel")
             or self._first_env_value(runtime_env, env_candidates["model"])
             or getattr(settings, "LLM_MODEL", "")
-            or DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+            or ModelCatalog.default_model(provider)
         )
         base_url = (
             user_llm_config.get("llmBaseUrl")
             or self._first_env_value(runtime_env, env_candidates["base_url"])
             or getattr(settings, "LLM_BASE_URL", None)
-            or self._get_provider_base_url(provider)
+            or default_base_url(provider)
         )
+
         timeout_ms = user_llm_config.get("llmTimeout")
         if timeout_ms in (None, ""):
             timeout_ms = self._first_env_value(runtime_env, env_candidates["timeout_ms"])
@@ -289,66 +233,94 @@ class LLMService:
             except (TypeError, ValueError):
                 timeout_ms = None
         timeout = int(timeout_ms / 1000) if timeout_ms and timeout_ms > 1000 else int(timeout_ms or getattr(settings, "LLM_TIMEOUT", 300))
-        temperature = user_llm_config.get("llmTemperature")
-        top_p = user_llm_config.get("llmTopP")
-        max_tokens = int(user_llm_config.get("llmMaxTokens") or getattr(settings, "LLM_MAX_TOKENS", 4096))
+
         endpoint_protocol = canonical_endpoint_protocol(
             user_llm_config.get("endpointProtocol")
             or user_llm_config.get("llmEndpointProtocol")
-            or getattr(settings, "LLM_ENDPOINT_PROTOCOL", "openai_compatible")
+            or getattr(settings, "LLM_ENDPOINT_PROTOCOL", "openai_chat")
         )
         tool_message_format = canonical_tool_message_format(
             user_llm_config.get("toolMessageFormat")
             or user_llm_config.get("llmToolMessageFormat")
             or getattr(settings, "LLM_TOOL_MESSAGE_FORMAT", "auto")
         )
+        if tool_message_format == "auto":
+            resolve_tool_message_format(endpoint_protocol, provider=provider.value)
+        custom_headers = user_llm_config.get("llmCustomHeaders")
+        if not isinstance(custom_headers, dict):
+            custom_headers = {}
+
+        sdk_model, transport = resolve_sdk_model(provider, str(model or ""), base_url)
         return LLMConfig(
             provider=provider,
-            api_key=api_key,
-            model=model,
+            api_key=str(api_key or ""),
+            model=str(model or ""),
+            sdk_model=sdk_model,
+            transport=transport,
             base_url=base_url,
             timeout=timeout,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
+            temperature=user_llm_config.get("llmTemperature"),
+            max_tokens=int(user_llm_config.get("llmMaxTokens") or getattr(settings, "LLM_MAX_TOKENS", 4096)),
+            top_p=user_llm_config.get("llmTopP"),
             endpoint_protocol=endpoint_protocol,
             tool_message_format=tool_message_format,
+            custom_headers={str(k): str(v) for k, v in custom_headers.items()},
+            purpose=purpose,
+            retry_owner=retry_owner,
+            retry_budget=RETRY_BUDGET_HARNESS if retry_owner == RETRY_OWNER_HARNESS else RETRY_BUDGET_INDEPENDENT,
         )
 
     @property
     def config(self) -> LLMConfig:
-        if self._config is None:
-            self._config = self.get_agent_config()
-        return self._config
+        return self.get_config_for(None)
 
+    def get_config_for(
+        self,
+        agent_type: Optional[str],
+        *,
+        retry_owner: str = RETRY_OWNER_SDK,
+        purpose: str = "review",
+    ) -> LLMConfig:
+        key = (agent_type, retry_owner, purpose)
+        cached = self._configs.get(key)  # type: ignore[arg-type]
+        if cached is None:
+            cached = self.get_agent_config(agent_type, retry_owner=retry_owner, purpose=purpose)
+            self._configs[key] = cached  # type: ignore[index]
+        return cached
+
+    def invalidate_config_cache(self) -> None:
+        self._configs.clear()
+
+    # ------------------------------------------------------------------ 准入协调
     def _get_output_language(self) -> str:
         user_other_config = self._user_config.get("otherConfig", {}) or {}
         return user_other_config.get("outputLanguage") or getattr(settings, "OUTPUT_LANGUAGE", "zh-CN")
 
     def _get_runtime_llm_limits(self) -> Dict[str, int]:
         other_config = self._user_config.get("otherConfig", {}) or {}
-        raw_concurrency = other_config.get("llmConcurrency")
-        raw_gap_ms = other_config.get("llmGapMs")
-
         try:
-            concurrency = int(raw_concurrency) if raw_concurrency is not None else int(getattr(settings, "LLM_CONCURRENCY", 3))
+            concurrency = (
+                int(other_config["llmConcurrency"])
+                if other_config.get("llmConcurrency") is not None
+                else int(getattr(settings, "LLM_CONCURRENCY", 3))
+            )
         except (TypeError, ValueError):
             concurrency = int(getattr(settings, "LLM_CONCURRENCY", 3))
-
         try:
-            gap_ms = int(raw_gap_ms) if raw_gap_ms is not None else int(getattr(settings, "LLM_GAP_MS", 0))
+            gap_ms = (
+                int(other_config["llmGapMs"])
+                if other_config.get("llmGapMs") is not None
+                else int(getattr(settings, "LLM_GAP_MS", 0))
+            )
         except (TypeError, ValueError):
             gap_ms = int(getattr(settings, "LLM_GAP_MS", 0))
-
-        return {
-            "concurrency": max(1, concurrency),
-            "gap_ms": max(0, gap_ms),
-        }
+        return {"concurrency": max(1, concurrency), "gap_ms": max(0, gap_ms)}
 
     def _build_provider_limit_key(self, config: LLMConfig) -> str:
         return "|".join(
             [
                 config.provider.value,
+                config.transport,
                 config.base_url or "",
                 hashlib.sha1((config.api_key or "").encode("utf-8")).hexdigest()[:12],
             ]
@@ -376,7 +348,6 @@ class LLMService:
         gap_ms = self._get_runtime_llm_limits()["gap_ms"]
         if gap_ms <= 0:
             return
-
         key = self._build_provider_limit_key(config)
         lock = self._get_provider_gap_lock(config)
         async with lock:
@@ -389,368 +360,117 @@ class LLMService:
                     now = asyncio.get_running_loop().time()
             self._provider_last_request_at[key] = now
 
-    def _normalize_retryable_llm_error(self, error: Exception) -> Exception:
-        if isinstance(error, (LLMRateLimitError, LLMTimeoutError, LLMConnectionError)):
-            return error
-
-        status_code = getattr(error, "status_code", None)
-        message = str(error or "")
-        lowered = message.lower()
-
-        if status_code == 429 or any(token in lowered for token in ("rate limit", "too many requests", "频率超限", "限流")):
-            return LLMRateLimitError(message, retry_after=15, cause=error)
-        if "timeout" in lowered or "timed out" in lowered:
-            return LLMTimeoutError(message, cause=error)
-        if status_code == 503 or any(
-            token in lowered
-            for token in (
-                "connection",
-                "connect",
-                "network",
-                "dns",
-                "temporarily unavailable",
-                "service unavailable",
-                "server disconnected",
-                "no available accounts",
-                "unavailable account",
-            )
-        ):
-            return LLMConnectionError(message, cause=error)
-        return error
-
-    async def _execute_chat_completion(self, adapter: Any, request: LLMRequest, config: LLMConfig) -> Any:
-        semaphore = self._get_provider_semaphore(config)
-        retry_config = RetryConfig(
-            max_attempts=LLM_RETRY_CONFIG.max_attempts,
-            base_delay=LLM_RETRY_CONFIG.base_delay,
-            max_delay=LLM_RETRY_CONFIG.max_delay,
-            exponential_base=LLM_RETRY_CONFIG.exponential_base,
-            jitter=LLM_RETRY_CONFIG.jitter,
-            jitter_factor=LLM_RETRY_CONFIG.jitter_factor,
-            backoff_strategy=LLM_RETRY_CONFIG.backoff_strategy,
-            retryable_exceptions=LLM_RETRY_CONFIG.retryable_exceptions,
-        )
-
-        async def attempt() -> Any:
-            async with semaphore:
-                await self._await_provider_gap(config)
-                try:
-                    response = await adapter.complete(request)
-                    return self._decorate_response_identity(response, config=config, request=request)
-                except Exception as exc:  # noqa: BLE001
-                    raise self._normalize_retryable_llm_error(exc) from exc
-
-        return await retry_with_backoff(
-            attempt,
-            config=retry_config,
-            operation_name=f"{config.provider.value} chat completion",
-        )
-
-
-    async def _execute_chat_completion_stream(
-        self,
-        adapter: Any,
-        request: LLMRequest,
-        config: LLMConfig,
-        *,
-        retry_enabled: bool = True,
-    ):
-        semaphore = self._get_provider_semaphore(config)
-        retry_config = RetryConfig(
-            max_attempts=LLM_RETRY_CONFIG.max_attempts if retry_enabled else 1,
-            base_delay=LLM_RETRY_CONFIG.base_delay,
-            max_delay=LLM_RETRY_CONFIG.max_delay,
-            exponential_base=LLM_RETRY_CONFIG.exponential_base,
-            jitter=LLM_RETRY_CONFIG.jitter,
-            jitter_factor=LLM_RETRY_CONFIG.jitter_factor,
-            backoff_strategy=LLM_RETRY_CONFIG.backoff_strategy,
-            retryable_exceptions=LLM_RETRY_CONFIG.retryable_exceptions,
-        )
-
-        attempt = 0
-        while True:
-            emitted_any_output = False
-            retry_decision: tuple[Exception, float] | None = None
-
-            async with semaphore:
-                await self._await_provider_gap(config)
-                try:
-                    async for event in adapter.stream_complete(request):
-                        event_type = str((event or {}).get("type") or "").strip().lower()
-                        if event_type in {"token", "reasoning_delta", "tool_call", "done"}:
-                            emitted_any_output = True
-
-                        if event_type == "error":
-                            normalized_error = self._normalize_stream_error_event(event)
-                            has_partial_output = (
-                                emitted_any_output
-                                or bool((event or {}).get("accumulated"))
-                                or bool((event or {}).get("tool_calls"))
-                            )
-                            if (
-                                not has_partial_output
-                                and attempt < retry_config.max_attempts - 1
-                                and retry_config.should_retry(normalized_error)
-                            ):
-                                retry_decision = (
-                                    normalized_error,
-                                    retry_config.calculate_delay(attempt, normalized_error),
-                                )
-                                break
-                            yield self._decorate_stream_event(
-                                self._build_terminal_stream_error_event(
-                                    normalized_error,
-                                    base_event=event,
-                                    max_attempts=retry_config.max_attempts,
-                                    attempts_used=attempt + 1,
-                                ),
-                                config=config,
-                                request=request,
-                            )
-                            return
-
-                        yield self._decorate_stream_event(event, config=config, request=request)
-                        if event_type == "done":
-                            return
-                except Exception as exc:  # noqa: BLE001
-                    normalized_error = self._normalize_retryable_llm_error(exc)
-                    if (
-                        not emitted_any_output
-                        and attempt < retry_config.max_attempts - 1
-                        and retry_config.should_retry(normalized_error)
-                    ):
-                        retry_decision = (
-                            normalized_error,
-                            retry_config.calculate_delay(attempt, normalized_error),
-                        )
-                    else:
-                        yield self._decorate_stream_event(
-                            self._build_terminal_stream_error_event(
-                                normalized_error,
-                                base_event=None,
-                                max_attempts=retry_config.max_attempts,
-                                attempts_used=attempt + 1,
-                            ),
-                            config=config,
-                            request=request,
-                        )
-                        return
-
-            if retry_decision is None:
-                return
-
-            attempt += 1
-            error, delay = retry_decision
-            yield self._build_llm_retry_event(
-                error=error,
-                attempt=attempt,
-                max_attempts=retry_config.max_attempts,
-            )
-            await asyncio.sleep(delay)
-
-    def _normalize_stream_error_event(self, event: Dict[str, Any]) -> Exception:
-        error_type = str(event.get("error_type") or "").strip().lower()
-        error_message = str(event.get("error") or event.get("user_message") or "LLM streaming request failed").strip()
-
-        if error_type == "rate_limit":
-            return LLMRateLimitError(error_message, retry_after=15)
-        if error_type == "connection":
-            return LLMConnectionError(error_message)
-        if error_type == "quota_exceeded":
-            return Exception(error_message)
-        lowered = error_message.lower()
-        non_retryable_tokens = (
-            "authentication",
-            "api key",
-            "invalid api key",
-            "quota",
-            "billing",
-            "insufficient",
-            "context length",
-            "maximum context",
-            "invalid_request",
-            "invalid request",
-            "tool schema",
-            "schema",
-        )
-        if any(token in lowered for token in non_retryable_tokens):
-            return Exception(error_message)
-        generic_unknown_messages = {
-            "",
-            "llm streaming request failed",
-            "llm streaming request failed. please retry.",
-        }
-        if error_type in {"", "unknown"} and lowered in generic_unknown_messages:
-            return LLMConnectionError(error_message or "LLM streaming request failed. Please retry.")
-        return self._normalize_retryable_llm_error(Exception(error_message))
-
-    @staticmethod
-    def _describe_stream_error(error: Exception) -> tuple[str, str]:
-        if isinstance(error, LLMRateLimitError):
-            return "rate_limit", "模型服务当前请求过多，"
-        if isinstance(error, LLMTimeoutError):
-            return "timeout", "模型响应超时，"
-        if isinstance(error, LLMConnectionError):
-            return "connection", "上游模型账号或连接暂时不可用，"
-        return "unknown", "模型服务暂时不可用，"
-
-    @classmethod
-    def _build_llm_retry_event(cls, *, error: Exception, attempt: int, max_attempts: int) -> Dict[str, Any]:
-        error_type, prefix = cls._describe_stream_error(error)
+    # ------------------------------------------------------------------ 请求执行
+    def _retry_overrides(self) -> Dict[str, Any]:
+        timeouts = self.get_agent_timeout_config()
         return {
-            "type": "llm_retry",
-            "attempt": attempt,
-            "max_attempts": max_attempts,
-            "error_type": error_type,
-            "message_text": f"{prefix}正在进行第 {attempt}/{max_attempts} 次自动重试……",
-            "error": str(error),
+            "first_token_timeout": timeouts["llm_first_token_timeout"],
+            "stream_timeout": timeouts["llm_stream_timeout"],
         }
 
-    @classmethod
-    def _build_terminal_stream_error_event(
-        cls,
-        error: Exception,
-        *,
-        base_event: Dict[str, Any] | None,
-        max_attempts: int,
-        attempts_used: int,
-    ) -> Dict[str, Any]:
-        payload = dict(base_event or {})
-        error_type, _ = cls._describe_stream_error(error)
-        if isinstance(error, (LLMConnectionError, LLMTimeoutError, LLMRateLimitError)) and attempts_used >= max_attempts:
-            user_message = f"模型服务连接失败，已自动重试 {max_attempts} 次仍未恢复。请稍后重试或切换可用账号。"
-        else:
-            user_message = str(payload.get("user_message") or str(error) or "LLM streaming request failed").strip()
-        return {
-            **payload,
-            "type": "error",
-            "error_type": str(payload.get("error_type") or error_type or "unknown"),
-            "error": str(payload.get("error") or str(error)),
-            "user_message": user_message,
-        }
+    def _decorate_response_identity(self, response: LLMResponse, *, config: LLMConfig, request: Any) -> LLMResponse:
+        if not isinstance(response, LLMResponse):
+            return response
+        response.configured_model = response.configured_model or config.model
+        response.request_model = response.request_model or config.model
+        response.provider = response.provider or config.provider.value
+        response.endpoint_id = response.endpoint_id or config.endpoint_id
+        response.protocol = response.protocol or config.endpoint_protocol
+        response.perspective = response.perspective or request.perspective
+        response.purpose = response.purpose or request.purpose
+        return response
 
-    def _build_analysis_schema(self) -> str:
-        return json.dumps(
-            {
-                "issues": [
-                    {
-                        "type": "security|bug|performance|style|maintainability",
-                        "severity": "critical|high|medium|low",
-                        "title": "string",
-                        "description": "string",
-                        "suggestion": "string",
-                        "line": 1,
-                        "column": 1,
-                        "code_snippet": "string",
-                        "ai_explanation": "string",
-                        "xai": {
-                            "what": "string",
-                            "why": "string",
-                            "how": "string",
-                            "learn_more": "string(optional)",
-                        },
-                    }
-                ],
-                "quality_score": 0,
-                "summary": {
-                    "total_issues": 0,
-                    "critical_issues": 0,
-                    "high_issues": 0,
-                    "medium_issues": 0,
-                    "low_issues": 0,
-                },
-                "metrics": {
-                    "complexity": 0,
-                    "maintainability": 0,
-                    "security": 0,
-                    "performance": 0,
-                },
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+    def _decorate_stream_event(self, event: Dict[str, Any], *, config: LLMConfig, request: Any) -> Dict[str, Any]:
+        payload = dict(event or {})
+        payload.setdefault("configured_model", config.model)
+        payload.setdefault("request_model", config.model)
+        payload.setdefault("provider", config.provider.value)
+        payload.setdefault("endpoint_id", config.endpoint_id)
+        payload.setdefault("protocol", config.endpoint_protocol)
+        payload.setdefault("perspective", request.perspective)
+        payload.setdefault("purpose", request.purpose or config.purpose)
+        return payload
 
-    def _analysis_system_prompt(self, output_language: Optional[str] = None) -> str:
-        is_chinese = (output_language or self._get_output_language()).lower().startswith("zh")
-        schema = self._build_analysis_schema()
-        if is_chinese:
-            return (
-                "你是专业代码审计助手。请只输出 JSON，不要输出 Markdown，不要输出解释性前后缀。\n"
-                "返回结果必须符合给定 Schema，并尽量发现安全、逻辑、性能和可维护性问题。\n"
-                "line 和 column 必须是数字，code_snippet 使用字符串。\n"
-                f"JSON Schema:\n{schema}"
+    async def _run_completion(self, config: LLMConfig, request: LLMRequest) -> LLMResponse:
+        semaphore = self._get_provider_semaphore(config)
+        async with semaphore:
+            await self._await_provider_gap(config)
+            response = await get_sdk_client().complete(
+                config=config, request=request, first_token_timeout=self._retry_overrides()["first_token_timeout"]
             )
-        return (
-            "You are a professional code auditing assistant. Output JSON only. No markdown, no prose outside JSON.\n"
-            "Return issues for security, bugs, performance, style, and maintainability.\n"
-            f"JSON Schema:\n{schema}"
-        )
+        return self._decorate_response_identity(response, config=config, request=request)
 
-    def _build_system_prompt(self, is_chinese: bool) -> str:
-        return self._analysis_system_prompt("zh-CN" if is_chinese else "en-US")
+    async def _run_stream(self, config: LLMConfig, request: LLMRequest) -> AsyncGenerator[Dict[str, Any], None]:
+        semaphore = self._get_provider_semaphore(config)
+        overrides = self._retry_overrides()
+        async with semaphore:
+            await self._await_provider_gap(config)
+            async for event in get_sdk_client().stream(
+                config=config, request=request, **overrides
+            ):
+                yield self._decorate_stream_event(event, config=config, request=request)
 
+    # ------------------------------------------------------------------ 公开契约
     async def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         agent_type: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         parallel_tool_calls: Optional[bool] = None,
         purpose: str = "review",
+        retry_owner: str = RETRY_OWNER_SDK,
     ) -> Dict[str, Any]:
-        config = self.get_agent_config(agent_type)
-        adapter = LLMFactory.create_adapter(config)
-        request = LLMRequest(
-            messages=[LLMMessage.from_dict(item) for item in messages],
-            temperature=temperature if temperature is not None else config.temperature,
+        config = self.get_config_for(agent_type, retry_owner=retry_owner, purpose=purpose)
+        request = self._build_request(
+            messages=messages,
+            temperature=temperature,
             max_tokens=max_tokens,
-            top_p=config.top_p,
+            agent_type=agent_type,
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
-            stream=False,
-            perspective=self._perspective_from_agent_type(agent_type),
             purpose=purpose,
+            stream=False,
+            config=config,
         )
-        response = await self._execute_chat_completion(adapter, request, config)
-        usage = None
-        if response.usage is not None:
-            usage = response.usage.to_dict()
+        response = await self._run_completion(config, request)
+        usage = response.usage.to_dict() if response.usage is not None else None
         return {
             "content": response.content,
             "model": response.model or config.model,
             "usage": usage,
             "finish_reason": response.finish_reason,
-            "tool_calls": getattr(response, "tool_calls", None) or [],
-            "reasoning_content": getattr(response, "reasoning_content", None) or "",
+            "tool_calls": response.tool_calls or [],
+            "reasoning_content": response.reasoning_content or "",
             "tools_ignored": False,
-            "configured_model": getattr(response, "configured_model", None) or config.model,
-            "request_model": getattr(response, "request_model", None) or config.model,
-            "response_model": getattr(response, "response_model", None) or response.model,
-            "provider": getattr(response, "provider", None) or config.provider.value,
-            "endpoint_id": getattr(response, "endpoint_id", None) or self._endpoint_id(config.base_url),
-            "protocol": getattr(response, "protocol", None) or config.endpoint_protocol,
-            "perspective": getattr(response, "perspective", None) or self._perspective_from_agent_type(agent_type),
-            "purpose": getattr(response, "purpose", None) or purpose,
+            "configured_model": response.configured_model,
+            "request_model": response.request_model,
+            "response_model": response.response_model,
+            "provider": response.provider,
+            "endpoint_id": response.endpoint_id,
+            "protocol": response.protocol,
+            "perspective": response.perspective or self._perspective_from_agent_type(agent_type),
+            "purpose": response.purpose or purpose,
+            "provider_request_id": response.provider_request_id,
+            "response_cost_usd": response.response_cost_usd,
+            "model_snapshot": config.snapshot(),
         }
 
     async def chat_completion_raw(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         agent_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await self.chat_completion(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            agent_type=agent_type,
+            messages=messages, temperature=temperature, max_tokens=max_tokens, agent_type=agent_type
         )
 
     async def chat_completion_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         agent_type: Optional[str] = None,
@@ -758,65 +478,50 @@ class LLMService:
         parallel_tool_calls: Optional[bool] = None,
         retry_enabled: bool = True,
         purpose: str = "review",
+        retry_owner: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        config = self.get_agent_config(agent_type)
-        adapter = LLMFactory.create_adapter(config)
-        request = LLMRequest(
-            messages=[LLMMessage.from_dict(item) for item in messages],
-            temperature=temperature if temperature is not None else config.temperature,
-            max_tokens=max_tokens,
-            top_p=config.top_p,
-            tools=tools,
-            parallel_tool_calls=parallel_tool_calls,
-            stream=True,
-            perspective=self._perspective_from_agent_type(agent_type),
-            purpose=purpose,
-        )
-        stream_complete = getattr(adapter, "stream_complete", None)
-        if callable(stream_complete):
-            async for event in self._execute_chat_completion_stream(
-                adapter,
-                request,
-                config,
-                retry_enabled=retry_enabled,
-            ):
-                yield event
-            return
-
-        result = await self.chat_completion(
+        owner = retry_owner or (RETRY_OWNER_SDK if retry_enabled else RETRY_OWNER_HARNESS)
+        config = self.get_config_for(agent_type, retry_owner=owner, purpose=purpose)
+        request = self._build_request(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             agent_type=agent_type,
             tools=tools,
             parallel_tool_calls=parallel_tool_calls,
+            purpose=purpose,
+            stream=True,
+            config=config,
         )
-        content = result.get("content", "") or ""
-        accumulated = ""
-        chunk_size = 24
-        for index in range(0, len(content), chunk_size):
-            token = content[index:index + chunk_size]
-            accumulated += token
-            yield {"type": "token", "content": token, "accumulated": accumulated}
-        for tool_call in result.get("tool_calls") or []:
-            yield {"type": "tool_call", "tool_call": tool_call}
-        yield {
-            "type": "done",
-            "content": content,
-            "usage": result.get("usage"),
-            "tool_calls": result.get("tool_calls") or [],
-            "reasoning_content": result.get("reasoning_content") or "",
-            "finish_reason": result.get("finish_reason") or "stop",
-            "configured_model": result.get("configured_model"),
-            "request_model": result.get("request_model"),
-            "response_model": result.get("response_model"),
-            "provider": result.get("provider"),
-            "endpoint_id": result.get("endpoint_id"),
-            "protocol": result.get("protocol"),
-            "perspective": result.get("perspective"),
-            "purpose": result.get("purpose") or purpose,
-        }
+        async for event in self._run_stream(config, request):
+            yield event
 
+    def _build_request(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        agent_type: Optional[str],
+        tools: Optional[List[Dict[str, Any]]],
+        parallel_tool_calls: Optional[bool],
+        purpose: str,
+        stream: bool,
+        config: LLMConfig,
+    ) -> LLMRequest:
+        return LLMRequest(
+            messages=list(messages),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=None,
+            tools=tools,
+            parallel_tool_calls=parallel_tool_calls,
+            stream=stream,
+            perspective=self._perspective_from_agent_type(agent_type),
+            purpose=purpose,
+        )
+
+    # ------------------------------------------------------------------ JSON 辅助
     def _clean_text(self, text: str) -> str:
         clean = (text or "").replace("\ufeff", "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
         clean = clean.strip()
@@ -904,12 +609,7 @@ class LLMService:
                 "medium_issues": 0,
                 "low_issues": 0,
             },
-            "metrics": {
-                "complexity": 80,
-                "maintainability": 80,
-                "security": 80,
-                "performance": 80,
-            },
+            "metrics": {"complexity": 80, "maintainability": 80, "security": 80, "performance": 80},
         }
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
@@ -931,7 +631,7 @@ class LLMService:
                 result = attempt()
                 if isinstance(result, dict):
                     return result
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 last_error = exc
         raise ValueError(f"Failed to parse JSON from LLM response: {last_error}")
 
@@ -983,6 +683,53 @@ class LLMService:
                 "performance": int(metrics.get("performance") or 70),
             },
         }
+
+    def _analysis_system_prompt(self, output_language: Optional[str] = None) -> str:
+        is_chinese = (output_language or self._get_output_language()).lower().startswith("zh")
+        schema = json.dumps(
+            {
+                "issues": [
+                    {
+                        "type": "security|bug|performance|style|maintainability",
+                        "severity": "critical|high|medium|low",
+                        "title": "string",
+                        "description": "string",
+                        "suggestion": "string",
+                        "line": 1,
+                        "column": 1,
+                        "code_snippet": "string",
+                        "ai_explanation": "string",
+                        "xai": {"what": "string", "why": "string", "how": "string", "learn_more": "string(optional)"},
+                    }
+                ],
+                "quality_score": 0,
+                "summary": {
+                    "total_issues": 0,
+                    "critical_issues": 0,
+                    "high_issues": 0,
+                    "medium_issues": 0,
+                    "low_issues": 0,
+                },
+                "metrics": {"complexity": 0, "maintainability": 0, "security": 0, "performance": 0},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        if is_chinese:
+            return (
+                "你是专业代码审计助手。请只输出 JSON，不要输出 Markdown，不要输出解释性前后缀。\n"
+                "返回结果必须符合给定 Schema，并尽量发现安全、逻辑、性能和可维护性问题。\n"
+                "line 和 column 必须是数字，code_snippet 使用字符串。\n"
+                f"JSON Schema:\n{schema}"
+            )
+        return (
+            "You are a professional code auditing assistant. Output JSON only. No markdown, no prose outside JSON.\n"
+            "Return issues for security, bugs, performance, style, and maintainability.\n"
+            f"JSON Schema:\n{schema}"
+        )
+
+    def _build_system_prompt(self, is_chinese: bool) -> str:
+        return self._analysis_system_prompt("zh-CN" if is_chinese else "en-US")
 
     async def analyze_code(self, code: str, language: str, output_language: Optional[str] = None) -> Dict[str, Any]:
         actual_language = output_language or self._get_output_language()
@@ -1066,8 +813,8 @@ class LLMService:
                 elif use_default_template:
                     result = await db_session.execute(
                         select(PromptTemplate).where(
-                            PromptTemplate.is_default == True,
-                            PromptTemplate.is_active == True,
+                            PromptTemplate.is_default == True,  # noqa: E712
+                            PromptTemplate.is_active == True,  # noqa: E712
                             PromptTemplate.template_type == "system",
                         )
                     )
@@ -1114,8 +861,7 @@ class LLMService:
         if rules:
             extra_lines.append("Rules:")
             extra_lines.extend(
-                f"- [{rule.get('rule_code', '')}] {rule.get('name', '')}: {rule.get('description', '')}"
-                for rule in rules
+                f"- [{rule.get('rule_code', '')}] {rule.get('name', '')}: {rule.get('description', '')}" for rule in rules
             )
         extra_text = "\n".join(extra_lines)
         prompt = (

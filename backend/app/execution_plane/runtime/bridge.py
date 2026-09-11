@@ -28,7 +28,7 @@ from app.tool_gateway.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )
-from app.execution_plane.models.protocols.registry import resolve_tool_message_format
+from app.execution_plane.models.config import resolve_tool_message_format
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
@@ -70,7 +70,7 @@ class RuntimeLLMModelClient:
 
     @staticmethod
     def _finding_stream_retry_override(stream_fn: Callable[..., Any]) -> dict[str, Any]:
-        """Disable LLMService retries when QueryLoop owns the retry budget."""
+        """Harness (QueryLoop) 拥有重试预算：SDK 侧每次调用只发一次实际请求。"""
         try:
             parameters = inspect.signature(stream_fn).parameters.values()
         except (TypeError, ValueError):
@@ -164,7 +164,7 @@ class RuntimeLLMModelClient:
                     content=str(event.get("accumulated") or ""),
                     tool_calls=[],
                     stop_reason="error",
-                    recoverable_error_kind=str(event.get("error_type") or "").strip() or None,
+                    recoverable_error_kind=self._classify_recoverable_error_kind(event),
                     recoverable_error_message=str(event.get("error") or event.get("user_message") or "").strip() or None,
                     usage=dict(event["usage"]) if event.get("usage") is not None else None,
                     configured_model=event.get("configured_model"),
@@ -337,6 +337,8 @@ class RuntimeLLMModelClient:
         if finish_reason in {"length", "max_tokens", "max_output_tokens"}:
             return "max_output_tokens"
         error_type = str(response.get("error_type") or "").strip().lower()
+        if error_type.startswith("model_"):
+            error_type = error_type[len("model_"):]
         if error_type in {"prompt_too_long", "image_error", "media_size", "max_output_tokens"}:
             return error_type
         return None
@@ -400,6 +402,7 @@ class RuntimeLLMModelClient:
                 "error": str(payload.get("error") or "").strip() or None,
                 "user_message": str(payload.get("user_message") or "").strip() or None,
                 "error_type": str(payload.get("error_type") or "").strip() or None,
+                "partial": bool(payload.get("partial")),
                 "usage": dict(payload["usage"]) if payload.get("usage") is not None else None,
                 "configured_model": payload.get("configured_model"),
                 "request_model": payload.get("request_model"),

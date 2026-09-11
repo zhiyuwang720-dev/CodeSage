@@ -17,7 +17,7 @@ from app.models.user import User
 from app.models.user_config import UserConfig
 from app.services.skill.facade import SkillService
 from app.services.init_agent_assets import init_agent_assets
-from app.execution_plane.models.factory import LLMFactory
+from app.execution_plane.models.config import ModelCatalog
 from app.execution_plane.models.service import LLMService
 from app.services.report_template_file_service import ReportTemplateFileService
 from app.services.skill.file_service import AGENT_TYPES, SkillFileService
@@ -597,7 +597,8 @@ async def test_llm_connection(
             messages=[
                 {"role": "system", "content": "你是模型连通性测试助手，请简短回复。"},
                 {"role": "user", "content": payload.prompt},
-            ]
+            ],
+            purpose="connection_test",
         )
         return {
             "success": True,
@@ -664,7 +665,8 @@ async def test_agent_model(
             messages=payload.messages,
         )
         result = await llm_service.chat_completion(
-            messages=conversation
+            messages=conversation,
+            purpose="agent_model_test",
         )
         return {
             "success": True,
@@ -707,14 +709,14 @@ async def sync_assets(
 @router.get("/llm-providers")
 async def get_llm_providers() -> Any:
     providers = []
-    for provider in LLMFactory.get_supported_providers():
-        metadata = LLMFactory.get_provider_metadata(provider)
+    for provider in ModelCatalog.supported_providers():
+        metadata = ModelCatalog.provider_metadata(provider)
         providers.append(
             {
                 "value": provider.value,
                 "label": metadata.get("label") or provider.value.upper(),
-                "default_model": LLMFactory.get_default_model(provider),
-                "models": LLMFactory.get_available_models(provider),
+                "default_model": ModelCatalog.default_model(provider),
+                "models": ModelCatalog.available_models(provider),
                 "default_endpoint_protocol": metadata.get("default_endpoint_protocol"),
                 "supported_endpoint_protocols": metadata.get("supported_endpoint_protocols", []),
                 "tool_capability": metadata.get("tool_capability", {}),
