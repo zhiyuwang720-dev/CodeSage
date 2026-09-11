@@ -171,7 +171,17 @@
       "acceptance_cases": ["AP13", "AP14"]
     }
   ],
-  "known_gaps": [
+  "openinference_usage_details": {
+    "source_file": "backend/app/infrastructure/observability/litellm_integration.py",
+    "symbol": "CodeSageOpenTelemetry.set_attributes",
+    "fields": [
+      "llm.token_count.prompt_details.cache_read",
+      "llm.token_count.prompt_details.cache_write",
+      "llm.token_count.completion_details.reasoning"
+    ],
+    "reason": "LiteLLM 1.98 openinference mapper does not emit cache/reasoning detail attributes",
+    "evidence": "tests/plan20_acceptance/test_a03_a07_usage.py::test_a03_usage_survives_sdk_service_bridge_and_openinference"
+  },  "known_gaps": [
     {
       "id": "G-01",
       "summary": "LiteLLM 1.98 deepseek/ streaming path parses raw HTTP chunk framing as SSE lines and raises 'int' object has no attribute 'get'",

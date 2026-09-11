@@ -45,6 +45,13 @@ def test_capability_matrix_records_callback_granularity() -> None:
     ]
 
 
+def test_capability_matrix_records_openinference_usage_details() -> None:
+    details = load_matrix()["openinference_usage_details"]
+    assert details["symbol"].endswith("set_attributes")
+    assert "cache_read" in "\n".join(details["fields"])
+    assert "reasoning" in "\n".join(details["fields"])
+    assert details["evidence"].startswith("tests/plan20_acceptance/")
+
 def test_capability_matrix_routes_are_complete() -> None:
     routes = load_matrix()["routes"]
     assert routes

@@ -126,6 +126,11 @@ def normalize_usage(
         raw, "cache_creation_input_tokens", field="cache_write_tokens", anomalies=anomalies, source=typed_source
     )
 
+    if prompt is not None and cache_read is not None and cache_read > prompt:
+        anomalies.append("cache_read_tokens:exceeds_prompt")
+    if prompt is not None and cache_write is not None and cache_write > prompt:
+        anomalies.append("cache_write_tokens:exceeds_prompt")
+
     reasoning, reasoning_source = _nested_integer(
         raw, "completion_tokens_details", "reasoning_tokens", field="reasoning_tokens", anomalies=anomalies, source=typed_source
     )

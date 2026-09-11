@@ -334,6 +334,17 @@ def _int(usage: Any, key: str) -> Optional[int]:
     return value
 
 
+def _first_int(mapping: Any, *keys: str) -> Optional[int]:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        return value
+    return None
+
+
 _recorder = CallbackRecorder()
 _price_table = PriceTable()
 _installed = False
@@ -419,7 +430,45 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
             enable_events=False,
             capture_message_content="SPAN_AND_EVENT" if capture_content else "NO_CONTENT",
         )
-        handler = OpenTelemetry(config=config, tracer_provider=provider)
+        class CodeSageOpenTelemetry(OpenTelemetry):
+            """Official handler plus missing OpenInference usage detail attributes."""
+
+            def set_attributes(self, span, kwargs, response_obj) -> None:
+                super().set_attributes(span, kwargs, response_obj)
+                try:
+                    usage = _usage_mapping(dict(kwargs or {}), response_obj)
+                    prompt_details = usage.get("prompt_tokens_details")
+                    completion_details = usage.get("completion_tokens_details")
+
+                    cache_read = _first_int(usage, "cache_read_input_tokens")
+                    if cache_read is None:
+                        cache_read = _first_int(prompt_details, "cached_tokens")
+                    cache_write = _first_int(usage, "cache_creation_input_tokens")
+                    if cache_write is None:
+                        cache_write = _first_int(prompt_details, "cache_creation_tokens", "cache_write_tokens")
+                    reasoning = _first_int(usage, "reasoning_tokens")
+                    if reasoning is None:
+                        reasoning = _first_int(completion_details, "reasoning_tokens")
+
+                    prompt_tokens = _first_int(usage, "prompt_tokens", "input_tokens")
+                    completion_tokens = _first_int(usage, "completion_tokens", "output_tokens")
+                    total_tokens = _first_int(usage, "total_tokens")
+
+
+                    for key, value in (
+                        ("llm.token_count.prompt", prompt_tokens),
+                        ("llm.token_count.completion", completion_tokens),
+                        ("llm.token_count.total", total_tokens),
+                        ("llm.token_count.prompt_details.cache_read", cache_read),
+                        ("llm.token_count.prompt_details.cache_write", cache_write),
+                        ("llm.token_count.completion_details.reasoning", reasoning),
+                    ):
+                        if value is not None:
+                            span.set_attribute(key, value)
+                except Exception:
+                    logger.debug("failed to enrich OpenInference usage details", exc_info=True)
+
+        handler = CodeSageOpenTelemetry(config=config, tracer_provider=provider)
         # SDK 路径不会走 proxy 的 service_callback；必须注册到 completion 生命周期回调桶。
         for bucket in (
             litellm.callbacks,

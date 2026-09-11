@@ -223,6 +223,12 @@ try {
                 "plan20-unit.junit.xml",
                 "evidence/a01/wire_non_stream.json",
                 "evidence/a01/wire_stream.json"
+                "evidence/a03/usage_layers.json",
+                "evidence/a04/usage_fidelity.json",
+                "evidence/a05/partial_usage.json",
+                "evidence/a06/anomalies.json",
+                "evidence/a07/openai_compatible_usage.json",
+                "evidence/a07/anthropic_cache_usage.json"
             )
         }
         foreach ($item in $required) {
