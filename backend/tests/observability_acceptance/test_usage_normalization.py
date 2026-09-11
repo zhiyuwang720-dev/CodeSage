@@ -1,3 +1,9 @@
+"""R01（原 A03—A07）：usage 归一化与身份契约（P07）。
+
+来源层使用 `provider_raw|sdk_normalized`：只有能证明是厂商原始字段时才标 provider_raw，
+其余按 SDK 已归一处理，禁止二次归一导致缓存 token 重复相加。
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -5,7 +11,7 @@ import pytest
 from app.execution_plane.models.usage import normalize_usage
 
 
-def test_a03_deepseek_cache_usage_is_not_double_counted() -> None:
+def test_usage_preserves_deepseek_provider_occurrences_without_double_counting() -> None:
     usage = normalize_usage(
         {
             "prompt_tokens": 1000,
@@ -22,24 +28,29 @@ def test_a03_deepseek_cache_usage_is_not_double_counted() -> None:
     assert usage.prompt_tokens == 1000
     assert usage.cache_read_tokens == 400
     assert usage.total_tokens == 1200
-    assert usage.field_sources["cache_read_tokens"] == "provider"
+    assert usage.field_sources["prompt_tokens"] == "sdk_normalized"
+    assert usage.usage_source == "sdk_normalized"
+    assert usage.normalization_version == "2"
     assert usage.anomalies == []
 
 
-def test_a04_missing_usage_is_not_explicit_zero() -> None:
+def test_missing_usage_is_not_explicit_zero() -> None:
     assert normalize_usage(None, provider="deepseek") is None
+    assert normalize_usage({}, provider="deepseek") is None
 
     usage = normalize_usage(
         {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         provider="deepseek",
+        zero_fidelity="provider",
     )
     assert usage is not None
     assert usage.prompt_tokens == 0
     assert usage.total_tokens == 0
-    assert usage.field_sources["total_tokens"] == "provider"
+    assert usage.field_sources["total_tokens"] == "sdk_normalized"
+    assert usage.usage_present is True
 
 
-def test_a04_unverified_sdk_zero_is_missing_with_anomaly() -> None:
+def test_sdk_synthetic_zero_is_missing_with_anomaly() -> None:
     usage = normalize_usage(
         {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         provider="deepseek",
@@ -69,18 +80,9 @@ def test_a04_unverified_sdk_zero_is_missing_with_anomaly() -> None:
             {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 99},
             "total_tokens:sum_mismatch",
         ),
-        (
-            {
-                "prompt_tokens": 10,
-                "completion_tokens": 3,
-                "prompt_cache_hit_tokens": 8,
-                "prompt_cache_miss_tokens": 8,
-            },
-            "prompt_tokens:cache_parts_mismatch",
-        ),
     ],
 )
-def test_a06_invalid_or_conflicting_usage_is_not_silently_coerced(
+def test_invalid_or_conflicting_usage_is_not_silently_coerced(
     raw: dict[str, object], expected_anomaly: str
 ) -> None:
     usage = normalize_usage(raw, provider="deepseek")
@@ -88,7 +90,7 @@ def test_a06_invalid_or_conflicting_usage_is_not_silently_coerced(
     assert expected_anomaly in usage.anomalies
 
 
-def test_a07_openai_cached_and_reasoning_details_are_preserved() -> None:
+def test_openai_cached_and_reasoning_details_are_preserved() -> None:
     usage = normalize_usage(
         {
             "prompt_tokens": 1000,
@@ -106,7 +108,9 @@ def test_a07_openai_cached_and_reasoning_details_are_preserved() -> None:
     assert usage.total_tokens == 1200
 
 
-def test_a07_anthropic_input_includes_non_overlapping_cache_categories() -> None:
+def test_anthropic_raw_categories_keep_input_without_second_normalization() -> None:
+    """SDK 已归一字段只做一次映射；不再自行叠加 input+cache 得到新的 prompt。"""
+
     usage = normalize_usage(
         {
             "input_tokens": 600,
@@ -118,8 +122,18 @@ def test_a07_anthropic_input_includes_non_overlapping_cache_categories() -> None
         protocol="anthropic_messages",
     )
     assert usage is not None
-    assert usage.prompt_tokens == 1000
+    assert usage.prompt_tokens == 600
     assert usage.cache_read_tokens == 300
     assert usage.cache_write_tokens == 100
-    assert usage.total_tokens == 1200
-    assert usage.field_sources["prompt_tokens"] == "derived"
+    assert usage.usage_source == "provider_raw"
+    assert usage.field_sources["prompt_tokens"] == "provider_raw"
+
+
+def test_unknown_source_stays_unknown_without_provider_guessing() -> None:
+    usage = normalize_usage(
+        {"total_tokens": 5},
+        provider="deepseek",
+    )
+    assert usage is not None
+    assert usage.usage_source == "sdk_normalized"
+    assert usage.prompt_tokens is None

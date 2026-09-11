@@ -93,7 +93,7 @@ def build_session_factory():
     return sessionmaker(bind=engine)
 
 
-def test_runtime_model_client_uses_openai_tool_messages_for_claude_openai_compatible():
+def test_runtime_model_client_uses_openai_tool_messages_for_openai_compatible_endpoint():
     llm = FakeLLMServiceWithConfig(provider="claude", endpoint_protocol="openai_compatible")
     client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
 
@@ -105,6 +105,23 @@ def test_runtime_model_client_uses_anthropic_blocks_for_anthropic_endpoint():
     client = RuntimeLLMModelClient(llm_service=llm, agent_type="review:security")
 
     assert client._resolve_tool_message_format().value == "anthropic_blocks"
+
+
+def test_runtime_model_client_requires_explicit_format_or_supported_protocol():
+    """不可用协议不再静默退化：Harness 侧明确报配置错误，且显式格式仍然生效。"""
+
+    from app.execution_plane.models.config import ModelConfigurationError
+
+    unavailable = FakeLLMServiceWithConfig(provider="openai", endpoint_protocol="openai_responses")
+    client = RuntimeLLMModelClient(llm_service=unavailable, agent_type="review:security")
+    with pytest.raises(ModelConfigurationError):
+        client._resolve_tool_message_format()
+
+    explicit = FakeLLMServiceWithConfig(
+        provider="openai", endpoint_protocol="openai_responses", tool_message_format="legacy_text"
+    )
+    explicit_client = RuntimeLLMModelClient(llm_service=explicit, agent_type="review:security")
+    assert explicit_client._resolve_tool_message_format().value == "legacy_text"
 
 
 def test_bridge_finalizes_non_json_assistant_reply(monkeypatch):

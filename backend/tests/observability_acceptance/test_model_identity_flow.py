@@ -1,43 +1,34 @@
+"""身份与 usage 端到端贯通：本地端点 → SDK client → service → bridge（P02/P07）。
+
+证据来自真实请求 + 真实响应，不 mock SDK 发送。
+"""
+
 from __future__ import annotations
 
 import pytest
 
-from app.execution_plane.models.service import LLMService
-from app.execution_plane.models.types import LLMResponse
-from app.execution_plane.models.usage import normalize_usage
 from app.execution_plane.runtime.bridge import RuntimeLLMModelClient
 
-
-class _IdentityAdapter:
-    async def complete(self, request):
-        usage = normalize_usage(
-            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            provider="deepseek",
-        )
-        return LLMResponse(
-            content="done",
-            model="deepseek-chat-202609",
-            usage=usage,
-            finish_reason="stop",
-        )
+from .fixture_server import PlannedResponse, openai_completion
 
 
 @pytest.mark.asyncio
-async def test_a03_identity_and_usage_survive_adapter_service_bridge(monkeypatch) -> None:
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "deepseek",
-                "llmApiKey": "test-key",
-                "llmModel": "deepseek-chat",
-                "llmBaseUrl": "https://user:secret@api.deepseek.com/v1?api_key=secret",
-                "endpointProtocol": "openai_chat",
-            }
-        }
+async def test_identity_and_usage_survive_sdk_service_bridge(model_harness) -> None:
+    model_harness.server.set_default(
+        "/v1/chat/completions",
+        PlannedResponse(
+            payload=openai_completion(
+                content="done",
+                model="deepseek-chat-202609",
+                prompt_tokens=11,
+                completion_tokens=4,
+            )
+        ),
     )
-    monkeypatch.setattr(
-        "app.execution_plane.models.service.LLMFactory.create_adapter",
-        lambda config: _IdentityAdapter(),
+    service = model_harness.service(
+        provider="deepseek",
+        model="deepseek-chat",
+        extra={"llmBaseUrl": model_harness.server.base_url},
     )
     client = RuntimeLLMModelClient(llm_service=service, agent_type="review:security")
 
@@ -53,10 +44,15 @@ async def test_a03_identity_and_usage_survive_adapter_service_bridge(monkeypatch
     assert response.request_model == "deepseek-chat"
     assert response.response_model == "deepseek-chat-202609"
     assert response.provider == "deepseek"
-    assert response.endpoint_id == "https://api.deepseek.com"
+    assert response.endpoint_id == f"http://127.0.0.1:{model_harness.server.port}"
     assert response.protocol == "openai_chat"
     assert response.perspective == "security"
     assert response.purpose == "review"
     assert response.usage is not None
     assert response.usage["total_tokens"] == 15
-    assert response.usage["field_sources"]["total_tokens"] == "provider"
+    assert response.usage["usage_source"] == "sdk_normalized"
+    assert response.usage["field_sources"]["total_tokens"] == "sdk_normalized"
+
+    records = model_harness.server.requests("/v1/chat/completions")
+    assert len(records) == 1
+    assert records[0].body["model"] == "deepseek-chat"
