@@ -1,246 +1,137 @@
+"""LLMService 薄外观单元测试（P01/P02/P05）。
+
+这里验证服务层职责：配置解析、准入/间隔协调、结果装饰与预算选择。
+真实 SDK 请求语义由 tests/observability_acceptance 的 AP02/AP04 用真实 SDK +
+本地 HTTP/SSE 服务验证，本文件不承担那部分证据。
+"""
+
+from __future__ import annotations
+
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
-from app.execution_plane.models.errors import LLMConnectionError, LLMRateLimitError
+from app.execution_plane.models import client as client_module
+from app.execution_plane.models.errors import ModelRateLimitError
 from app.execution_plane.models.service import LLMService
 
 
-class _ConcurrencyProbeAdapter:
-    def __init__(self):
-        self.in_flight = 0
-        self.max_in_flight = 0
+def _payload(content: str = "ok", *, model: str = "stub-model", usage=None, finish_reason: str = "stop"):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, tool_calls=None, reasoning_content=None),
+                finish_reason=finish_reason,
+            )
+        ],
+        model=model,
+        usage=usage,
+        id="stub-response",
+        _hidden_params={},
+    )
 
-    async def complete(self, request):
-        self.in_flight += 1
-        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+
+def _install_fake_sdk(monkeypatch, *, fail_times: int = 0, delay: float = 0.0, recorder: list | None = None):
+    """替换唯一 SDK 发送点，用于服务层单元测试。"""
+
+    state = {"calls": 0, "in_flight": 0, "max_in_flight": 0}
+
+    async def fake_acompletion(**kwargs):
+        state["calls"] += 1
+        state["in_flight"] += 1
+        state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        if recorder is not None:
+            recorder.append(dict(kwargs))
         try:
-            await asyncio.sleep(0.05)
-            return type(
-                "Response",
-                (),
-                {
-                    "content": "ok",
-                    "model": "stub-model",
-                    "usage": None,
-                    "finish_reason": "stop",
-                },
-            )()
+            if delay:
+                await asyncio.sleep(delay)
+            if state["calls"] <= fail_times:
+                raise ModelRateLimitError("rate limited")
+            return _payload("recovered")
         finally:
-            self.in_flight -= 1
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr(client_module.litellm, "acompletion", fake_acompletion)
+    return state
 
 
-class _RetryProbeAdapter:
-    def __init__(self):
-        self.calls = 0
-
-    async def complete(self, request):
-        self.calls += 1
-        if self.calls == 1:
-            raise LLMRateLimitError("rate limited")
-        return type(
-            "Response",
-            (),
-            {
-                "content": "recovered",
-                "model": "stub-model",
-                "usage": None,
-                "finish_reason": "stop",
-            },
-        )()
-
-
-class _ToolingProbeAdapter:
-    def __init__(self):
-        self.request = None
-
-    async def complete(self, request):
-        self.request = request
-        return type(
-            "Response",
-            (),
-            {
-                "content": "tooling",
-                "model": "stub-model",
-                "usage": None,
-                "finish_reason": "stop",
-            },
-        )()
-
-
-class _StreamingProbeAdapter:
-    def __init__(self):
-        self.request = None
-        self.complete_called = False
-
-    async def complete(self, request):
-        self.complete_called = True
-        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
-
-    async def stream_complete(self, request):
-        self.request = request
-        yield {"type": "token", "content": "Need ", "accumulated": "Need "}
-        yield {
-            "type": "tool_call",
-            "tool_call": {
-                "id": "call_1",
-                "type": "function",
-                "name": "Read",
-                "arguments": "{\"file_path\":\"README.md\"}",
-            },
-        }
-        yield {
-            "type": "done",
-            "content": "Need tool",
-            "finish_reason": "tool_calls",
-            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "name": "Read",
-                    "arguments": "{\"file_path\":\"README.md\"}",
-                }
-            ],
-        }
-
-
-class _StreamingRetryProbeAdapter:
-    def __init__(self, failures_before_success: int):
-        self.failures_before_success = failures_before_success
-        self.calls = 0
-
-    async def complete(self, request):
-        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
-
-    async def stream_complete(self, request):
-        self.calls += 1
-        if self.calls <= self.failures_before_success:
-            raise LLMConnectionError("No available accounts: temporarily unavailable")
-        yield {"type": "token", "content": "恢复", "accumulated": "恢复"}
-        yield {
-            "type": "done",
-            "content": "恢复",
-            "finish_reason": "stop",
-            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-            "tool_calls": [],
-        }
-
-
-class _StreamingUnknownErrorEventAdapter:
-    def __init__(self, failures_before_success: int):
-        self.failures_before_success = failures_before_success
-        self.calls = 0
-
-    async def complete(self, request):
-        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
-
-    async def stream_complete(self, request):
-        self.calls += 1
-        if self.calls <= self.failures_before_success:
-            yield {
-                "type": "error",
-                "error_type": "unknown",
-                "error": "",
-                "user_message": "LLM streaming request failed. Please retry.",
-                "accumulated": "",
-            }
-            return
-        yield {"type": "token", "content": "recovered", "accumulated": "recovered"}
-        yield {
-            "type": "done",
-            "content": "recovered",
-            "finish_reason": "stop",
-            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-            "tool_calls": [],
-        }
-
-
-class _StreamingReasoningThenErrorAdapter:
-    def __init__(self):
-        self.calls = 0
-
-    async def complete(self, request):
-        raise AssertionError("chat_completion_stream should use adapter.stream_complete")
-
-    async def stream_complete(self, request):
-        self.calls += 1
-        yield {"type": "reasoning_delta", "content": "Need native history.", "accumulated": "Need native history."}
-        yield {
-            "type": "error",
-            "error_type": "connection",
-            "error": "No available accounts after reasoning",
-            "user_message": "No available accounts after reasoning",
-            "accumulated": "",
-        }
-
-
-@pytest.mark.asyncio
-async def test_llm_service_respects_user_configured_llm_concurrency(monkeypatch):
-    adapter = _ConcurrencyProbeAdapter()
-    service = LLMService(
+def _service(**other_config) -> LLMService:
+    other = {"llmConcurrency": 1, "llmGapMs": 0}
+    other.update(other_config)
+    return LLMService(
         user_config={
             "llmConfig": {
                 "llmProvider": "openai",
                 "llmApiKey": "test-key",
                 "llmModel": "test-model",
+                "llmBaseUrl": "https://example.invalid/v1",
             },
-            "otherConfig": {
-                "llmConcurrency": 1,
-                "llmGapMs": 0,
-            },
+            "otherConfig": other,
         }
     )
 
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
+
+@pytest.mark.asyncio
+async def test_llm_service_respects_user_configured_llm_concurrency(monkeypatch):
+    state = _install_fake_sdk(monkeypatch, delay=0.05)
+    service = _service(llmConcurrency=1)
 
     await asyncio.gather(
         service.chat_completion(messages=[{"role": "user", "content": "first"}]),
         service.chat_completion(messages=[{"role": "user", "content": "second"}]),
     )
 
-    assert adapter.max_in_flight == 1
+    assert state["calls"] == 2
+    assert state["max_in_flight"] == 1
 
 
 @pytest.mark.asyncio
-async def test_llm_service_retries_rate_limit_errors(monkeypatch):
-    adapter = _RetryProbeAdapter()
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            },
-            "otherConfig": {
-                "llmConcurrency": 1,
-                "llmGapMs": 0,
-            },
-        }
-    )
+async def test_unknown_provider_error_is_classified_before_service(monkeypatch):
+    async def fake_acompletion(**kwargs):
+        raise ModelRateLimitError("rate limited")
 
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
+    monkeypatch.setattr(client_module.litellm, "acompletion", fake_acompletion)
+    service = _service()
+
+    # 独立调用预算为 3：失败 3 次后抛出已映射的模型错误
+    with pytest.raises(ModelRateLimitError):
+        await service.chat_completion(messages=[{"role": "user", "content": "retry me"}])
+
+
+@pytest.mark.asyncio
+async def test_llm_service_retries_independent_calls_within_budget(monkeypatch):
+    state = _install_fake_sdk(monkeypatch, fail_times=2)
+    service = _service()
 
     result = await service.chat_completion(messages=[{"role": "user", "content": "retry me"}])
 
     assert result["content"] == "recovered"
-    assert adapter.calls == 2
+    assert state["calls"] == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_service_harness_owner_issues_single_attempt(monkeypatch):
+    state = _install_fake_sdk(monkeypatch, fail_times=5)
+    service = _service()
+    config = service.get_agent_config(retry_owner="harness")
+    request = client_module.LLMRequest(
+        messages=[{"role": "user", "content": "one attempt only"}], purpose="review"
+    )
+
+    with pytest.raises(ModelRateLimitError):
+        await service._run_completion(config, request)
+
+    assert config.retry_budget == 1
+    assert config.retry_owner == "harness"
+    assert state["calls"] == 1
 
 
 @pytest.mark.asyncio
 async def test_llm_service_passes_tools_and_parallel_tool_calls(monkeypatch):
-    adapter = _ToolingProbeAdapter()
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
-        }
-    )
-
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
+    captured: list = []
+    _install_fake_sdk(monkeypatch, recorder=captured)
+    service = _service()
 
     result = await service.chat_completion(
         messages=[{"role": "user", "content": "use tools"}],
@@ -257,10 +148,10 @@ async def test_llm_service_passes_tools_and_parallel_tool_calls(monkeypatch):
         parallel_tool_calls=True,
     )
 
-    assert result["content"] == "tooling"
-    assert adapter.request is not None
-    assert adapter.request.tools[0]["function"]["name"] == "read_many_files"
-    assert adapter.request.parallel_tool_calls is True
+    assert result["content"] == "recovered"
+    assert captured[0]["tools"][0]["function"]["name"] == "read_many_files"
+    assert captured[0]["parallel_tool_calls"] is True
+    assert captured[0]["num_retries"] == 0
 
 
 def test_llm_service_uses_runtime_env_fallbacks_for_provider_config():
@@ -285,180 +176,67 @@ def test_llm_service_uses_runtime_env_fallbacks_for_provider_config():
     assert config.base_url == "https://pureopus.cc"
     assert config.model == "claude-opus-4-6"
     assert config.timeout == 3000
+    assert config.sdk_model == "anthropic/claude-opus-4-6"
+    assert config.transport == "anthropic_messages"
 
 
 @pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_preserves_provider_tool_call_events(monkeypatch):
-    adapter = _StreamingProbeAdapter()
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
+async def test_llm_service_stream_preserves_tool_call_events(monkeypatch):
+    async def fake_stream(self, *, config, request, **kwargs):
+        yield {"type": "token", "content": "Need ", "accumulated": "Need "}
+        yield {
+            "type": "tool_call",
+            "tool_call": {"id": "call_1", "type": "function", "name": "Read", "arguments": '{"file_path":"README.md"}'},
         }
-    )
+        yield {
+            "type": "done",
+            "content": "Need tool",
+            "finish_reason": "tool_calls",
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "name": "Read", "arguments": '{"file_path":"README.md"}'}
+            ],
+        }
 
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
+    service = _service()
+    monkeypatch.setattr(client_module.SDKModelClient, "stream", fake_stream)
 
     events = []
     async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "use tools"}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "Read",
-                    "description": "Read a file",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ],
-        parallel_tool_calls=True,
+        messages=[{"role": "user", "content": "use tools"}], retry_enabled=False
     ):
         events.append(event)
 
     assert [event["type"] for event in events] == ["token", "tool_call", "done"]
     assert events[1]["tool_call"]["name"] == "Read"
     assert events[2]["finish_reason"] == "tool_calls"
-    assert events[2]["tool_calls"][0]["name"] == "Read"
-    assert adapter.request is not None
-    assert adapter.request.stream is True
-    assert adapter.request.parallel_tool_calls is True
-    assert adapter.complete_called is False
+    assert events[2]["configured_model"] == "test-model"
+    assert events[2]["purpose"] == "review"
 
 
 @pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_retries_connection_failures_before_first_output(monkeypatch):
-    adapter = _StreamingRetryProbeAdapter(failures_before_success=2)
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
-        }
-    )
+async def test_llm_service_stream_marks_harness_retry_owner(monkeypatch):
+    captured = {}
 
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
+    async def fake_stream(self, *, config, request, **kwargs):
+        captured["budget"] = config.retry_budget
+        captured["owner"] = config.retry_owner
+        yield {"type": "done", "content": "", "finish_reason": "stop", "tool_calls": [], "usage": None}
 
-    events = []
-    async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "retry stream"}],
+    service = _service()
+    monkeypatch.setattr(client_module.SDKModelClient, "stream", fake_stream)
+
+    async for _ in service.chat_completion_stream(
+        messages=[{"role": "user", "content": "runtime owns retry"}], retry_enabled=False
     ):
-        events.append(event)
+        pass
 
-    assert [event["type"] for event in events] == ["llm_retry", "llm_retry", "token", "done"]
-    assert events[0]["attempt"] == 1
-    assert events[0]["max_attempts"] == 3
-    assert "自动重试" in events[0]["message_text"]
-    assert events[1]["attempt"] == 2
-    assert events[2]["content"] == "恢复"
-    assert adapter.calls == 3
+    assert captured == {"budget": 1, "owner": "harness"}
 
 
-@pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_can_disable_internal_retry(monkeypatch):
-    adapter = _StreamingRetryProbeAdapter(failures_before_success=2)
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
-        }
-    )
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
-
-    events = []
-    async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "runtime owns retry"}],
-        retry_enabled=False,
-    ):
-        events.append(event)
-
-    assert [event["type"] for event in events] == ["error"]
-    assert events[0]["error_type"] == "connection"
-    assert adapter.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_retries_unknown_empty_error_before_first_output(monkeypatch):
-    adapter = _StreamingUnknownErrorEventAdapter(failures_before_success=2)
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
-        }
-    )
-
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
-
-    events = []
-    async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "retry unknown stream"}],
-    ):
-        events.append(event)
-
-    assert [event["type"] for event in events] == ["llm_retry", "llm_retry", "token", "done"]
-    assert events[0]["error_type"] == "connection"
-    assert adapter.calls == 3
-
-
-@pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_does_not_retry_after_reasoning_output(monkeypatch):
-    adapter = _StreamingReasoningThenErrorAdapter()
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "deepseek",
-                "llmApiKey": "test-key",
-                "llmModel": "deepseek-reasoner",
-            }
-        }
-    )
-
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
-
-    events = []
-    async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "use tools"}],
-    ):
-        events.append(event)
-
-    assert [event["type"] for event in events] == ["reasoning_delta", "error"]
-    assert adapter.calls == 1
-    assert events[-1]["error"] == "No available accounts after reasoning"
-
-
-@pytest.mark.asyncio
-async def test_llm_service_chat_completion_stream_returns_error_after_three_connection_failures(monkeypatch):
-    adapter = _StreamingRetryProbeAdapter(failures_before_success=3)
-    service = LLMService(
-        user_config={
-            "llmConfig": {
-                "llmProvider": "openai",
-                "llmApiKey": "test-key",
-                "llmModel": "test-model",
-            }
-        }
-    )
-
-    monkeypatch.setattr("app.execution_plane.models.service.LLMFactory.create_adapter", lambda config: adapter)
-
-    events = []
-    async for event in service.chat_completion_stream(
-        messages=[{"role": "user", "content": "retry stream"}],
-    ):
-        events.append(event)
-
-    assert [event["type"] for event in events] == ["llm_retry", "llm_retry", "error"]
-    assert events[-1]["error_type"] == "connection"
-    assert "已自动重试 3 次" in events[-1]["user_message"]
-    assert adapter.calls == 3
+def test_llm_service_config_snapshot_excludes_credentials():
+    service = _service()
+    config = service.get_agent_config()
+    assert config.api_key == "test-key"
+    assert "test-key" not in repr(config)
+    assert "test-key" not in str(config.snapshot())

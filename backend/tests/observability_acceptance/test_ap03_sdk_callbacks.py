@@ -147,14 +147,14 @@ async def test_ap03_streaming_call_does_not_emit_extra_logical_callbacks(model_h
 async def test_ap03_repeated_callbacks_do_not_double_count_tokens(model_harness) -> None:
     """同一逻辑调用的重复 callback 不能被计两次。"""
 
-    from app.infrastructure.observability.litellm_integration import LiteLLMCallbackLogger, PriceTable
+    from app.infrastructure.observability.litellm_integration import LiteLLMCallbackLogger
 
     model_harness.server.set_default(
         CHAT_PATH, PlannedResponse(payload=openai_completion(content="ok", model="fixture-model"))
     )
     recorder = li.get_recorder()
     recorder.clear()
-    logger_instance = LiteLLMCallbackLogger(recorder, PriceTable())
+    logger_instance = LiteLLMCallbackLogger(recorder)
 
     payload = {
         "litellm_call_id": "fixed-call",

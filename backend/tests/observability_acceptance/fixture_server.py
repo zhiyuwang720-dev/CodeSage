@@ -81,17 +81,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._respond(planned, None)
 
     def _respond(self, planned: PlannedResponse, record: Optional[HttpRequestRecord]) -> None:
-        if planned.delay_before_seconds:
-            import time
-
-            time.sleep(planned.delay_before_seconds)
-
         if planned.sse_raw_lines is not None or planned.sse_chunks is not None:
             try:
                 self._write_sse(planned)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
+
+        if planned.delay_before_seconds:
+            import time
+
+            time.sleep(planned.delay_before_seconds)
 
         payload = planned.payload if planned.payload is not None else {}
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -137,6 +137,11 @@ class _Handler(BaseHTTPRequestHandler):
             for key, value in planned.headers.items():
                 self.send_header(key, value)
             self.end_headers()
+            if planned.delay_before_seconds:
+                # 先发响应头再延迟：客户端能观察到首个事件迟到。
+                import time
+
+                time.sleep(planned.delay_before_seconds)
             try:
                 self.wfile.write(body)
                 self.wfile.flush()
@@ -156,6 +161,11 @@ class _Handler(BaseHTTPRequestHandler):
         for key, value in planned.headers.items():
             self.send_header(key, value)
         self.end_headers()
+        if planned.delay_before_seconds:
+            # 响应头已发出，但首个事件延迟到达：用于验证首事件超时。
+            import time
+
+            time.sleep(planned.delay_before_seconds)
         try:
             for event in events:
                 self._write_chunked(event.encode("utf-8"))
