@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
 from app.infrastructure.observability.tracing import get_tracer, span_attributes
 from app.infrastructure.observability.content import capture_to_span
+from app.infrastructure.observability.metrics import record_tool_call
 from app.tool_gateway.permission.runtime import RuntimePermissionRuntime, ToolPermissionDecision
 from app.contracts.models import (
     ToolCallRequest,

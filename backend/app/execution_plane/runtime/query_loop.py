@@ -46,6 +46,7 @@ from app.execution_plane.runtime.query_messages import normalize_messages_for_mo
 from app.contracts.query_state import QueryLoopState
 from app.execution_plane.session.store import AuditSessionPersistenceError
 from app.tool_gateway.search import TOOL_SEARCH_TOOL_NAME
+from app.infrastructure.observability.metrics import record_model_retry
 from app.infrastructure.observability.tracing import (
     bind_observability_context,
     get_meter,
@@ -303,6 +304,7 @@ class QueryLoop:
                             "error_type": error_kind,
                         }
                     )
+                    record_model_retry(layer="query_loop", error_kind=error_kind)
                     backoff_seconds = min(4.0, float(2 ** (attempt_number - 1)))
                     with get_tracer().start_as_current_span(
                         "retry.backoff",

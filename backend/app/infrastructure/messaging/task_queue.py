@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from app.core.config import settings
 from app.infrastructure.observability.tracing import get_meter, get_tracer, inject_trace_context, span_attributes
+from app.infrastructure.observability.metrics import record_task_submission
 
 AGENT_TASK_JOB_NAME = "execute_agent_task"
 
@@ -58,17 +59,18 @@ class AgentTaskQueue:
                     args = (str(task_id), None)
                 args = (*args, carrier)
             try:
-                await pool.enqueue_job(
+                job = await pool.enqueue_job(
                     AGENT_TASK_JOB_NAME,
                     *args,
                     _job_id=job_id,
                     _queue_name=self.queue_name,
                 )
-                get_meter().create_counter("codesage.task.publish").add(1, {"status": "success"})
+                if job is not None:
+                    record_task_submission()
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_attribute("codesage.status", "failed")
-                get_meter().create_counter("codesage.task.publish").add(1, {"status": "failed"})
+                record_task_submission(status="failed")
                 raise
 
     async def close(self) -> None:

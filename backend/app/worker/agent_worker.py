@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.execution_plane.task_executor import execute_agent_task
 from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.infrastructure.observability import configure_observability, extract_trace_context, get_meter, get_tracer
+from app.infrastructure.observability.metrics import record_execution_attempt
 from app.infrastructure.observability.tracing import (
     bind_evaluation_context,
     reset_evaluation_context,
@@ -87,7 +88,7 @@ async def execute_agent_task_job(
             try:
                 result = await executor(task_id, delivery_id=delivery_id)
                 span.set_attribute("codesage.status", result)
-                get_meter().create_counter("codesage.execution.attempt").add(1, {"status": str(result)})
+                record_execution_attempt(status=str(result))
                 if result == "already_owned":
                     from app.control_plane.execution_ownership import LEASE_SECONDS
 

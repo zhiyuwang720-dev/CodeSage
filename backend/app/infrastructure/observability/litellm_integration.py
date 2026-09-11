@@ -27,6 +27,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
 from app.infrastructure.observability.content import capture_to_span
+from app.infrastructure.observability.metrics import record_model_request, record_model_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,20 @@ class LiteLLMCallbackLogger(CustomLogger):
             usage = _usage_mapping(payload, response_obj)
             model = payload.get("model")
             metadata = _metadata(payload)
+            provider_name = str(payload.get("custom_llm_provider") or metadata.get("codesage_provider") or "unknown")
+            model_name = str(model or "unknown")
+            purpose_name = str(metadata.get("codesage_purpose") or "review")
+            record_model_request(provider=provider_name, model=model_name, purpose=purpose_name, status=event)
+            for token_type, value in (
+                ("input", _int(usage, "prompt_tokens")),
+                ("output", _int(usage, "completion_tokens")),
+                ("cache_read", _int(usage, "cache_read_input_tokens")),
+                ("cache_write", _int(usage, "cache_creation_input_tokens")),
+            ):
+                if value is not None:
+                    record_model_tokens(
+                        token_type=token_type, value=value, provider=provider_name, model=model_name
+                    )
             cost = self.price_table.evaluate(model=model, usage=usage, response_cost=_hidden_cost(payload))
             self._recorder.append(
                 CallbackRecord(

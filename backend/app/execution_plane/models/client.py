@@ -43,6 +43,7 @@ from .errors import (
 from .types import LLMResponse
 from .usage import normalize_usage
 
+from app.infrastructure.observability.metrics import record_model_retry
 from app.infrastructure.observability.tracing import (
     bind_observability_context,
     get_observability_context,
@@ -405,6 +406,7 @@ class SDKModelClient:
                     budget,
                     mapped.__class__.__name__,
                 )
+                record_model_retry(layer="sdk", error_kind=mapped.__class__.__name__)
                 backoff_seconds = self._retry_delay(attempt)
                 with get_tracer().start_as_current_span(
                     "retry.backoff",
