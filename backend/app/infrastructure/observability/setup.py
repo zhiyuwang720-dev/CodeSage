@@ -94,10 +94,13 @@ def configure_observability(
     tracer_provider = TracerProvider(resource=resource)
     if local_trace_path:
         tracer_provider.add_span_processor(
-            SimpleSpanProcessor(
+            BatchSpanProcessor(
                 SafeSpanExporter(
                     OtlpJsonlSpanExporter(local_trace_path), max_bytes=max_attribute_bytes
-                )
+                ),
+                max_queue_size=2048,
+                schedule_delay_millis=1000,
+                max_export_batch_size=512,
             )
         )
     if endpoint:

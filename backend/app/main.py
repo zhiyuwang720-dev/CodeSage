@@ -8,9 +8,10 @@ from app.api.v1.api import api_router
 from app.db.session import AsyncSessionLocal
 from app.db.init_db import init_db
 from app.infrastructure.observability import configure_observability
+from app.infrastructure.observability.logging import configure_logging
 
 # 配置日志
-logging.basicConfig(level=logging.INFO)
+configure_logging(service_name=f"{settings.OTEL_SERVICE_NAME}-api")
 logger = logging.getLogger(__name__)
 
 # 禁用 uvicorn access log 和 LiteLLM INFO 日志

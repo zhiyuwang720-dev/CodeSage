@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.execution_plane.task_executor import execute_agent_task
 from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.infrastructure.observability import configure_observability, extract_trace_context, get_meter, get_tracer
+from app.infrastructure.observability.logging import configure_logging, flush_logs
 from app.infrastructure.observability.metrics import record_execution_attempt
 from app.infrastructure.observability.tracing import (
     bind_evaluation_context,
@@ -38,7 +39,7 @@ def decode_task_payload(payload: Any) -> str:
 async def run_worker() -> None:
     from arq.worker import Worker
 
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(service_name=f"{settings.OTEL_SERVICE_NAME}-worker")
     worker = Worker(
         WorkerSettings.functions,
         queue_name=WorkerSettings.queue_name,
@@ -48,6 +49,8 @@ async def run_worker() -> None:
         max_tries=WorkerSettings.max_tries,
         retry_jobs=WorkerSettings.retry_jobs,
         health_check_key=WorkerSettings.health_check_key,
+        on_startup=WorkerSettings.on_startup,
+        on_shutdown=WorkerSettings.on_shutdown,
     )
     await worker.async_run()
 
@@ -103,6 +106,7 @@ async def execute_agent_task_job(
 
 
 async def startup_observability(ctx: dict[str, Any]) -> None:
+    configure_logging(service_name=f"{settings.OTEL_SERVICE_NAME}-worker")
     ctx["observability_runtime"] = configure_observability(
         service_name=f"{settings.OTEL_SERVICE_NAME}-worker",
         enabled=settings.OTEL_ENABLED,
@@ -120,6 +124,7 @@ async def shutdown_observability(ctx: dict[str, Any]) -> None:
     if runtime is not None:
         runtime.force_flush(5000)
         runtime.shutdown()
+    flush_logs(2.0)
 
 
 class WorkerSettings:
