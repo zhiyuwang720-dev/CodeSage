@@ -28,6 +28,7 @@ from .config import (
     LLMConfig,
     LLMRequest,
     ModelCatalog,
+    ModelConfigurationError,
     canonical_endpoint_protocol,
     canonical_tool_message_format,
     default_base_url,
@@ -35,7 +36,7 @@ from .config import (
     resolve_sdk_model,
     resolve_tool_message_format,
 )
-from .types import LLMResponse
+from .types import LLMProvider, LLMResponse
 
 try:
     from json_repair import repair_json
@@ -249,6 +250,11 @@ class LLMService:
         custom_headers = user_llm_config.get("llmCustomHeaders")
         if not isinstance(custom_headers, dict):
             custom_headers = {}
+
+        if not api_key and provider != LLMProvider.OLLAMA:
+            raise ModelConfigurationError(
+                f"缺少 API Key（provider={provider.value}）：请在配置或环境变量中提供，发送前即失败"
+            )
 
         sdk_model, transport = resolve_sdk_model(provider, str(model or ""), base_url)
         return LLMConfig(

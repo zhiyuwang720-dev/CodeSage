@@ -757,10 +757,10 @@ def describe_error_kind(error: BaseException) -> str:
         return "rate_limit"
     if isinstance(error, ModelQuotaExceededError):
         return "quota_exceeded"
-    if isinstance(error, ModelTimeoutError):
-        return "timeout"
     if isinstance(error, ModelStreamTimeoutError):
         return "stream_timeout"
+    if isinstance(error, ModelTimeoutError):
+        return "timeout"
     if isinstance(error, ModelConnectionError):
         return "connection"
     if isinstance(error, ModelAuthenticationError):
@@ -776,7 +776,7 @@ def _error_prefix(error: BaseException) -> str:
     kind = describe_error_kind(error)
     if kind == "rate_limit":
         return "当前请求过多，"
-    if kind == "timeout":
+    if kind in {"timeout", "stream_timeout"}:
         return "响应超时，"
     if kind == "connection":
         return "账号或连接暂时不可用，"
@@ -793,7 +793,7 @@ def user_message_for_error(error: BaseException, *, max_attempts: int, attempts_
         return str(error)
     if kind == "quota_exceeded":
         return "模型账户额度或余额不足，请充值或更换账号。"
-    if kind in {"rate_limit", "timeout", "connection"} and attempts_used >= max_attempts:
+    if kind in {"rate_limit", "timeout", "stream_timeout", "connection"} and attempts_used >= max_attempts:
         return f"模型服务连接失败，已自动重试 {max_attempts} 次仍未恢复。请稍后重试或切换可用账号。"
     return str(error) or "模型服务暂时不可用，请稍后重试。"
 
