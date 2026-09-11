@@ -142,6 +142,7 @@ class Settings(BaseSettings):
     OTEL_EXPORT_TIMEOUT_SECONDS: float = 3.0
     OTEL_LOCAL_TRACE_PATH: str = ".auditai/observability/traces.otlp.jsonl"
     OTEL_LOCAL_METRIC_PATH: str = ".auditai/observability/metrics.otlp.jsonl"
+    OTEL_LOG_ROOT: str = ".codesage/observability/logs"
     OTEL_CAPTURE_CONTENT: bool = False
     OTEL_CAPTURE_MAX_BYTES: int = 8192
     OTEL_CONTENT_ROOT: str = ".codesage/observability/content"
