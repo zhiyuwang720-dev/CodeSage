@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-11",
+  "note": "old configuration produced multiplied retries (adapter retry x service retry x SDK retry); this round collapses them to a single owner per call path",
+  "owners": {
+    "harness": "execution_plane/runtime/query_loop.py (business recovery budget)",
+    "sdk_client": "execution_plane/models/client.py::SDKModelClient (bounded independent budget)",
+    "control_plane": "worker/lease queue recovery (not a model transport retry)",
+    "none": "non-retryable by classification; no retry owner"
+  },
+  "rows": [
+    {
+      "scenario": "Harness review/finalizer/compaction stream call (QueryLoop managed)",
+      "old_max_attempts": "adapter retry 3 x service retry 3 x SDK retry (unbounded in practice) for non-streaming; streaming had service-level retry up to 3 plus QueryLoop 6",
+      "old_multiplier_points": [
+        "BaseLLMAdapter.retry in adapters/litellm_adapter.complete",
+        "retry_with_backoff in models/service.LLMService._execute_chat_completion",
+        "models/service.LLMService._execute_chat_completion_stream internal retry loop",
+        "runtime/query_loop.py MODEL_STREAM_MAX_RETRIES"
+      ],
+      "new_owner": "harness",
+      "new_budget": 1,
+      "new_budget_meaning": "SDKModelClient issues exactly one actual HTTP request per QueryLoop attempt; QueryLoop keeps MODEL_STREAM_MAX_RETRIES=5 business attempts",
+      "reason": "multiplication removed; business recovery stays with the owner that knows transcript state",
+      "verified_by": "test_ap04_retry_budget.py::test_ap04_harness_stream_issues_one_request_per_attempt"
+    },
+    {
+      "scenario": "Independent non-Harness model call (connection test, prompts, audit helpers)",
+      "old_max_attempts": "adapter retry 3 x service retry 3 (up to 9 actual requests)",
+      "old_multiplier_points": [
+        "BaseLLMAdapter.retry in adapters/litellm_adapter.complete",
+        "retry_with_backoff in models/service.LLMService._execute_chat_completion"
+      ],
+      "new_owner": "sdk_client",
+      "new_budget": 3,
+      "new_budget_meaning": "initial attempt + 2 retries, 3 actual requests maximum, SDK num_retries=0",
+      "reason": "spec P05 asked for the SDK to own this budget; the SDK cannot bound its own retries observably, so the single client owns the same 3-request budget instead",
+      "verified_by": "test_ap04_retry_budget.py::test_ap04_independent_stream_uses_bounded_three_attempts, ::test_ap04_budget_exhaustion_does_not_exceed_three_requests"
+    },
+    {
+      "scenario": "Authentication / invalid-parameter errors",
+      "old_max_attempts": "up to 3 on the adapter path before classification",
+      "old_multiplier_points": [
+        "BaseLLMAdapter.retry retried any non-4xx error, including text-matched auth failures"
+      ],
+      "new_owner": "none",
+      "new_budget": 1,
+      "new_budget_meaning": "auth and invalid-request errors are never retried",
+      "reason": "non-retryable by classification (ModelAuthenticationError / ModelBadRequestError)",
+      "verified_by": "test_ap04_retry_budget.py::test_ap04_auth_error_is_not_retried"
+    },
+    {
+      "scenario": "Partial response already delivered, then failure",
+      "old_max_attempts": "streaming retry loop could restart after partial output only when no output was emitted; non-streaming adapter retry could replay a request that had produced content",
+      "old_multiplier_points": [
+        "models/service.LLMService._execute_chat_completion_stream emitted-partial guard existed, but the non-streaming path had no such guard"
+      ],
+      "new_owner": "harness",
+      "new_budget": 1,
+      "new_budget_meaning": "the client never transparently replays after emitting token/tool events or receiving tool-call deltas; the failure surfaces as an error event with partial metadata",
+      "reason": "prevents splicing two responses into one success",
+      "verified_by": "test_ap07_ap08_stream_contract.py::test_ap08_error_after_partial_output_reports_partial_and_known_usage"
+    },
+    {
+      "scenario": "Worker/lease task recovery after crash or cancel",
+      "old_max_attempts": "n/a (control plane)",
+      "new_owner": "control_plane",
+      "new_budget": "not a model transport retry",
+      "new_budget_meaning": "not a model transport retry: completed stages are reused; resumed workers do not re-issue model requests for finished perspectives",
+      "reason": "unchanged queue/lease semantics",
+      "verified_by": "tests/worker_acceptance/test_worker_cancel_resume.py::test_cancel_then_resume_on_another_worker_keeps_completed_stage (3 repetitions, isolated Postgres/Redis)"
+    }
+  ],
+  "retry_delay": {
+    "owner": "sdk_client",
+    "formula": "min(8.0, attempt_gap_seconds * 2 ** (attempt - 1))",
+    "default_attempt_gap_seconds": 0.5,
+    "acceptance_override": "CODESAGE_MODEL_ATTEMPT_GAP_SECONDS=0.05 (attempt count and ownership unchanged)"
+  },
+  "admission_control": {
+    "note": "rate limiting is an execution constraint and is not removed with models/retry.py",
+    "mechanism": "per provider+transport+endpoint+key semaphore and optional minimum gap, both still in LLMService"
+  }
+}

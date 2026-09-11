@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-11",
+  "model_boundary_version": "litellm_sdk_v1",
+  "note": "legacy -> SDK value migration; every row states whether the old configuration is still supported and how it is verified",
+  "rows": [
+    {
+      "old_field": "endpoint_protocol=openai_compatible|openai_chat|openai|chat_completions",
+      "sdk_value": "openai_chat",
+      "transport_family": "openai_compatible",
+      "expected_semantics": "OpenAI Chat Completions at the configured base_url",
+      "supported": true,
+      "sdk_model_prefix": "openai/",
+      "fixture_or_regression": "test_ap02_wire_semantics.py::test_ap02_openai_compatible_non_stream_keeps_configured_model_and_endpoint"
+    },
+    {
+      "old_field": "endpoint_protocol=anthropic|anthropic_messages|claude",
+      "sdk_value": "anthropic_messages",
+      "transport_family": "anthropic_messages",
+      "expected_semantics": "Anthropic Messages API",
+      "supported": true,
+      "sdk_model_prefix": "anthropic/",
+      "fixture_or_regression": "test_ap02_wire_semantics.py::test_ap02_anthropic_transport_maps_to_sdk_messages_api"
+    },
+    {
+      "old_field": "endpoint_protocol=gemini|google|gemini_native",
+      "sdk_value": "gemini_native",
+      "transport_family": "gemini",
+      "expected_semantics": "Gemini generateContent",
+      "supported": true,
+      "sdk_model_prefix": "gemini/",
+      "fixture_or_regression": "capability-matrix route marked unverified: no fixture route asserted in this round"
+    },
+    {
+      "old_field": "endpoint_protocol=openai_responses|responses",
+      "sdk_value": null,
+      "transport_family": null,
+      "expected_semantics": "OpenAI Responses API",
+      "supported": false,
+      "reason": "no SDK transport selected in this round; configuration fails before sending",
+      "fixture_or_regression": "test_ap09_ap10_cancellation.py::test_ap09_unavailable_protocol_raises_before_send"
+    },
+    {
+      "old_field": "endpoint_protocol=native",
+      "sdk_value": null,
+      "transport_family": null,
+      "expected_semantics": "provider native protocol adapters (baidu/minimax/doubao)",
+      "supported": false,
+      "reason": "self-built native adapters were deleted; configuration fails before sending",
+      "fixture_or_regression": "test_ap02_wire_semantics.py::test_ap02_unknown_endpoint_protocol_fails_before_sending"
+    },
+    {
+      "old_field": "tool_message_format=auto|follow_protocol",
+      "sdk_value": "openai_tools | anthropic_blocks | gemini_parts",
+      "transport_family": "derived from endpoint_protocol",
+      "expected_semantics": "Harness transcript -> SDK tool representation only",
+      "supported": true,
+      "fixture_or_regression": "tests/runtime/test_bridge.py::test_runtime_model_client_uses_anthropic_blocks_for_anthropic_endpoint"
+    },
+    {
+      "old_field": "tool_message_format=legacy|legacy_text|xml|json",
+      "sdk_value": "legacy_text",
+      "transport_family": "caller explicit",
+      "expected_semantics": "legacy text tool syntax preserved for explicit opt-in",
+      "supported": true,
+      "fixture_or_regression": "tests/runtime/test_bridge.py::test_runtime_model_client_requires_explicit_format_or_supported_protocol"
+    },
+    {
+      "old_field": "provider=claude with endpoint_protocol=openai_compatible",
+      "sdk_value": "openai_chat",
+      "transport_family": "openai_compatible",
+      "expected_semantics": "Claude behind an OpenAI-compatible gateway stays on the OpenAI-compatible transport",
+      "supported": true,
+      "fixture_or_regression": "tests/runtime/test_bridge.py::test_runtime_model_client_uses_openai_tool_messages_for_openai_compatible_endpoint"
+    },
+    {
+      "old_field": "llmBaseUrl without /v1 suffix",
+      "sdk_value": "same value passed as api_base",
+      "transport_family": "unchanged",
+      "expected_semantics": "endpoint is preserved verbatim; no silent model or endpoint rewrite",
+      "supported": true,
+      "fixture_or_regression": "test_ap02_wire_semantics.py asserts the endpoint_id equals the configured host:port"
+    },
+    {
+      "old_field": "model with an unknown provider-style prefix plus custom base_url",
+      "sdk_value": "openai/<model>",
+      "transport_family": "openai_compatible",
+      "expected_semantics": "custom gateway model ids keep their full name",
+      "supported": true,
+      "fixture_or_regression": "test_ap06_concurrency_isolation.py::test_ap06_sdk_model_mapping_is_pure"
+    },
+    {
+      "old_field": "model with an unknown prefix and no base_url",
+      "sdk_value": null,
+      "transport_family": null,
+      "expected_semantics": "no guessing",
+      "supported": false,
+      "reason": "explicit configuration error before sending",
+      "fixture_or_regression": "test_ap06_concurrency_isolation.py::test_ap06_sdk_model_mapping_is_pure"
+    },
+    {
+      "old_field": "review:security / business aliases in the model field",
+      "sdk_value": "rejected",
+      "transport_family": "n/a",
+      "expected_semantics": "business aliases never override model fields",
+      "supported": true,
+      "fixture_or_regression": "model comes only from llmModel / provider defaults; purpose carries the alias"
+    }
+  ],
+  "not_migrated": [
+    "旧 prompt_cache 前缀策略：无引用并删除；SDK 参数是唯一 prompt cache 表达方式（AP11）",
+    "自研 tokenizer 预算估算：无引用并删除；预算估算归 Harness/Plan 20",
+    "自研 memory_compressor：无引用并删除；上下文压缩归 runtime compaction"
+  ]
+}
