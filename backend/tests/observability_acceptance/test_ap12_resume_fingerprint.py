@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from app.contracts.review_execution import ReviewRunIdentity, build_config_fingerprint
@@ -61,10 +59,7 @@ def test_ap12_old_identity_is_rejected_without_rewriting() -> None:
     assert persisted.config_fingerprint == legacy_fingerprint
 
 
-@pytest.mark.skipif(
-    not os.environ.get("CODESAGE_ACCEPTANCE_POSTGRES_URL"),
-    reason="AP12 L2 需要隔离 Postgres 与 Redis；未提供 CODESAGE_ACCEPTANCE_POSTGRES_URL 时记为 BLOCKED",
-)
+@pytest.mark.skip(reason="AP12 L2 由 tests/worker_acceptance/test_worker_cancel_resume.py 在隔离 Postgres/Redis 上执行")
 @pytest.mark.asyncio
 async def test_ap12_resume_on_another_worker_keeps_completed_stages() -> None:  # pragma: no cover - L2
     """L2：新任务完成一个视角后取消并换 worker 恢复；已完成阶段不得新增模型请求。
