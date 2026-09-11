@@ -12,9 +12,37 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
+from app.contracts.model_boundary import MODEL_BOUNDARY_VERSION
+
 from .types import DEFAULT_BASE_URLS, DEFAULT_MODELS, LLMProvider
 
-MODEL_BOUNDARY_VERSION = "litellm_sdk_v1"
+__all__ = [
+    "ENDPOINT_PROTOCOL_TRANSPORTS",
+    "LLMConfig",
+    "LLMRequest",
+    "MODEL_BOUNDARY_VERSION",
+    "ModelCatalog",
+    "ModelConfigurationError",
+    "PROVIDER_ALIASES",
+    "PROVIDER_METADATA",
+    "PROTOCOL_CANONICAL",
+    "RETRY_BUDGET_HARNESS",
+    "RETRY_BUDGET_INDEPENDENT",
+    "RETRY_OWNER_HARNESS",
+    "RETRY_OWNER_SDK",
+    "canonical_endpoint_protocol",
+    "canonical_tool_message_format",
+    "default_base_url",
+    "get_model_capabilities",
+    "get_provider_metadata",
+    "normalize_model_id",
+    "parse_provider",
+    "protocol_transport",
+    "resolve_sdk_model",
+    "resolve_tool_message_format",
+    "sdk_provider_prefix",
+    "with_request_scope",
+]
 
 RETRY_OWNER_HARNESS = "harness"
 RETRY_OWNER_SDK = "litellm_sdk"

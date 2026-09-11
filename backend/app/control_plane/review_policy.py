@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.contracts.model_boundary import MODEL_BOUNDARY_VERSION
 from app.core.config import settings
 from app.domains.pr_review.orchestrator import TOOL_MATRICES
 from app.domains.pr_review.prompts import (
@@ -9,7 +10,6 @@ from app.domains.pr_review.prompts import (
     REVIEW_QUALITY_PROMPT,
     REVIEW_SECURITY_PROMPT,
 )
-from app.execution_plane.models.config import MODEL_BOUNDARY_VERSION
 from app.models.agent_task import AgentTask
 
 
