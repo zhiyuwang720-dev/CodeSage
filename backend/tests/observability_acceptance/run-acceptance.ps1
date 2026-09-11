@@ -12,11 +12,14 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backend = (Resolve-Path (Join-Path $here "..\..")).Path
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 $commit = (git -C $backend rev-parse --short HEAD).Trim()
-$artifactRoot = Join-Path $backend ".acceptance-artifacts\plan20p0\$stamp-$commit"
+$profile = if ($Suite -eq "model-foundation") { "plan20p0" } else { "plan20" }
+$artifactRoot = Join-Path $backend ".acceptance-artifacts\$profile\$stamp-$commit"
+$plan20ArtifactRoot = Join-Path $backend ".acceptance-artifacts\plan20\$stamp-$commit"
 $pytestTemp = Join-Path $artifactRoot "pytest"
-New-Item -ItemType Directory -Force -Path $artifactRoot, $pytestTemp | Out-Null
+New-Item -ItemType Directory -Force -Path $artifactRoot, $plan20ArtifactRoot, $pytestTemp | Out-Null
 
-$env:CODESAGE_ACCEPTANCE_ARTIFACT_ROOT = Join-Path $backend ".acceptance-artifacts\plan20p0"
+$env:CODESAGE_ACCEPTANCE_ARTIFACT_ROOT = Join-Path $backend ".acceptance-artifacts\$profile"
+$env:CODESAGE_PLAN20_ARTIFACT_ROOT = $plan20ArtifactRoot
 $env:CODESAGE_ACCEPTANCE_STAMP = $stamp
 $env:CODESAGE_ACCEPTANCE_COMMIT = $commit
 # The in-process fixture must be reached directly: developer machines often set an
@@ -40,6 +43,10 @@ $modelFoundationTests = @(
     "tests/observability_acceptance/test_model_identity_flow.py",
     "tests/observability_acceptance/test_model_boundary_evidence.py",
     "tests/observability_acceptance/test_capability_matrix.py"
+)
+
+$plan20Tests = @(
+    "tests/plan20_acceptance"
 )
 
 $regressionTests = @(
@@ -137,6 +144,8 @@ try {
     }
     $manifest = [ordered]@{
         suite          = $Suite
+        artifact_profile = $profile
+        plan20_artifact_root = $plan20ArtifactRoot
         utc_stamp      = $stamp
         commit         = (git -C $backend rev-parse HEAD).Trim()
         commit_short   = $commit
@@ -167,6 +176,11 @@ try {
         if ($code -ne 0) { $exitCode = 1 }
         $regressionArgs = $regressionTests + @("-q")
         $code = Invoke-PytestStep "regression" $regressionArgs
+        if ($code -ne 0) { $exitCode = 1 }
+    }
+
+    if ($Suite -in @("unit", "all")) {
+        $code = Invoke-PytestStep "plan20-unit" ($plan20Tests + @("-q"))
         if ($code -ne 0) { $exitCode = 1 }
     }
 
@@ -204,7 +218,18 @@ try {
             "evidence/ap14/cost_snapshot.json",
             "evidence/ap15/deletion-map.json"
         )
+        if ($Suite -in @("unit", "all")) {
+            $required += @(
+                "plan20-unit.junit.xml",
+                "evidence/a01/wire_non_stream.json",
+                "evidence/a01/wire_stream.json"
+            )
+        }
         foreach ($item in $required) {
+            $isModelEvidence = ($item -in @("model-foundation.junit.xml", "regression.junit.xml") -or $item.StartsWith("evidence/ap"))
+            if ($isModelEvidence -and $Suite -notin @("model-foundation", "all")) { continue }
+            $isPlan20Evidence = ($item -eq "plan20-unit.junit.xml" -or $item.StartsWith("evidence/a01"))
+            if ($isPlan20Evidence -and $Suite -notin @("unit", "all")) { continue }
             if (-not (Test-Path (Join-Path $artifactRoot $item))) {
                 Write-Warning "missing evidence: $item"
                 $exitCode = 2

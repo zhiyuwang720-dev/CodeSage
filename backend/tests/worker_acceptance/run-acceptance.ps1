@@ -1,6 +1,8 @@
 param([switch]$KeepDependencies)
 
-$ErrorActionPreference = "Stop"
+# PowerShell 5.1 turns native stderr into a terminating error when this is Stop.
+# Docker Compose writes progress/warnings to stderr, so native exit codes are checked explicitly.
+$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backend = Resolve-Path (Join-Path $here "..\..")
 $compose = Join-Path $here "docker-compose.yml"
@@ -76,7 +78,7 @@ try {
         Get-Content $stderr
         throw "worker acceptance failed (exit $($testProcess.ExitCode))"
     }
-    # 生产和验收统一 worker-only；单元测试直接调用服务，不再启用 local 调度分支。
+    # ??????? worker-only???????????????? local ?????
     $env:CODESAGE_WORKER_ACCEPTANCE = "0"
     $regressionStdout = Join-Path $artifactRoot "regression.stdout.log"
     $regressionStderr = Join-Path $artifactRoot "regression.stderr.log"
