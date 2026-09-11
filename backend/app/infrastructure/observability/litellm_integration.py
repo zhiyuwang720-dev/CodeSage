@@ -26,6 +26,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
+from app.infrastructure.observability.content import capture_to_span
+
 logger = logging.getLogger(__name__)
 
 COST_STATUS_SDK_VERIFIED = "sdk_verified"
@@ -466,6 +468,24 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
                         if value is not None:
                             span.set_attribute(key, value)
                     metadata = _metadata(dict(kwargs or {}))
+                    if capture_content:
+                        request_payload = {
+                            key: kwargs.get(key)
+                            for key in ("messages", "tools", "tool_choice", "temperature", "max_tokens", "stream")
+                            if key in kwargs
+                        }
+                        capture_to_span(
+                            span,
+                            kind="model_request",
+                            content=request_payload or dict(kwargs or {}),
+                            value_attribute="input.value",
+                        )
+                        capture_to_span(
+                            span,
+                            kind="model_response",
+                            content=response_obj,
+                            value_attribute="output.value",
+                        )
                     for key, value in metadata.items():
                         if not isinstance(value, (str, bool, int, float)):
                             continue

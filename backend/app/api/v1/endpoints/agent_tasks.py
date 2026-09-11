@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case, func
 from sqlalchemy.exc import OperationalError
@@ -36,6 +37,9 @@ from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSession
 from app.execution_plane.runtime.config import RuntimeStack, coerce_runtime_stack
 from app.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
+from app.models.review_execution import ReviewExecutionRun
+from app.infrastructure.observability.content import get_content_store
+from app.infrastructure.persistence.review_artifacts import ArtifactIntegrityError
 from app.models.user import User
 from app.models.user_config import UserConfig
 from app.infrastructure.messaging.event_manager import EventManager
@@ -1057,6 +1061,39 @@ async def get_agent_task(
     except Exception as exc:
         logger.error(f"Error serializing task {task_id}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to serialize task data: {exc}")
+
+
+@router.get("/{task_id}/diagnostics/artifacts/{artifact_id}")
+async def download_diagnostic_artifact(
+    task_id: str,
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    task = await db.get(AgentTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    project = await db.get(Project, task.project_id)
+    if not project or project.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    run = await db.get(ReviewExecutionRun, task_id)
+    run_id = str((run.identity_json or {}).get("run_id") or "") if run else ""
+    if not run_id:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    store = get_content_store()
+    reference = store.find_artifact(run_id, artifact_id)
+    if reference is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    try:
+        content = store.read_verified(reference)
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(status_code=409, detail="artifact_integrity_error") from exc
+    suffix = ".json" if reference.media_type == "application/json" else ".bin"
+    return Response(
+        content=content,
+        media_type=reference.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{artifact_id}{suffix}"'},
+    )
 
 
 @router.get("/{task_id}/debug-trace", response_model=DebugTraceResponse)

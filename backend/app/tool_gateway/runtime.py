@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
 from app.infrastructure.observability.tracing import get_tracer, span_attributes
+from app.infrastructure.observability.content import capture_to_span
 from app.tool_gateway.permission.runtime import RuntimePermissionRuntime, ToolPermissionDecision
 from app.contracts.models import (
     ToolCallRequest,
@@ -463,6 +464,13 @@ class ToolGateway:
             is_concurrency_safe=prepared_call.is_concurrency_safe,
         )
         started = perf_counter()
+        capture_to_span(
+            trace.get_current_span(),
+            kind="tool_input",
+            content={"tool_name": request.name, "arguments": request.input},
+            value_attribute="tool.parameters",
+            extra_attributes={"tool_call_id": tool_call_id, "tool_name": request.name},
+        )
 
         if prepared_call.tool is None:
             return self._finalize_error_record(
@@ -713,6 +721,13 @@ class ToolGateway:
         )
         if result.context_modifier is not None:
             lifecycle["context_modifier"] = dict(result.context_modifier)
+        capture_to_span(
+            trace.get_current_span(),
+            kind="tool_result",
+            content={"status": "completed", "result": result.output_payload, "lifecycle": lifecycle},
+            value_attribute="tool.output",
+            extra_attributes={"tool_call_id": tool_call_id, "tool_name": request.name, "status": "completed"},
+        )
         return ToolExecutionRecord(
             tool_call_id=tool_call_id,
             request=request,
@@ -823,6 +838,13 @@ class ToolGateway:
             output_payload=dict(output_payload or {}),
             metadata=dict(metadata or {}),
             is_error=True,
+        )
+        capture_to_span(
+            trace.get_current_span(),
+            kind="tool_error",
+            content={"status": status, "message": message, "output": result.output_payload, "metadata": result.metadata},
+            value_attribute="tool.output",
+            extra_attributes={"tool_call_id": tool_call_id, "tool_name": request.name, "status": status},
         )
         self._session_store.complete_tool_call(
             tool_call_id,

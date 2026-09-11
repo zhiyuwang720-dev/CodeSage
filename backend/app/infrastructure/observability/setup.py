@@ -133,6 +133,14 @@ def _install_model_observability(*, capture_content: bool) -> None:
     """
 
     try:
+        from app.infrastructure.observability.content import configure_content_store
+
+        configure_content_store(enabled=capture_content)
+    except Exception:  # noqa: BLE001
+        logger.warning("diagnostic content store not configured", exc_info=True)
+
+
+    try:
         from app.infrastructure.observability.litellm_integration import install_litellm_integration
 
         install_litellm_integration(capture_content=capture_content)

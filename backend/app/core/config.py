@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     OTEL_LOCAL_METRIC_PATH: str = ".auditai/observability/metrics.otlp.jsonl"
     OTEL_CAPTURE_CONTENT: bool = False
     OTEL_CAPTURE_MAX_BYTES: int = 8192
+    OTEL_CONTENT_ROOT: str = ".codesage/observability/content"
+    OTEL_CONTENT_PREVIEW_BYTES: int = 32768
+    OTEL_CONTENT_FILE_LIMIT_BYTES: int = 16777216
+    OTEL_CONTENT_RUN_LIMIT_BYTES: int = 268435456
     AGENT_EVENT_STREAM_BLOCK_MS: int = 15000
     REDIS_URL: str = "redis://localhost:6379/0"
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"

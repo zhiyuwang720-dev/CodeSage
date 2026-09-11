@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -72,6 +73,7 @@ class SynthesisResult:
     rejected_off_diff: int = 0
     severity_dropped: int = 0  # 经去重/落行校验后仍被 min_severity 过滤的条数(空结果自解释)
     needs_verification: bool = False
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 def normalize_finding(raw: dict) -> ReviewFinding | None:
@@ -142,6 +144,18 @@ def enforce_added_lines(
     return valid, rejected
 
 
+def _finding_identity(finding: ReviewFinding) -> str:
+    return "|".join(
+        (
+            str(finding.file_path),
+            str(finding.line_start),
+            str(finding.line_end),
+            str(finding.category),
+            str(finding.title),
+        )
+    )
+
+
 def synthesize(
     handoff_findings: list[dict],
     *,
@@ -174,6 +188,14 @@ def synthesize(
         merged, max_comments=max_comments, min_severity=min_severity
     )
     result.needs_verification = any(f.needs_verification for f in result.comments)
+    result.provenance = {
+        "rule_version": "pr_review_synthesizer_v1",
+        "input_finding_ids": [_finding_identity(item) for item in normalized],
+        "output_finding_ids": [_finding_identity(item) for item in result.comments],
+        "deduped_away": result.deduped_away,
+        "rejected_off_diff": result.rejected_off_diff,
+        "severity_dropped": result.severity_dropped,
+    }
     return result
 
 

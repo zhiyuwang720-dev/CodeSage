@@ -8,11 +8,19 @@ from urllib.parse import urlsplit, urlunsplit
 _SECRET_KEY = re.compile(r"authorization|api[-_.]?key|access[-_.]?token|secret|password|credential", re.I)
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
 _TOKEN = re.compile(r"(?i)\b(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b")
+_SECRET_QUERY = re.compile(r"(?i)([?&](?:api[-_.]?key|access[-_.]?token|token|secret|password)=)[^&#\s\"']+")
+_URL_USERINFO = re.compile(r"(?i)(https?://)[^/@\s]+@")
+_JSON_SECRET = re.compile(
+    r'(?i)("(?:authorization|api[-_.]?key|access[-_.]?token|secret|password|credential)"\s*:\s*)("[^"]*")'
+)
 
 
 def redact_text(value: str, *, max_bytes: int = 8192) -> tuple[str, bool]:
     value = _BEARER.sub(r"\1 [REDACTED]", value)
     value = _TOKEN.sub("[REDACTED]", value)
+    value = _SECRET_QUERY.sub(r"\1[REDACTED]", value)
+    value = _URL_USERINFO.sub(r"\1[REDACTED]@", value)
+    value = _JSON_SECRET.sub(r'\1"[REDACTED]"', value)
     try:
         parsed = urlsplit(value)
         if parsed.scheme and parsed.hostname and (parsed.username or parsed.password):
