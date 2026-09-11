@@ -1,7 +1,8 @@
 {
   "schema_version": 2,
   "captured_at": "2026-09-11",
-  "source_head": "856ee3bf",
+  "source_head": "see manifest.json commit for the exact revision of this run",
+  "model_boundary_version_source": "backend/app/contracts/model_boundary.py::MODEL_BOUNDARY_VERSION",
   "litellm_version": "1.98.0",
   "provider_sdk_versions": {
     "openai": "2.26.0",

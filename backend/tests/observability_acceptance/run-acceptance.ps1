@@ -43,14 +43,19 @@ $modelFoundationTests = @(
 )
 
 $regressionTests = @(
+    "tests/architecture",
     "tests/observability",
-    "tests/runtime/test_bridge.py",
-    "tests/runtime/test_query_loop.py",
-    "tests/runtime/test_compact_runtime.py",
-    "tests/runtime/test_query_degradation.py",
+    "tests/runtime",
+    "tests/session",
+    "tests/pr_review",
+    "tests/services",
+    "tests/tooling",
+    "tests/hooks",
+    "tests/memory",
+    "tests/permission",
+    "tests/skill",
     "tests/agent/test_llm_service.py",
-    "tests/pr_review/test_plan18_inputs.py",
-    "tests/pr_review/test_plan18_finding_semantics.py"
+    "tests/agent/test_model_config.py"
 )
 
 function Write-EvidenceNote([string]$RelativePath, [AllowEmptyString()][string]$Content) {
