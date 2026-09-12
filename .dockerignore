@@ -1,0 +1,16 @@
+# Build context is the repository root; keep images small and avoid transient
+# Windows-ACL-locked test directories from breaking the build sender.
+.git/
+.claude/
+.codesage/
+.venv/
+node_modules/
+frontend/node_modules/
+backend/.pytest*/
+backend/.acceptance-artifacts/
+backend/.auditai*/
+backend/__pycache__/
+**/__pycache__/
+**/*.py[cod]
+**/*.db
+**/*.log
