@@ -483,6 +483,7 @@ class LLMService:
             "purpose": response.purpose or purpose,
             "provider_request_id": response.provider_request_id,
             "response_cost_usd": response.response_cost_usd,
+            "response_cost_source": response.response_cost_source,
             "model_snapshot": config.snapshot(),
         }
 

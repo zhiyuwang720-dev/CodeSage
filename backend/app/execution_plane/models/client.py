@@ -17,6 +17,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import litellm
@@ -40,10 +41,16 @@ from .errors import (
     ModelStreamTimeoutError,
     ModelTimeoutError,
 )
-from .types import LLMResponse
+from .types import LLMResponse, LLMUsage
 from .usage import normalize_usage
 
+from app.core.config import settings
 from app.infrastructure.observability.metrics import record_model_retry
+from app.infrastructure.observability.pricing import (
+    PRICE_STATUS_OK,
+    PricingCatalog,
+    load_pricing_catalog,
+)
 from app.infrastructure.observability.tracing import (
     bind_observability_context,
     get_observability_context,
@@ -209,6 +216,42 @@ def _sdk_response_cost(response: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_response_cost(
+    *,
+    response: Any,
+    config: LLMConfig,
+    usage: Optional[LLMUsage],
+) -> tuple[Optional[float], Optional[str]]:
+    """SDK-reported cost wins; otherwise fall back to the frozen local catalog.
+
+    Falls back only on an exact provider/endpoint/model/effective-window match,
+    and only when usage has every token category the entry prices. Anything
+    ambiguous stays unknown instead of guessing.
+    """
+
+    sdk_value = _sdk_response_cost(response)
+    if sdk_value is not None:
+        return sdk_value, "sdk"
+    endpoint_id = config.endpoint_id
+    if usage is None or not endpoint_id:
+        return None, None
+    catalog = load_pricing_catalog(settings.PRICING_CATALOG_PATH)
+    if catalog is None:
+        return None, None
+    resolution = catalog.resolve(
+        provider=config.provider.value,
+        endpoint_id=endpoint_id,
+        model=config.model,
+        at=datetime.now(timezone.utc),
+    )
+    if resolution.status != PRICE_STATUS_OK or resolution.entry is None:
+        return None, None
+    cost, _reason = PricingCatalog.estimate_cost(resolution.entry, usage.to_dict())
+    if cost is None:
+        return None, None
+    return float(cost), f"frozen_catalog:{resolution.entry.price_id}"
 
 
 def _classify_sdk_exception(exc: BaseException) -> BaseException:
@@ -463,6 +506,9 @@ class SDKModelClient:
                 }
             )
 
+        response_cost_usd, response_cost_source = _resolve_response_cost(
+            response=response, config=config, usage=usage
+        )
         return LLMResponse(
             content=_message_text(_as_dictish(message, "content")),
             model=_response_model_name(response),
@@ -479,7 +525,8 @@ class SDKModelClient:
             perspective=request.perspective,
             purpose=request.purpose or config.purpose,
             provider_request_id=_provider_request_id(response),
-            response_cost_usd=_sdk_response_cost(response),
+            response_cost_usd=response_cost_usd,
+            response_cost_source=response_cost_source,
         )
 
     async def stream(

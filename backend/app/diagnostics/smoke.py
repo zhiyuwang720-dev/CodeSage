@@ -32,6 +32,7 @@ class SmokeResult:
     max_cost: str
     currency: str
     reason: str | None = None
+    cost_source: str | None = None
 
 
 async def run_smoke(
@@ -118,6 +119,7 @@ async def run_smoke(
                 max_cost=max_cost,
                 currency=currency.upper(),
                 reason="estimated_cost_exceeds_budget",
+                cost_source=result.get("response_cost_source"),
             )
     return SmokeResult(
         case_id=case_id,
@@ -133,6 +135,7 @@ async def run_smoke(
         max_cost=max_cost,
         currency=currency.upper(),
         reason=None if estimated is not None else "response cost unavailable",
+        cost_source=result.get("response_cost_source"),
     )
 
 

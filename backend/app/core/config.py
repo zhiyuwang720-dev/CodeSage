@@ -154,6 +154,8 @@ class Settings(BaseSettings):
     OTEL_CONTENT_PREVIEW_BYTES: int = 32768
     OTEL_CONTENT_FILE_LIMIT_BYTES: int = 16777216
     OTEL_CONTENT_RUN_LIMIT_BYTES: int = 268435456
+    # Frozen local price catalog (JSONL). Empty means "no catalog fallback".
+    PRICING_CATALOG_PATH: str = "config/prices.jsonl"
     AGENT_EVENT_STREAM_BLOCK_MS: int = 15000
     REDIS_URL: str = "redis://localhost:6379/0"
     FINDING_RUNTIME_STACK_DEFAULT: str = "runtime"

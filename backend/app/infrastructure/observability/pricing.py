@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -175,6 +176,40 @@ def sync_catalog_to_file(catalog: PricingCatalog, target: str | Path) -> dict[st
     return {"status": "written", "target": str(path), "entries": len(catalog.entries), "price_hash": catalog.price_hash}
 
 
+_catalog_cache: dict[str, tuple[float, int, PricingCatalog]] = {}
+_catalog_lock = threading.Lock()
+
+
+def load_pricing_catalog(path: str | Path | None) -> PricingCatalog | None:
+    """Load a frozen JSONL catalog with mtime+size caching.
+
+    Missing or unreadable catalogs return ``None`` so callers keep the cost
+    value unknown instead of guessing. Bad rows also fail closed.
+    """
+
+    if not path:
+        return None
+    target = Path(path)
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    try:
+        stat = target.stat()
+    except OSError:
+        return None
+    key = str(target)
+    with _catalog_lock:
+        cached = _catalog_cache.get(key)
+        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+            return cached[2]
+    try:
+        catalog = PricingCatalog.from_jsonl(target)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    with _catalog_lock:
+        _catalog_cache[key] = (stat.st_mtime, stat.st_size, catalog)
+    return catalog
+
+
 __all__ = [
     "PRICE_STATUS_CONFLICT",
     "PRICE_STATUS_OK",
@@ -183,5 +218,6 @@ __all__ = [
     "PriceCatalogEntry",
     "PricingCatalog",
     "PricingResolution",
+    "load_pricing_catalog",
     "sync_catalog_to_file",
 ]
