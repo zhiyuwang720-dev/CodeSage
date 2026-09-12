@@ -100,6 +100,9 @@ python -m app.diagnostics smoke `
 | A23-A25 | L0 | `test_a23_a25_logging.py` | JSON 字段、轮转、Batch exporter、Worker bootstrap |
 | A26-A28 | L0/L1 | `test_a26_a28_diagnostics.py` | bundle、离线摘要、public 脱敏、CLI |
 | A30 | preflight | `test_a30_smoke.py` | `--allow-paid`、固定 case、预算门 |
+| A10/C02 | L2 | `test_a10_live_capture.py` + `a10_capture_probe.py` | 真实 LiteLLM SDK 路径下 `model_request`/`model_response` 内容 caught：Span `capture_status=captured`、artifact 可校验 |
+| A26 | L2 | `test_a26_phoenix_pagination.py` | 真实 Phoenix 游标分页 `limit=3` 穷尽去重、批注入 15 Span |
+| A29 | L2 | `test_a29_observation_overhead.py` + `a29_benchmark.py` | 观测 off/on 各 3 次确定性测量的原始记录，不断言提速门槛 |
 
 最终干净 commit 的 `-Suite all` 证据位于：
 
@@ -107,13 +110,21 @@ python -m app.diagnostics smoke `
 
 真实 smoke 脱敏结果位于：
 
-`backend/.acceptance-artifacts/plan20/20260912T023716Z-c6c938d0-l3/`
+`backend/.acceptance-artifacts/plan20/20260912T023716Z-c6c938d0-l3/`（首轮，响应内容捕获失败）
+`backend/.acceptance-artifacts/plan20/20260912T033000Z-worktree-l3/`（修复后复验，Phoenix `model_response.capture_status=captured`）
+
+本地 Phoenix 与 A29 证据：
+
+- A26 分页：`backend/.acceptance-artifacts/plan20/phoenix-local/evidence/a26/phoenix_pagination.json`
+- A29 开销：`backend/.acceptance-artifacts/plan20/a29-local/evidence/a29/summary.json`
+- Plan 20 全量套件：`backend/.acceptance-artifacts/plan20/suite-local/`
 
 ## 4. 当前已知边界
 
 - 当前真实网关模型：`DeepSeek-V4-Flash-0731`。
 - 真实 smoke 已验证内容与 usage：97 input / 40 output / 137 total；返回内容 `CODESAGE_SMOKE_OK`。
-- 网关未返回可核验 `response_cost`，本地 LiteLLM 价格表也没有该自定义模型，因此成本状态为 `price_unknown`，不得标为价格验收通过。
-- Phoenix UI、Phoenix 分页完整性、Phoenix 成本同步仍需要可达的 Phoenix 实例后复验。
-- A29 观测开/关 3 次开销测量尚未执行。
+- 价格来源调查（2026-09-12）结论：网关 `/v1/models` 只有 `id/object/created/owned_by`，无价格字段；`/model/info`、`/model_group/info`、`/spend/calculate`、`/cost/estimate` 对当前虚拟 key 均返回 403（仅允许 `llm_api_routes`）；`/public/litellm_model_cost_map` 是公开通用表，只有第三方 provider 键，没有 Paratera 专属 `deepseek-v4-flash-0731` 价格。响应头也没有 `x-litellm-response-cost`，只有累计 `x-litellm-key-spend`，无法用于单次核验。
+- 因此本地暂不写入 `prices.jsonl`，避免编造价格；成本状态保持 `price_pending`。拿到可信价格来源后，用 `python -m app.diagnostics pricing doctor --catalog prices.jsonl --provider openai --endpoint-id https://llmapi.paratera.com/v1 --model DeepSeek-V4-Flash-0731` 校验，再重跑 smoke 完成成本验收。
+- Phoenix 已在根 compose 的 `codesage-phoenix-1`（`http://127.0.0.1:6006`）复验：真实 smoke Trace 可见单一 `litellm_request` Span，OpenInference usage 字段齐全，`model_request`/`model_response` 均为 `captured`；A26 分页对 15 Span 穷尽去重通过。
+- A29 已执行完毕：off/on 各 3 次 × 20 次真实 SDK 调用；只保留原始测量，不声明提速门槛。
 - 未启用 provider 分支保持 `unverified`，不得宣称全 provider 支持。
