@@ -134,10 +134,11 @@ async def test_ap15_no_second_llm_span_in_the_harness_turn(model_harness) -> Non
     from app.execution_plane.runtime import query_loop
 
     source = Path(query_loop.__file__).read_text(encoding="utf-8")
-    assert '"provider.request"' in source
-    start = source.index('"provider.request"')
-    window = source[max(0, start - 200) : start + 200]
-    assert '"LLM"' not in window, "provider.request 不能声明 LLM 语义（会同次调用产生第二个模型 span）"
+    # QueryLoop 不再自建 provider.request 容器：业务级 model.attempt 直接作为
+    # LiteLLM SDK 模型 span 的父 span，避免 model.attempt → provider.request →
+    # model.attempt 的重复层级（T02）。
+    assert '"provider.request"' not in source, "provider.request 容器会与 litellm_request 重复"
+    assert '"LLM"' not in source, "QueryLoop 不得声明 LLM 语义（模型 span 只由 SDK 产生）"
 
     # 仓库内不应再出现其他 LLM 语义的 span 声明（模型 span 由 SDK integration 产生）
     llm_semantics_sites: list[str] = []
@@ -153,7 +154,7 @@ async def test_ap15_no_second_llm_span_in_the_harness_turn(model_harness) -> Non
         {
             "requirement": "P08,P11",
             "acceptance": "AP15",
-            "harness_container_span": "provider.request (kind=CHAIN)",
+            "harness_container_span": "model.attempt (kind=CHAIN)",
             "llm_span_owner": "litellm.integrations.opentelemetry.OpenTelemetry",
             "other_llm_kind_sites": llm_semantics_sites,
         },

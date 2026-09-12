@@ -1117,11 +1117,9 @@ class QueryLoop:
             }
         )
 
-    # 模型 LLM span 由 LiteLLM SDK integration 负责（含 usage/成本）。这里只是本次
-    # 尝试的容器 span，不能再标成 LLM，否则同一次调用会出现两个计费级模型 span。
-    @get_tracer().start_as_current_span(
-        "provider.request", attributes={"openinference.span.kind": "CHAIN"}
-    )
+    # 模型 LLM span 由 LiteLLM SDK integration 负责（含 usage/成本），其父 span 是
+    # QueryLoop 建的业务级 model.attempt。这里不再包一层 provider.request，否则同一
+    # 次调用会退化成 model.attempt → provider.request → model.attempt 的重复层级。
     async def _collect_model_turn(
         self,
         *,
@@ -1141,7 +1139,9 @@ class QueryLoop:
         provider_span = trace.get_current_span()
         provider_span.set_attributes(
             {
-                "gen_ai.request.model": model_name,
+                # 真实模型名由 SDK span 携带。这里的 model_name 是视角别名
+                # （如 review:architecture），写进 gen_ai/llm.* 会污染模型归因。
+                "codesage.requested_model_alias": model_name,
                 **span_attributes(session_id=session_id, attempt_id=attempt_id),
             }
         )

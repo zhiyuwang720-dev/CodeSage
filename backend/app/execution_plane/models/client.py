@@ -414,13 +414,17 @@ class SDKModelClient:
         scoped = with_request_scope(config, request)
         budget = max(1, int(scoped.retry_budget))
         last_error: Optional[BaseException] = None
+        # QueryLoop 等调用方可能已经建立业务级 model.attempt；SDK 层此时不能再起
+        # 同名 span，否则同一次调用出现两层 model.attempt，且 litellm_request 会被
+        # 挂到内层而非业务 attempt 下（T02 层级要求）。
+        caller_owns_attempt = bool(get_observability_context().get("model_attempt_id"))
 
         for attempt in range(1, budget + 1):
             attempt_id = str(uuid.uuid4())
             attempt_span = None
             correlation_token = None
             attempt_context_token = None
-            if scoped.retry_owner == RETRY_OWNER_SDK:
+            if scoped.retry_owner == RETRY_OWNER_SDK and not caller_owns_attempt:
                 correlation_token = bind_observability_context(
                     model_attempt_id=attempt_id,
                     retry_owner=scoped.retry_owner,
@@ -433,6 +437,9 @@ class SDKModelClient:
                     },
                 )
                 attempt_context_token = otel_context.attach(trace.set_span_in_context(attempt_span))
+            elif scoped.retry_owner == RETRY_OWNER_SDK and attempt == 1:
+                # 复用业务 attempt span：只补 SDK 重试归属，不再新建 span。
+                trace.get_current_span().set_attribute("codesage.retry_owner", scoped.retry_owner)
             try:
                 response = await self._send(scoped, request, stream=False)
                 return self._to_llm_response(scoped, request, response)
