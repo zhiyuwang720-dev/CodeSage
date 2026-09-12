@@ -81,6 +81,12 @@ async def test_t02_business_attempt_is_the_only_model_attempt(model_harness) -> 
     assert all(
         s.parent is not None and s.parent.span_id == attempt_span.context.span_id for s in admissions
     ), "model.admission 未挂到业务 attempt"
+    for admission in admissions:
+        attrs = dict(admission.attributes)
+        assert attrs.get("codesage.model_attempt_id") == attempt_id, "admission 缺少 model_attempt_id"
+        assert attrs.get("codesage.task_id") == "task-1", "admission 缺少 task_id"
+        assert attrs.get("codesage.turn_id") == "turn-1", "admission 缺少 turn_id"
+        assert attrs.get("codesage.perspective") == "security", "admission 缺少 perspective"
     assert not any(
         "gen_ai.request.model" in dict(s.attributes) and dict(s.attributes)["gen_ai.request.model"] == "review:security"
         for s in model_harness.spans()

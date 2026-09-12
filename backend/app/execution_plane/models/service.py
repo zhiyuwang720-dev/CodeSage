@@ -17,7 +17,7 @@ from copy import deepcopy
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.core.config import settings
-from app.infrastructure.observability.tracing import get_tracer
+from app.infrastructure.observability.tracing import get_tracer, span_attributes
 
 from .client import SDKModelClient, get_sdk_client
 from .config import (
@@ -355,7 +355,7 @@ class LLMService:
         started = time.perf_counter()
         with get_tracer().start_as_current_span(
             "model.admission",
-            attributes={"codesage.admission_kind": "semaphore"},
+            attributes={"codesage.admission_kind": "semaphore", **span_attributes()},
         ) as span:
             await semaphore.acquire()
             span.set_attribute("codesage.admission_wait_seconds", max(0.0, time.perf_counter() - started))
@@ -369,7 +369,7 @@ class LLMService:
         lock = self._get_provider_gap_lock(config)
         with get_tracer().start_as_current_span(
             "model.admission",
-            attributes={"codesage.admission_kind": "provider_gap"},
+            attributes={"codesage.admission_kind": "provider_gap", **span_attributes()},
         ) as span:
             async with lock:
                 now = asyncio.get_running_loop().time()

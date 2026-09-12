@@ -453,7 +453,7 @@ class ToolGateway:
         trace.get_current_span().set_attributes(
             {
                 "tool.name": request.name,
-                **span_attributes(session_id=session_id),
+                **span_attributes(session_id=session_id, turn_id=turn_id),
             }
         )
         tool_call_id = self._session_store.start_tool_call(
