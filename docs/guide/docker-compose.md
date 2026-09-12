@@ -54,6 +54,39 @@ docker compose up -d --build --wait
 
 `migrate` 每次启动前执行 `alembic upgrade head` 并正常退出。不要用 `down -v`，否则会删除数据库卷。Phoenix 继续使用原有 `observability_phoenix_data` 卷。
 
+## 2.1 本地诊断：查看 LLM 与 Tool 输入输出
+
+默认产品栈 `OTEL_CAPTURE_CONTENT=false`，只记录 token、耗时等元数据。要在本地看到模型与工具的完整输入输出，叠加诊断覆盖层启动：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.local-diagnostics.yml up -d --build --wait
+```
+
+覆盖层只改一件事：把 `backend`、`worker-1`、`worker-2`（以及 eval profile 的对应服务）的 `OTEL_CAPTURE_CONTENT` 设为 `true`。
+
+- 内容先脱敏再落盘，位于宿主 `./.codesage/observability/content/<review_run_id>/`；
+- 目录按类型分：`model_request/`、`model_response/`、`tool_input/`、`tool_result/` 等，每个 artifact 带 sha256；
+- Phoenix 对应 span 会带 `codesage.model_request.capture_status`、`codesage.model_response.capture_status`、`codesage.tool_input.capture_status`、`codesage.tool_result.capture_status` 以及各自的 `relative_path`；
+- 限额：单 span 预览 32 KiB、单文件 16 MiB、单 run 256 MiB，超限标 `truncated`。
+
+查找某次运行的内容：
+
+```powershell
+Get-ChildItem -Recurse .\.codesage\observability\content\<review_run_id>\
+```
+
+回到普通产品栈：`docker compose down` 后直接 `docker compose up -d`，或对默认栈执行 `docker compose up -d`（不带覆盖层）。
+
+> 诊断内容可能含源码与提示正文，只用于本地排查，不要提交、不要对外分享。
+
+### prod / local / eval 布局
+
+- `docker-compose.yml`：基础 + 产品（prod）默认栈；评测服务在 `eval` profile 下；
+- `docker-compose.local-diagnostics.yml`：本地诊断覆盖层，叠加在 prod 基线上，只开内容捕获；
+- 评测栈继续用 `--profile eval`：它复用 `phoenix`、build anchor 和卷定义，拆成独立文件会造成重复，并且本指南所有 eval 命令都要改成双 `-f`。
+
+如果后续确实要把 eval 完全独立，做法是 `-f docker-compose.yml -f docker-compose.eval.yml --profile eval`，并同步更新本指南全部 eval 命令。
+
 
 备份示例：
 

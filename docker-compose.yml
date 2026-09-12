@@ -12,6 +12,8 @@ x-product-environment: &product-environment
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
   OTEL_PROJECT_NAME: codesage-product
+  OTEL_CAPTURE_CONTENT: ${OTEL_CAPTURE_CONTENT:-false}
+  OTEL_CONTENT_ROOT: /var/lib/codesage/observability/content
   CODESAGE_ENV: local-compose
   NO_PROXY: localhost,127.0.0.1,postgres,redis,phoenix,backend
 
@@ -23,6 +25,8 @@ x-eval-environment: &eval-environment
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
   OTEL_PROJECT_NAME: codesage-eval
+  OTEL_CAPTURE_CONTENT: ${OTEL_CAPTURE_CONTENT:-false}
+  OTEL_CONTENT_ROOT: /var/lib/codesage/observability/content
   CODESAGE_ENV: eval-compose
   NO_PROXY: localhost,127.0.0.1,phoenix,eval-api,eval-postgres,eval-redis
 

@@ -1,0 +1,37 @@
+# 本地诊断覆盖层：在 prod 基线上打开 LLM / Tool 输入输出内容捕获。
+#
+# 用法（prod 基线 + 诊断覆盖）：
+#   docker compose -f docker-compose.yml -f docker-compose.local-diagnostics.yml up -d --wait
+#
+# 效果：
+# - OTEL_CAPTURE_CONTENT=true，模型请求/响应与工具输入/结果会脱敏后落盘；
+# - 内容位于宿主 ./.codesage/observability/content/<review_run_id>/；
+# - Phoenix 对应 span 会带 codesage.model_request / model_response /
+#   tool_input / tool_result 的 capture_status=captured 与 artifact 相对路径。
+#
+# 注意：诊断内容可能含业务正文，仅用于本地排查，不要用于生产环境或对外分享。
+
+services:
+  backend:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
+
+  worker-1:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
+
+  worker-2:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
+
+  eval-api:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
+
+  eval-worker-1:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
+
+  eval-worker-2:
+    environment:
+      OTEL_CAPTURE_CONTENT: "true"
