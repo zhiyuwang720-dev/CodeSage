@@ -41,6 +41,12 @@
 - 每个 artifact 有 sha256、大小、相对路径、capture status；完整性读取失败返回 409。
 - 受权下载接口：`GET /api/v1/agent-tasks/{task_id}/diagnostics/artifacts/{artifact_id}`。
 
+本轮修复（2026-09-12）：
+
+- `model_response` 捕获此前把 LiteLLM `ModelResponse` 对象直接交给内容仓库，序列化失败并在 Span 上标 `capture_error`。现改为先 `_dump(response_obj)` 转成 JSON 兼容 dict 再捕获；真实 smoke 复验后 `codesage.model_response.capture_status=captured`。
+- LiteLLM 的 async 成功回调在 `acompletion` 返回之后才创建 `litellm_request` Span，smoke 若立即 flush 会丢 Span。smoke 现于 finally 中先等待 0.5s 再 `force_flush`，Phoenix 能稳定收到模型 Span。
+- 新增进程内真实 SDK 探针 `tests/plan20_acceptance/a10_capture_probe.py` 与用例 `test_a10_live_capture.py`：走真实 `litellm.acompletion` + 本地 HTTP fixture，断言 `model_request`/`model_response` 均 captured 且 artifact 可校验。它不付费。
+
 ### Metrics、日志和导出
 
 - 集中式仪器目录：`backend/app/infrastructure/observability/metrics.py`。
@@ -73,6 +79,29 @@ python -m app.diagnostics pricing sync --catalog prices.jsonl --output phoenix-p
 ```
 
 导出命令需要本地持久化读取和业务环境；离线 `summarize` 不访问 DB、网络或模型。
+
+### 本轮新增验收命令
+
+```powershell
+# 不付费：真实 SDK 路径内容捕获（本地 HTTP fixture）
+cd backend
+python -m pytest tests/plan20_acceptance/test_a10_live_capture.py -q --basetemp=.pytest-tmp
+
+# 不付费：观测 on/off 各 3×20 次开销测量（原始记录，无提速门槛）
+$env:CODESAGE_PLAN20_ARTIFACT_ROOT='E:\Mac\CodeSageackend\.acceptance-artifacts\plan2029-local'
+python -m pytest tests/plan20_acceptance/test_a29_observation_overhead.py -q --basetemp=.pytest-tmp
+
+# 需要可达 Phoenix：真实游标分页与去重
+$env:CODESAGE_PHOENIX_URL='http://127.0.0.1:6006'
+$env:CODESAGE_PHOENIX_PROJECT='codesage-product'
+$env:CODESAGE_PLAN20_ARTIFACT_ROOT='E:\Mac\CodeSageackend\.acceptance-artifacts\plan20\phoenix-local'
+python -m pytest tests/plan20_acceptance/test_a26_phoenix_pagination.py -q --basetemp=.pytest-tmp
+
+# 全量 Plan 20 验收（含以上三项，A26 需先设置 CODESAGE_PHOENIX_URL）
+python -m pytest tests/plan20_acceptance -q --basetemp=.pytest-tmp
+```
+
+Windows 下 pytest 默认临时根（`%LOCALAPPDATA%\Temp\pytest-of-*`）在受限沙箱里可能无权创建，统一加 `--basetemp=.pytest-tmp` 落在仓库内。`.pytest-tmp` 已被 `.gitignore` 覆盖。
 
 ### 显式付费 smoke
 
@@ -119,7 +148,25 @@ python -m app.diagnostics smoke `
 - A29 开销：`backend/.acceptance-artifacts/plan20/a29-local/evidence/a29/summary.json`
 - Plan 20 全量套件：`backend/.acceptance-artifacts/plan20/suite-local/`
 
-## 4. 当前已知边界
+## 4. 价格目录配置指引
+
+真实 smoke 的可解释成本依赖本地价格目录，而不是 LiteLLM 内置表。目录格式为 JSONL，每行一条：
+
+```json
+{"schema_version":1,"price_id":"<provider>-<model>-<date>","provider":"openai","endpoint_id":"https://llmapi.paratera.com/v1","model":"DeepSeek-V4-Flash-0731","aliases":["DeepSeek-V4-Flash"],"currency":"USD","effective_from":"2026-09-12T00:00:00Z","input_per_million":"<in>","cache_read_per_million":"0","cache_write_per_million":"0","output_per_million":"<out>","source":"<可信来源，例如 paratera-official>","version":"<版本>"}
+```
+
+校验与同步：
+
+```powershell
+cd backend
+python -m app.diagnostics pricing doctor --catalog prices.jsonl --provider openai --endpoint-id https://llmapi.paratera.com/v1 --model DeepSeek-V4-Flash-0731
+python -m app.diagnostics pricing sync --catalog prices.jsonl --output phoenix-prices.jsonl
+```
+
+`input_per_million`/`output_per_million` 必须来自可信来源，禁止臆造。拿到价格后重新执行显式付费 smoke 核对成本。
+
+## 5. 当前已知边界
 
 - 当前真实网关模型：`DeepSeek-V4-Flash-0731`。
 - 真实 smoke 已验证内容与 usage：97 input / 40 output / 137 total；返回内容 `CODESAGE_SMOKE_OK`。
