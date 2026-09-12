@@ -498,7 +498,7 @@ def install_litellm_integration(*, capture_content: bool = False) -> Dict[str, A
                         capture_to_span(
                             span,
                             kind="model_response",
-                            content=response_obj,
+                            content=_dump(response_obj),
                             value_attribute="output.value",
                         )
                     for key, value in metadata.items():

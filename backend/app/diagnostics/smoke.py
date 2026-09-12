@@ -6,8 +6,11 @@ import asyncio
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 from app.core.config import settings
+from app.infrastructure.observability import configure_observability
+from app.infrastructure.observability.tracing import bind_observability_context, reset_observability_context
 from app.execution_plane.models.service import LLMService
 
 FIXED_CASE_ID = "deepseek-public-v1"
@@ -17,6 +20,7 @@ FIXED_PROMPT = "Return exactly CODESAGE_SMOKE_OK and nothing else."
 @dataclass(frozen=True)
 class SmokeResult:
     case_id: str
+    review_run_id: str
     status: str
     provider: str
     configured_model: str
@@ -50,6 +54,27 @@ async def run_smoke(
     if not settings.LLM_API_KEY or not settings.LLM_MODEL:
         raise RuntimeError("LLM configuration is incomplete; smoke not sent")
 
+    run_id = f"smoke-{case_id}-{uuid4().hex}"
+    observability = configure_observability(
+        service_name=f"{settings.OTEL_SERVICE_NAME}-smoke",
+        enabled=settings.OTEL_ENABLED,
+        endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT,
+        local_trace_path=settings.OTEL_LOCAL_TRACE_PATH,
+        local_metric_path=settings.OTEL_LOCAL_METRIC_PATH,
+        export_timeout_seconds=settings.OTEL_EXPORT_TIMEOUT_SECONDS,
+        max_attribute_bytes=settings.OTEL_CAPTURE_MAX_BYTES,
+        capture_content=settings.OTEL_CAPTURE_CONTENT,
+    )
+    correlation_token = bind_observability_context(
+        task_id="diagnostics-smoke",
+        review_run_id=run_id,
+        session_id=run_id,
+        turn_id="smoke-turn-1",
+        model_attempt_id="smoke-attempt-1",
+        perspective="smoke",
+        purpose="smoke",
+        case_id=case_id,
+    )
     service = LLMService(
         user_config={
             "llmConfig": {
@@ -61,13 +86,19 @@ async def run_smoke(
             "otherConfig": {"llmConcurrency": 1, "llmGapMs": 0},
         }
     )
-    result = await service.chat_completion(
-        messages=[{"role": "user", "content": FIXED_PROMPT}],
-        max_tokens=32,
-        temperature=0,
-        purpose="smoke",
-        retry_owner="sdk",
-    )
+    try:
+        result = await service.chat_completion(
+            messages=[{"role": "user", "content": FIXED_PROMPT}],
+            max_tokens=32,
+            temperature=0,
+            purpose="smoke",
+            retry_owner="sdk",
+        )
+    finally:
+        await asyncio.sleep(0.5)
+        observability.force_flush(5000)
+        observability.shutdown()
+        reset_observability_context(correlation_token)
     response_cost = result.get("response_cost_usd")
     estimated = None
     if response_cost is not None:
@@ -75,6 +106,7 @@ async def run_smoke(
         if estimated and Decimal(estimated) > budget:
             return SmokeResult(
                 case_id=case_id,
+                review_run_id=run_id,
                 status="over_budget",
                 provider=str(result.get("provider") or settings.LLM_PROVIDER),
                 configured_model=str(result.get("configured_model") or settings.LLM_MODEL),
@@ -89,6 +121,7 @@ async def run_smoke(
             )
     return SmokeResult(
         case_id=case_id,
+        review_run_id=run_id,
         status="passed" if estimated is not None else "content_verified_price_unknown",
         provider=str(result.get("provider") or settings.LLM_PROVIDER),
         configured_model=str(result.get("configured_model") or settings.LLM_MODEL),
