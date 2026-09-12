@@ -17,6 +17,8 @@ from app.core.config import settings
 from app.infrastructure.observability.tracing import (
     bind_evaluation_context,
     bind_observability_context,
+    business_span,
+    get_execution_span,
     reset_observability_context,
     get_tracer,
     reset_evaluation_context,
@@ -79,9 +81,7 @@ async def _heartbeat(
             raise
 
 
-@get_tracer().start_as_current_span(
-    "review.quick", attributes={"openinference.span.kind": "CHAIN"}
-)
+@business_span("review.quick", kind="CHAIN")
 async def execute_quick_review(
     task_id: str,
     dependencies: QuickReviewDependencies | None = None,
@@ -150,6 +150,18 @@ async def execute_quick_review(
             lease_epoch=lease.lease_epoch,
         )
     )
+    # execution.attempt span 由 worker 建立，早于本次 claim；claim 成功后把
+    # lease 身份回写，避免该 span 只有 task_id 而无法定位实际执行尝试。
+    execution_span = get_execution_span()
+    if execution_span is not None and hasattr(execution_span, "set_attributes"):
+        execution_span.set_attributes(
+            span_attributes(
+                review_run_id=prepared.identity.run_id,
+                execution_attempt_id=lease.attempt_id,
+                lease_epoch=lease.lease_epoch,
+            )
+        )
+        execution_span.set_attribute("codesage.status", "running")
 
     if deps.observer is not None:
         observed = deps.observer(

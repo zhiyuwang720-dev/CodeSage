@@ -16,7 +16,12 @@ from app.infrastructure.observability.logging import configure_logging, flush_lo
 from app.infrastructure.observability.metrics import record_execution_attempt
 from app.infrastructure.observability.tracing import (
     bind_evaluation_context,
+    mark_span_deferred,
+    mark_span_error,
+    mark_span_ok,
     reset_evaluation_context,
+    reset_execution_span,
+    set_execution_span,
     span_attributes,
 )
 
@@ -78,8 +83,8 @@ async def execute_agent_task_job(
     evaluation_token = bind_evaluation_context(**evaluation_values)
     parent = extract_trace_context(trace_carrier)
     try:
-        with get_tracer().start_as_current_span("execution.attempt", context=parent) as span:
-            span.set_attributes(
+        with get_tracer().start_as_current_span("worker.receive", context=parent) as receive_span:
+            receive_span.set_attributes(
                 span_attributes(
                     task_id=task_id,
                     delivery_id=delivery_id,
@@ -88,19 +93,35 @@ async def execute_agent_task_job(
             )
             logger.info("Agent worker picked task %s", task_id)
             executor = ctx.get("execute_agent_task", execute_agent_task)
-            try:
-                result = await executor(task_id, delivery_id=delivery_id)
-                span.set_attribute("codesage.status", result)
-                record_execution_attempt(status=str(result))
-                if result == "already_owned":
-                    from app.control_plane.execution_ownership import LEASE_SECONDS
+            # execution.attempt 覆盖真实执行；claim 成功后 lease 身份由
+            # execute_quick_review 通过 execution span contextvar 回写到这里。
+            with get_tracer().start_as_current_span("execution.attempt") as span:
+                span.set_attributes(span_attributes(task_id=task_id, delivery_id=delivery_id))
+                execution_span_token = set_execution_span(span)
+                try:
+                    result = await executor(task_id, delivery_id=delivery_id)
+                    span.set_attribute("codesage.status", result)
+                    record_execution_attempt(status=str(result))
+                    if result == "already_owned":
+                        from app.control_plane.execution_ownership import LEASE_SECONDS
 
-                    raise Retry(defer=LEASE_SECONDS + 1)
-                return result
-            except Exception as exc:
-                span.record_exception(exc)
-                span.set_attribute("codesage.status", "failed")
-                raise
+                        mark_span_deferred(span, "already_owned")
+                        mark_span_deferred(receive_span, "already_owned")
+                        raise Retry(defer=LEASE_SECONDS + 1)
+                    mark_span_ok(span)
+                    mark_span_ok(receive_span)
+                    return result
+                except Retry:
+                    # arq 退避不是执行失败；状态已按业务结果标注。
+                    raise
+                except Exception as exc:
+                    span.record_exception(exc)
+                    span.set_attribute("codesage.status", "failed")
+                    mark_span_error(span, "failed")
+                    mark_span_error(receive_span, "failed")
+                    raise
+                finally:
+                    reset_execution_span(execution_span_token)
     finally:
         reset_evaluation_context(evaluation_token)
 

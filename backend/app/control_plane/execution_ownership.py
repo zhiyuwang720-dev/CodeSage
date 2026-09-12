@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
 from app.contracts.review_execution import ExecutionContext, ReviewRunIdentity
-from app.infrastructure.observability.tracing import get_tracer, span_attributes
+from app.infrastructure.observability.tracing import get_tracer, mark_span_ok, span_attributes
 
 
 LEASE_SECONDS = 20
@@ -215,6 +215,7 @@ class ReviewExecutionOwnership:
         claim_span.set_attribute("codesage.execution_attempt_id", str(row.attempt_id))
         claim_span.set_attribute("codesage.lease_epoch", int(row.lease_epoch))
         claim_span.set_attribute("codesage.status", "claimed")
+        mark_span_ok(claim_span)
         return ExecutionLease(
             task_id=task_id,
             attempt_id=row.attempt_id,

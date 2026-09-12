@@ -77,6 +77,11 @@ async def test_t02_business_attempt_is_the_only_model_attempt(model_harness) -> 
     assert llm_spans[0].parent.span_id == attempt_span.context.span_id, "litellm_request 未挂到业务 attempt"
     assert dict(attempts[0].attributes).get("codesage.model_attempt_id") == attempt_id
     assert dict(attempts[0].attributes).get("codesage.retry_owner") == "litellm_sdk"
+    attempt_pid = dict(attempts[0].attributes).get("codesage.provider_request_id")
+    llm_pid = dict(llm_spans[0].attributes).get("codesage.provider_request_id")
+    assert attempt_pid, "业务 model.attempt 缺少 provider_request_id"
+    assert attempt_pid == llm_pid, "业务 attempt 与 SDK span 的 provider_request_id 不一致"
+    assert result["provider_request_id"] == attempt_pid, "LLMResponse 与 span 的 provider_request_id 不一致"
     assert admissions, "admission span 缺失"
     assert all(
         s.parent is not None and s.parent.span_id == attempt_span.context.span_id for s in admissions

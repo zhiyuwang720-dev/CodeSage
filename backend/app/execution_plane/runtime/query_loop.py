@@ -49,8 +49,13 @@ from app.tool_gateway.search import TOOL_SEARCH_TOOL_NAME
 from app.infrastructure.observability.metrics import record_model_retry
 from app.infrastructure.observability.tracing import (
     bind_observability_context,
+    business_span,
     get_meter,
     get_tracer,
+    mark_span_cancelled,
+    mark_span_deferred,
+    mark_span_error,
+    mark_span_ok,
     reset_observability_context,
     span_attributes,
 )
@@ -122,9 +127,7 @@ class QueryLoop:
         self._terminal_action_nudge_limit = max(0, int(terminal_action_nudge_limit or 0))
         self._terminal_action_nudge_message = str(terminal_action_nudge_message or "").strip() or None
 
-    @get_tracer().start_as_current_span(
-        "harness.turn", attributes={"openinference.span.kind": "CHAIN"}
-    )
+    @business_span("harness.turn", kind="CHAIN")
     async def run_turn(self, *, session_id: str, model_name: str) -> TurnExecutionResult:
         trace.get_current_span().set_attributes(
             span_attributes(session_id=session_id, model=model_name)
@@ -251,14 +254,16 @@ class QueryLoop:
                         attempt_id=attempt_id,
                     )
                     attempt_span.set_attribute("codesage.status", "committed")
+                    mark_span_ok(attempt_span)
                     break
                 except AuditSessionPersistenceError as exc:
                     attempt_span.set_attribute("codesage.status", "tombstone")
                     attempt_span.set_attribute("codesage.error_kind", "persistence_error")
                     attempt_span.record_exception(exc)
+                    mark_span_error(attempt_span, "persistence_error")
                     raise
                 except asyncio.CancelledError:
-                    attempt_span.set_attribute("codesage.status", "tombstone")
+                    mark_span_cancelled(attempt_span, "user_cancel")
                     attempt_span.set_attribute("codesage.error_kind", "cancelled")
                     raise
                 except Exception as exc:
@@ -270,6 +275,11 @@ class QueryLoop:
                     attempt_span.set_attribute("codesage.status", attempt_status)
                     attempt_span.set_attribute("codesage.error_kind", error_kind)
                     attempt_span.record_exception(exc)
+                    if attempt_status == "superseded":
+                        # 仍会重试，不是最终失败。
+                        mark_span_deferred(attempt_span, "superseded")
+                    else:
+                        mark_span_error(attempt_span, error_kind)
                     self._session_store.create_checkpoint(
                         session_id=session_id,
                         turn_id=turn_id,

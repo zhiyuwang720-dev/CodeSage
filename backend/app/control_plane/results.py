@@ -19,7 +19,13 @@ from app.control_plane.execution_ownership import (
     review_execution_ownership,
 )
 from app.infrastructure.persistence.stage_store import audit_stage_store
-from app.infrastructure.observability.tracing import get_tracer
+from opentelemetry import trace
+
+from app.infrastructure.observability.tracing import (
+    get_tracer,
+    mark_span_error,
+    mark_span_ok,
+)
 
 
 QUICK_REVIEW_STAGES = [
@@ -218,7 +224,11 @@ class ReviewResultService:
             await db.commit()
         except BaseException:
             await db.rollback()
+            mark_span_error(trace.get_current_span(), "commit_failed")
             raise
+        commit_span = trace.get_current_span()
+        commit_span.set_attribute("codesage.status", "terminal_committed")
+        mark_span_ok(commit_span)
         return len(normalized)
 
     @get_tracer().start_as_current_span("result.commit")
@@ -246,6 +256,10 @@ class ReviewResultService:
         task.completed_at = datetime.now(timezone.utc)
         task.error_message = str(error)
         await db.commit()
+        failed_span = trace.get_current_span()
+        failed_span.set_attribute("codesage.status", "failed_committed")
+        failed_span.set_attribute("codesage.error_kind", type(error).__name__ if not isinstance(error, str) else "error")
+        mark_span_ok(failed_span)
 
 
 review_result_service = ReviewResultService()

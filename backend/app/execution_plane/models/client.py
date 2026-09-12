@@ -440,9 +440,19 @@ class SDKModelClient:
             elif scoped.retry_owner == RETRY_OWNER_SDK and attempt == 1:
                 # 复用业务 attempt span：只补 SDK 重试归属，不再新建 span。
                 trace.get_current_span().set_attribute("codesage.retry_owner", scoped.retry_owner)
+            # provider_request_id 在发送前生成，业务 attempt span 与 SDK span 共用；
+            # 供应商返回的 request id 仍由 SDK 写在 gen_ai.response.id 上。
+            provider_request_id = uuid.uuid4().hex[:16]
+            provider_token = None
             try:
+                provider_token = bind_observability_context(provider_request_id=provider_request_id)
+                trace.get_current_span().set_attribute(
+                    "codesage.provider_request_id", provider_request_id
+                )
                 response = await self._send(scoped, request, stream=False)
-                return self._to_llm_response(scoped, request, response)
+                return self._to_llm_response(
+                    scoped, request, response, provider_request_id=provider_request_id
+                )
             except BaseException as exc:  # noqa: BLE001 - 统一映射后重抛
                 mapped = _classify_sdk_exception(exc)
                 if isinstance(mapped, asyncio.CancelledError):
@@ -469,6 +479,8 @@ class SDKModelClient:
                     retry_span.set_attribute("codesage.backoff_seconds", backoff_seconds)
                     await asyncio.sleep(backoff_seconds)
             finally:
+                if provider_token is not None:
+                    reset_observability_context(provider_token)
                 if attempt_context_token is not None:
                     otel_context.detach(attempt_context_token)
                 if correlation_token is not None:
@@ -482,7 +494,13 @@ class SDKModelClient:
         return min(8.0, self.attempt_gap_seconds * (2 ** (attempt - 1)))
 
     @staticmethod
-    def _to_llm_response(config: LLMConfig, request: LLMRequest, response: Any) -> LLMResponse:
+    def _to_llm_response(
+        config: LLMConfig,
+        request: LLMRequest,
+        response: Any,
+        *,
+        provider_request_id: Optional[str] = None,
+    ) -> LLMResponse:
         choices = _as_dictish(response, "choices", []) or []
         if not choices:
             raise ModelResponseError("模型响应缺少 choices 字段")
@@ -531,7 +549,7 @@ class SDKModelClient:
             protocol=config.endpoint_protocol,
             perspective=request.perspective,
             purpose=request.purpose or config.purpose,
-            provider_request_id=_provider_request_id(response),
+            provider_request_id=provider_request_id or _provider_request_id(response),
             response_cost_usd=response_cost_usd,
             response_cost_source=response_cost_source,
         )

@@ -45,7 +45,9 @@ class ModelSpanEnricher(SpanProcessor):
                         attributes["codesage.session_id"] = value
                     else:
                         attributes[f"codesage.{key}"] = value
-            if span_id:
+            # client 在发送前生成的请求 ID 优先；只有缺失时才退回 SDK span id，
+            # 从而保证业务 model.attempt 与 SDK span 使用同一个 provider_request_id。
+            if "codesage.provider_request_id" not in attributes and span_id:
                 attributes["codesage.provider_request_id"] = format(span_id, "016x")
             span.set_attributes(attributes)
         except Exception:  # noqa: BLE001 - 观测失败不影响业务与导出

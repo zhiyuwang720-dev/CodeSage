@@ -10,7 +10,12 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Literal
 from pydantic import BaseModel, ValidationError
 
 from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
-from app.infrastructure.observability.tracing import get_tracer, span_attributes
+from app.infrastructure.observability.tracing import (
+    get_tracer,
+    mark_span_error,
+    mark_span_ok,
+    span_attributes,
+)
 from app.infrastructure.observability.content import capture_to_span
 from app.infrastructure.observability.metrics import record_tool_call
 from app.tool_gateway.permission.runtime import RuntimePermissionRuntime, ToolPermissionDecision
@@ -692,7 +697,9 @@ class ToolGateway:
         self._emit_hook_event(event_name="PostToolUse", context=context, tool_name=request.name)
         context.report_progress(event="tool_complete", message=f"Completed {prepared_call.tool.user_facing_name(prepared_call.parsed_input)}")
         duration_ms = max(0, int((perf_counter() - started) * 1000))
-        trace.get_current_span().set_attribute("codesage.status", "completed")
+        completed_span = trace.get_current_span()
+        completed_span.set_attribute("codesage.status", "completed")
+        mark_span_ok(completed_span)
         output_payload = dict(result.output_payload or {})
         if result.context_modifier is not None:
             output_payload.setdefault("context_modifier", dict(result.context_modifier))
@@ -832,8 +839,11 @@ class ToolGateway:
         lifecycle: dict[str, Any] | None = None,
     ) -> ToolExecutionRecord:
         duration_ms = max(0, int((perf_counter() - started) * 1000))
-        trace.get_current_span().set_attribute("codesage.status", status)
-        trace.get_current_span().set_attribute("codesage.error", True)
+        failed_span = trace.get_current_span()
+        failed_span.set_attribute("codesage.status", status)
+        failed_span.set_attribute("codesage.error", True)
+        if str(status) != "cancelled":
+            mark_span_error(failed_span, str(status))
         result = ToolExecutionPayload(
             content=message,
             output_payload=dict(output_payload or {}),
