@@ -6,13 +6,14 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from opentelemetry import trace
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
 from app.contracts.review_execution import ExecutionContext, ReviewRunIdentity
-from app.infrastructure.observability.tracing import get_tracer
+from app.infrastructure.observability.tracing import get_tracer, span_attributes
 
 
 LEASE_SECONDS = 20
@@ -177,6 +178,10 @@ class ReviewExecutionOwnership:
         delivery_id: str,
         lease_seconds: int = LEASE_SECONDS,
     ) -> ExecutionLease:
+        claim_span = trace.get_current_span()
+        claim_span.set_attributes(
+            span_attributes(task_id=task_id, delivery_id=delivery_id, worker_id=worker_id)
+        )
         row = await _locked_row(db, task_id)
         if row is None:
             await db.rollback()
@@ -206,6 +211,10 @@ class ReviewExecutionOwnership:
         row.last_heartbeat_at = now
         row.lease_expires_at = now + timedelta(seconds=lease_seconds)
         await db.commit()
+        # claim 成功后 execution_attempt_id/lease_epoch 才是有效事实。
+        claim_span.set_attribute("codesage.execution_attempt_id", str(row.attempt_id))
+        claim_span.set_attribute("codesage.lease_epoch", int(row.lease_epoch))
+        claim_span.set_attribute("codesage.status", "claimed")
         return ExecutionLease(
             task_id=task_id,
             attempt_id=row.attempt_id,
