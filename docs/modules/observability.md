@@ -47,3 +47,7 @@ Phoenix compose 的配置和固定版本已经交付，但当前 Docker daemon �
 docker compose -f deploy/observability/docker-compose.yml --profile observability pull
 docker compose -f deploy/observability/docker-compose.yml --profile observability up -d --wait
 ```
+
+## Plan 20 迁移补充（2026-09-12）
+
+Plan 20 完成后，本地 Trace 文件写入改为 BatchSpanProcessor；新增统一关联上下文、JSON 日志、集中式 Metrics、内容产物与脱敏、离线诊断 CLI、严格价格目录和显式付费 smoke。具体架构、命令、测试映射和当前已知边界见 [Plan 20 实施说明](plan20-observability-diagnostics.md)。
