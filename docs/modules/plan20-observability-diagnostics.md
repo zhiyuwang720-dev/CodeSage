@@ -123,6 +123,7 @@ python -m app.diagnostics smoke `
 | A02 | L0/L1 | `test_a02_retry_and_context.py` | 上下文属性、真实 HTTP 计数、retry/backoff/attempt Span |
 | A03-A07 | L0/L1 | `test_a03_a07_usage.py` | usage 分层、缺失/零、缓存、reasoning、Anthropic/OpenAI/DeepSeek |
 | A08-A09 | L0 | `test_a08_a09_pricing.py` | 0.00104 oracle、有效区间、冲突、严格匹配、价格目录 hash |
+| A08 | L1 | `test_a08_catalog_cost_fallback.py` | SDK 无成本时冻结目录兜底、数值精确、未知模型不猜测 |
 | A10-A13 | L0/L1 | `test_a10_a13_content.py` | capture 开关、脱敏、限额、quota、完整性、死锁回归 |
 | A19 | L0 | `test_a10_a13_content.py` | finding filter/merge provenance |
 | A20-A22 | L0/L1 | `test_a20_a22_metrics.py` | counter 差分、重启、cohort、生成速度、百分位 |
@@ -141,16 +142,19 @@ python -m app.diagnostics smoke `
 
 `backend/.acceptance-artifacts/plan20/20260912T023716Z-c6c938d0-l3/`（首轮，响应内容捕获失败）
 `backend/.acceptance-artifacts/plan20/20260912T033000Z-worktree-l3/`（修复后复验，Phoenix `model_response.capture_status=captured`）
+`backend/.acceptance-artifacts/plan20/20260912T035200Z-price-verified-l3/`（成本核对通过：`status=passed`，`estimated_cost=0.00007472239 USD`）
 
 本地 Phoenix 与 A29 证据：
 
 - A26 分页：`backend/.acceptance-artifacts/plan20/phoenix-local/evidence/a26/phoenix_pagination.json`
 - A29 开销：`backend/.acceptance-artifacts/plan20/a29-local/evidence/a29/summary.json`
 - Plan 20 全量套件：`backend/.acceptance-artifacts/plan20/suite-local/`
+- Plan 20 全量套件（44 passed）：`backend/.acceptance-artifacts/plan20/suite-final/`
 
 ## 4. 价格目录配置指引
 
-真实 smoke 的可解释成本依赖本地价格目录，而不是 LiteLLM 内置表。目录格式为 JSONL，每行一条：
+真实 smoke 的可解释成本依赖本地价格目录，而不是 LiteLLM 内置表。仓库已配置 `backend/config/prices.jsonl`（Paratera DeepSeek-V4-Flash-0731，2026-09-12 生效），格式为 JSONL，每行一条：
+
 
 ```json
 {"schema_version":1,"price_id":"<provider>-<model>-<date>","provider":"openai","endpoint_id":"https://llmapi.paratera.com/v1","model":"DeepSeek-V4-Flash-0731","aliases":["DeepSeek-V4-Flash"],"currency":"USD","effective_from":"2026-09-12T00:00:00Z","input_per_million":"<in>","cache_read_per_million":"0","cache_write_per_million":"0","output_per_million":"<out>","source":"<可信来源，例如 paratera-official>","version":"<版本>"}
@@ -170,8 +174,10 @@ python -m app.diagnostics pricing sync --catalog prices.jsonl --output phoenix-p
 
 - 当前真实网关模型：`DeepSeek-V4-Flash-0731`。
 - 真实 smoke 已验证内容与 usage：97 input / 40 output / 137 total；返回内容 `CODESAGE_SMOKE_OK`。
-- 价格来源调查（2026-09-12）结论：网关 `/v1/models` 只有 `id/object/created/owned_by`，无价格字段；`/model/info`、`/model_group/info`、`/spend/calculate`、`/cost/estimate` 对当前虚拟 key 均返回 403（仅允许 `llm_api_routes`）；`/public/litellm_model_cost_map` 是公开通用表，只有第三方 provider 键，没有 Paratera 专属 `deepseek-v4-flash-0731` 价格。响应头也没有 `x-litellm-response-cost`，只有累计 `x-litellm-key-spend`，无法用于单次核验。
-- 因此本地暂不写入 `prices.jsonl`，避免编造价格；成本状态保持 `price_pending`。拿到可信价格来源后，用 `python -m app.diagnostics pricing doctor --catalog prices.jsonl --provider openai --endpoint-id https://llmapi.paratera.com/v1 --model DeepSeek-V4-Flash-0731` 校验，再重跑 smoke 完成成本验收。
+- 价格已落地：Paratera 官方价与官网一致，CNY 每百万 token 输入（缓存命中）0.04 / 输入（未命中）2 / 输出 8，按 fx 7.2 折算为 USD 0.00556 / 0.27778 / 1.11111，写入 `backend/config/prices.jsonl`。
+- SDK 未返回 `response_cost` 时，`SDKModelClient._resolve_response_cost` 用该冻结目录做 provider/endpoint/model/生效窗口精确匹配兜底；命中则填 `response_cost_usd` 并标 `response_cost_source=frozen_catalog:<price_id>`，匹配不上或 token 类别缺失时保持 unknown，不猜测。
+- 真实 smoke（run `smoke-deepseek-public-v1-160ecd16fdf147669fd89ac9455202ef`）`status=passed`：内容 `CODESAGE_SMOKE_OK`，97 in / 43 out / 140 total，`estimated_cost=0.00007472239 USD`，低于 0.02 USD 授权预算。
+- 网关侧仍无价格 API（`/model/info`、`/model_group/info`、`/spend/calculate`、`/cost/estimate` 对虚拟 key 403；`/public/litellm_model_cost_map` 无 Paratera 专属价），本目录是可解释的模型侧核验来源，不宣称替代供应商结算单。
 - Phoenix 已在根 compose 的 `codesage-phoenix-1`（`http://127.0.0.1:6006`）复验：真实 smoke Trace 可见单一 `litellm_request` Span，OpenInference usage 字段齐全，`model_request`/`model_response` 均为 `captured`；A26 分页对 15 Span 穷尽去重通过。
 - A29 已执行完毕：off/on 各 3 次 × 20 次真实 SDK 调用；只保留原始测量，不声明提速门槛。
 - 未启用 provider 分支保持 `unverified`，不得宣称全 provider 支持。
