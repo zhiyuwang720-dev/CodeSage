@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "internal_consumers_deadline": "22B_verified",
+  "mappings": [
+    {"old":"app.control_plane.review_inputs","new":"app.nodes.pr_review.application.inputs","callers":"API, PR execution, tests","removal":"22B"},
+    {"old":"app.control_plane.review_policy","new":"app.nodes.pr_review.application.policy","callers":"PR dispatcher, tests","removal":"22B"},
+    {"old":"app.control_plane.results","new":"app.nodes.pr_review.application.results","callers":"PR execution, tests","removal":"22B"},
+    {"old":"app.execution_plane.review","new":"app.nodes.pr_review.application","callers":"task executor, CLI, tests","removal":"22B"},
+    {"old":"app.domains.pr_review","new":"app.nodes.pr_review.domain","callers":"PR application, endpoints, tests","removal":"22B"},
+    {"old":"app.tool_gateway.pr_review","new":"app.nodes.pr_review.tools.pr_review","callers":"PR dispatcher, tests","removal":"22B"},
+    {"old":"app.tool_gateway.finalize_review","new":"app.nodes.pr_review.tools.finalize_review","callers":"PR dispatcher, tests","removal":"22B"},
+    {"old":"app.execution_plane.runtime","new":"app.node_runtime.harness","callers":"PR dispatcher, runtime tests","removal":"22B"},
+    {"old":"app.execution_plane.models","new":"app.node_runtime.llm","callers":"bootstrap, PR execution, diagnostics","removal":"22B"},
+    {"old":"app.execution_plane.session","new":"app.node_runtime.sessions","callers":"runtime adapters, tests","removal":"22B"},
+    {"old":"app.tool_gateway","new":"app.node_runtime.tool_gateway","callers":"runtime, services, tests","removal":"22B"},
+    {"old":"app.control_plane.execution_ownership","new":"app.control_plane.scale_ops.ownership","callers":"worker, lifecycle, results","removal":"22B"}
+  ]
+}
