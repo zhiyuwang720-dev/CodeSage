@@ -74,6 +74,9 @@ export interface AgentTask {
   recovered_candidates_count?: number;
   handoff_ready?: boolean;
   recovered_candidates?: RecoveredCandidate[];
+  review_mode?: "diff_only" | "repository_required" | null;
+  review_environment?: string | null;
+  review_limitations?: string[];
 }
 
 export interface RecoveredCandidate {

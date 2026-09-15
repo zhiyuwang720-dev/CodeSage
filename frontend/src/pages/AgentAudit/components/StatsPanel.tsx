@@ -174,6 +174,8 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
       description: '当前没有已确认的审计发现或恢复候选。',
     },
   }[task.finding_outcome || 'none'];
+  const reviewModeLabel = task.review_mode === 'repository_required' ? '固定源码快照' : '仅 Diff';
+  const reviewEnvironmentFailed = task.review_environment === 'failed';
 
   return (
     <div className="space-y-3">
@@ -244,6 +246,35 @@ export const StatsPanel = memo(function StatsPanel({ task, findings }: StatsPane
           )}
         </div>
       </div>
+
+      {task.review_mode ? (
+        <div className="rounded-[18px] border border-[#dfe7e3] bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-foreground">审查上下文</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                输入模式与 Worker 实际可用环境
+              </div>
+            </div>
+            <Badge className={reviewEnvironmentFailed
+              ? "border border-rose-500/30 bg-rose-500/15 text-rose-700"
+              : "border border-sky-500/30 bg-sky-500/15 text-sky-700"}
+            >
+              {reviewModeLabel}
+            </Badge>
+          </div>
+          <div className="mt-3 text-xs text-muted-foreground">
+            环境状态：<span className={reviewEnvironmentFailed ? "font-mono text-rose-700" : "font-mono text-foreground"}>
+              {task.review_environment || 'unknown'}
+            </span>
+          </div>
+          {task.review_limitations?.length ? (
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-700">
+              {task.review_limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="rounded-[18px] border border-[#dfe7e3] bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
