@@ -11,8 +11,8 @@ from typing import Any
 
 from opentelemetry import trace
 
-from app.domains.pr_review.prompts import build_followup_prompt
-from app.domains.pr_review.orchestrator import PERSPECTIVE_PROMPTS, TOOL_MATRICES
+from app.nodes.pr_review.domain.prompts import build_followup_prompt
+from app.nodes.pr_review.domain.orchestrator import PERSPECTIVE_PROMPTS, TOOL_MATRICES
 from app.infrastructure.observability.tracing import business_span, get_tracer, span_attributes
 
 REVIEW_FINALIZER_PROMPTS = [
@@ -148,7 +148,7 @@ class RuntimePerspectiveDispatcher:
             )
         )
         from app.execution_plane.runtime.bridge import RuntimeBridge, RuntimeCompletionMode
-        from app.tool_gateway.finalize_review import FinalizeReviewTool
+        from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 
         spec = build_review_perspective_spec(perspective)
         review_context = next(

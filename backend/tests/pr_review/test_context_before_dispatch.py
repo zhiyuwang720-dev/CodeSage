@@ -2,9 +2,9 @@
 import asyncio
 import json
 
-from app.execution_plane.review.command_router import run_review_pipeline
-from app.domains.pr_review.orchestrator import ReviewOrchestrator
-from app.execution_plane.review.runtime_dispatcher import build_review_recon_payload
+from app.nodes.pr_review.application.command_router import run_review_pipeline
+from app.nodes.pr_review.domain.orchestrator import ReviewOrchestrator
+from app.nodes.pr_review.application.runtime_dispatcher import build_review_recon_payload
 
 DIFF = """diff --git a/utils.py b/utils.py
 --- a/utils.py

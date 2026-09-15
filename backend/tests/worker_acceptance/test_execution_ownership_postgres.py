@@ -10,7 +10,7 @@ from app.db.session import async_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
-from app.contracts.review_execution import ReviewRunIdentity, sha256_bytes
+from app.nodes.pr_review.contracts.review_execution import ReviewRunIdentity, sha256_bytes
 from app.control_plane.execution_ownership import (
     ActiveLeaseError,
     CancelRequestedError,

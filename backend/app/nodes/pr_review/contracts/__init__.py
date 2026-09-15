@@ -1,0 +1,1 @@
+"""PR review domain contracts."""

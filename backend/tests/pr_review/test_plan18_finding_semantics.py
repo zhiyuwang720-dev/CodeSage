@@ -1,6 +1,6 @@
 from app.models.agent_task import AgentFinding
-from app.contracts.final_review_contract import ReviewFinding
-from app.control_plane.results import ReviewResultService
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
+from app.nodes.pr_review.application.results import ReviewResultService
 
 
 def _finding(category: str) -> ReviewFinding:

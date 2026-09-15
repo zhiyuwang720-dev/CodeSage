@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
 from app.contracts.checkpoint import StageStatus
-from app.contracts.final_review_contract import ReviewFinding
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
 from app.control_plane.execution_ownership import (
     CancelRequestedError,
@@ -18,7 +18,7 @@ from app.control_plane.execution_ownership import (
     StaleExecutionOwnerError,
     review_execution_ownership,
 )
-from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.nodes.pr_review.persistence.stage_store import audit_stage_store
 from opentelemetry import trace
 
 from app.infrastructure.observability.tracing import (

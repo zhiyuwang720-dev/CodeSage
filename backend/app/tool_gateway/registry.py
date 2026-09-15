@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.skill.tool import RuntimeSkillTool
-from app.tool_gateway.finalize_review import FinalizeReviewTool
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 from app.tool_gateway.interactive.ask_user import AskUserRuntimeTool
 from app.tool_gateway.interactive.plan_mode import EnterPlanModeRuntimeTool, ExitPlanModeRuntimeTool
 from app.tool_gateway.interactive.todo import TodoWriteRuntimeTool

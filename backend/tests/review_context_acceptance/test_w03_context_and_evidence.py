@@ -4,20 +4,20 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.contracts.final_review_contract import FinalReviewPayload
+from app.nodes.pr_review.contracts.final_review import FinalReviewPayload
 from app.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.contracts.review_context import ReviewCapabilities
-from app.contracts.review_execution import ReviewRunIdentity, sha256_bytes
+from app.nodes.pr_review.contracts.review_context import ReviewCapabilities
+from app.nodes.pr_review.contracts.review_execution import ReviewRunIdentity, sha256_bytes
 from app.contracts.tools import ToolExecutionContext
-from app.domains.pr_review.diff_index import parse_unified_diff
-from app.execution_plane.review.context_builder import (
+from app.nodes.pr_review.domain.diff_index import parse_unified_diff
+from app.nodes.pr_review.application.context_builder import (
     assert_request_budget,
     build_review_context,
 )
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
 from app.tool_gateway.codec import build_runtime_model_messages
-from app.tool_gateway.finalize_review import FinalizeReviewTool
-from app.tool_gateway.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
+from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
 
 
 DIFF = """diff --git a/app.py b/app.py

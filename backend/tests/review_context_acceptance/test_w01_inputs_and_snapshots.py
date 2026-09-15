@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.control_plane.review_inputs import (
+from app.nodes.pr_review.application.inputs import (
     PreparedReviewInput,
     ReviewInputError,
     preflight_review_input,
     prepare_review_input,
 )
-from app.contracts.review_execution import ArtifactRef
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef
 from app.infrastructure.repositories.snapshots import (
     GitSnapshotReader,
     SnapshotError,

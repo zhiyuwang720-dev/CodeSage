@@ -12,15 +12,15 @@ import json
 import uuid
 from typing import Any
 
-from app.domains.pr_review.context_collector import build_review_context
-from app.domains.pr_review.git_providers import provider_for_input
-from app.domains.pr_review.models import ImportedPr, ReviewComment
-from app.domains.pr_review.orchestrator import ReviewOrchestrator
-from app.domains.pr_review.paths import review_path
-from app.domains.pr_review.plain_diff_importer import import_plain_diff
-from app.domains.pr_review.rules import run_rules
-from app.domains.pr_review.synthesizer import finding_to_comment, synthesize
-from app.contracts.final_review_contract import ReviewFinding
+from app.nodes.pr_review.domain.context_collector import build_review_context
+from app.nodes.pr_review.domain.git_providers import provider_for_input
+from app.nodes.pr_review.domain.models import ImportedPr, ReviewComment
+from app.nodes.pr_review.domain.orchestrator import ReviewOrchestrator
+from app.nodes.pr_review.domain.paths import review_path
+from app.nodes.pr_review.domain.plain_diff_importer import import_plain_diff
+from app.nodes.pr_review.domain.rules import run_rules
+from app.nodes.pr_review.domain.synthesizer import finding_to_comment, synthesize
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
 
 
 class ReviewResult:
@@ -237,9 +237,9 @@ async def run_review_pipeline_async(
             await maybe_awaitable
 
     if dispatcher is None:
-        from app.contracts.review_execution import sha256_bytes
-        from app.domains.pr_review.diff_index import parse_unified_diff
-        from app.tool_gateway.pr_review import (
+        from app.nodes.pr_review.contracts.review_execution import sha256_bytes
+        from app.nodes.pr_review.domain.diff_index import parse_unified_diff
+        from app.nodes.pr_review.tools.pr_review import (
             PrReviewToolContext,
             build_pr_review_tool_catalog,
         )

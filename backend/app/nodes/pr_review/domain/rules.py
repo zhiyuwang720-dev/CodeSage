@@ -10,8 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from app.domains.pr_review.diff_lines import parse_added_lines
-from app.contracts.final_review_contract import ReviewFinding
+from app.nodes.pr_review.domain.diff_lines import parse_added_lines
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
 
 # evoagent LocalRuleReviewer 原始 6 条 + 扩充; (正则, 严重度, 类别, 标题, 描述, 建议, 测试提示)
 _RULE_TUPLE = tuple[

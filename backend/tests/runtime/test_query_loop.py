@@ -24,7 +24,7 @@ from app.contracts.query_state import QueryLoopState
 from app.execution_plane.runtime.runner import RuntimeRunner
 from app.execution_plane.session.store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.skill.tool import RuntimeSkillTool
-from app.tool_gateway.finalize_review import FinalizeReviewTool
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 from app.tool_gateway.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
 
 

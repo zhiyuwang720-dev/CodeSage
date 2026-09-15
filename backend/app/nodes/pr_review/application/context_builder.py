@@ -6,14 +6,14 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from app.contracts.review_context import (
+from app.nodes.pr_review.contracts.review_context import (
     ReviewCapabilities,
     ReviewContextManifest,
     RepositorySnapshotRef,
     stable_hash,
 )
-from app.contracts.review_execution import ArtifactRef, ReviewRunIdentity
-from app.domains.pr_review.diff_index import DiffIndex
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef, ReviewRunIdentity
+from app.nodes.pr_review.domain.diff_index import DiffIndex
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
 
 

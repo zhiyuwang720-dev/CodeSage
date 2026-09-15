@@ -53,13 +53,13 @@ from app.execution_plane.task_executor import (
 from app.services.git_ssh_service import GitSSHOperations
 from app.services.skill.file_service import SkillFileService
 from app.contracts.checkpoint import StageStatus
-from app.domains.pr_review.orchestrator import PERSPECTIVES
-from app.control_plane.results import QUICK_REVIEW_STAGES
+from app.nodes.pr_review.domain.orchestrator import PERSPECTIVES
+from app.nodes.pr_review.application.results import QUICK_REVIEW_STAGES
 from app.control_plane.execution_ownership import (
     current_execution_lease,
     review_execution_ownership,
 )
-from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.nodes.pr_review.persistence.stage_store import audit_stage_store
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -538,7 +538,7 @@ FLUSH_INTERVAL_S = 2.0
 
 def _build_pr_review_event_sink(*args, **kwargs):
     """Deprecated adapter; event mapping is owned by the application service."""
-    from app.execution_plane.review.execution_events import build_review_event_sink
+    from app.nodes.pr_review.application.execution_events import build_review_event_sink
 
     return build_review_event_sink(*args, **kwargs)
 

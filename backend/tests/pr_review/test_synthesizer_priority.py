@@ -2,9 +2,9 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domains.pr_review.synthesizer import finding_to_comment, merge_dedup, rank_and_limit, synthesize
-from app.contracts.final_review_contract import ReviewFinding
-from app.contracts.review_execution import StageResult
+from app.nodes.pr_review.domain.synthesizer import finding_to_comment, merge_dedup, rank_and_limit, synthesize
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
+from app.nodes.pr_review.contracts.review_execution import StageResult
 
 
 def _finding(source: str, severity: str, line: int = 3, confidence: float = 0.8, category: str = "security") -> dict:

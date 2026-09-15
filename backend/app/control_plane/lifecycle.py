@@ -11,9 +11,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models.agent_task import AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
-from app.control_plane.review_policy import build_review_compatibility_config
+from app.nodes.pr_review.application.policy import build_review_compatibility_config
 from app.control_plane.execution_ownership import review_execution_ownership
-from app.control_plane.review_inputs import initialize_or_resume_review_input
+from app.nodes.pr_review.application.inputs import initialize_or_resume_review_input
 
 
 class TaskLifecycleError(RuntimeError):

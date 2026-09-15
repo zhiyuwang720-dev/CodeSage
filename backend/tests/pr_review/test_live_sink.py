@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from io import StringIO
 
-from app.execution_plane.review.live_sink import LiveReviewSink, display_width, render_frame
+from app.nodes.pr_review.application.live_sink import LiveReviewSink, display_width, render_frame
 
 
 def _pane(**kw):
@@ -171,7 +171,7 @@ async def test_dispatcher_emits_session_start(monkeypatch):
     from types import SimpleNamespace
 
     import app.execution_plane.runtime.bridge as bridge_mod
-    from app.execution_plane.review.runtime_dispatcher import RuntimePerspectiveDispatcher
+    from app.nodes.pr_review.application.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class Recorder:
         def __init__(self) -> None:
@@ -237,7 +237,7 @@ async def test_dispatcher_emits_session_start(monkeypatch):
 
 def _run_cli_main(monkeypatch, tmp_path, *extra_args: str):
     import app.cli as cli
-    from app.execution_plane.review import command_router
+    from app.nodes.pr_review.application import command_router
 
     captured: dict = {}
 
@@ -288,7 +288,7 @@ class _FakeLiveSink:
 
 
 def test_cli_live_on_tty_injects_live_sink(monkeypatch, tmp_path):
-    monkeypatch.setattr("app.execution_plane.review.live_sink.LiveReviewSink", _FakeLiveSink)
+    monkeypatch.setattr("app.nodes.pr_review.application.live_sink.LiveReviewSink", _FakeLiveSink)
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     captured = _run_cli_main(monkeypatch, tmp_path, "--live")
     assert isinstance(captured["event_sink"], _FakeLiveSink)
@@ -298,7 +298,7 @@ def test_cli_live_on_tty_injects_live_sink(monkeypatch, tmp_path):
 
 
 def test_cli_live_falls_back_to_progress_when_piped(monkeypatch, tmp_path):
-    from app.execution_plane.review.progress import RuntimeProgressSink
+    from app.nodes.pr_review.application.progress import RuntimeProgressSink
 
     # 不 patch isatty: pytest 捕获下 stderr 非 tty
     captured = _run_cli_main(monkeypatch, tmp_path, "--live")
@@ -323,7 +323,7 @@ def test_cli_default_piped_silent(monkeypatch, tmp_path):
 
 
 async def test_streaming_option_toggles_and_restores_setting(monkeypatch):
-    import app.execution_plane.review.command_router as cr
+    import app.nodes.pr_review.application.command_router as cr
     from app.core.config import settings
 
     class FakeDispatcher:

@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.contracts.checkpoint import AuditStage, StageStatus
-from app.infrastructure.persistence.stage_store import AuditStageStoreImpl
+from app.nodes.pr_review.persistence.stage_store import AuditStageStoreImpl
 
 store = AuditStageStoreImpl()
 
@@ -171,7 +171,7 @@ async def test_sink_writes_review_stage_on_perspective_done(db_session, monkeypa
         return True
 
     monkeypatch.setattr(
-        "app.infrastructure.persistence.stage_store._guard_managed_write",
+        "app.nodes.pr_review.persistence.stage_store._guard_managed_write",
         allow_test_write,
     )
 

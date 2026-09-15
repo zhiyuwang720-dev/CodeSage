@@ -11,7 +11,7 @@ from uuid import uuid4
 from arq.connections import RedisSettings
 from arq.worker import func
 
-from app.execution_plane.review.execution import QuickReviewDependencies, execute_quick_review
+from app.nodes.pr_review.application.execution import QuickReviewDependencies, execute_quick_review
 from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
 from app.worker.agent_worker import execute_agent_task_job
 

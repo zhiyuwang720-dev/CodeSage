@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.contracts.final_review_contract import ReviewFinding
+from app.nodes.pr_review.contracts.final_review import ReviewFinding
 
 
 Sha256 = str

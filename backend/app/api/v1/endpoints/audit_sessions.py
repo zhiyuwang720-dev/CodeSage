@@ -38,7 +38,7 @@ from app.contracts.checkpoint import StageStatus
 from app.execution_plane.runtime.bridge import RuntimeBridge
 from app.execution_plane.models.service import LLMService
 from app.tool_gateway.permission.guardrails import is_guardrails_enabled
-from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.nodes.pr_review.persistence.stage_store import audit_stage_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

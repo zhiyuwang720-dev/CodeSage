@@ -8,11 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
-from app.contracts.review_execution import sha256_bytes
+from app.nodes.pr_review.contracts.review_execution import sha256_bytes
 from app.contracts.tools import RuntimeTool, ToolExecutionContext
-from app.domains.pr_review.diff_index import parse_unified_diff
+from app.nodes.pr_review.domain.diff_index import parse_unified_diff
 from app.infrastructure.repositories.snapshots import GitSnapshotReader, create_snapshot_ref
-from app.tool_gateway.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
+from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
 from app.tool_gateway.runtime import ToolGateway, ToolRegistry
 
 

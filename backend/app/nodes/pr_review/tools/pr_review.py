@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.models import ToolExecutionPayload
 from app.contracts.tools import RuntimeTool, ToolExecutionContext
-from app.domains.pr_review.diff_index import DiffFileIndex, DiffHunkIndex, DiffIndex
+from app.nodes.pr_review.domain.diff_index import DiffFileIndex, DiffHunkIndex, DiffIndex
 from app.infrastructure.repositories.snapshots import GitSnapshotReader, SnapshotError, validate_repository_path
 
 

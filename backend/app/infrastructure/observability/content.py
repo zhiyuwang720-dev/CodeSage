@@ -18,7 +18,7 @@ import os
 from contextlib import contextmanager
 from opentelemetry.trace import Span
 
-from app.contracts.review_execution import ArtifactRef
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef
 from app.core.config import settings
 from app.infrastructure.observability.privacy import redact_text, sanitize
 from app.infrastructure.observability.tracing import get_observability_context

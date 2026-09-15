@@ -12,19 +12,19 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from app.domains.pr_review.prompts import (
+from app.nodes.pr_review.domain.prompts import (
     REVIEW_ARCHITECTURE_PROMPT,
     REVIEW_QUALITY_PROMPT,
     REVIEW_SECURITY_PROMPT,
     build_followup_prompt,
 )
-from app.domains.pr_review.rules import run_rules
-from app.domains.pr_review.synthesizer import (
+from app.nodes.pr_review.domain.rules import run_rules
+from app.nodes.pr_review.domain.synthesizer import (
     SynthesisResult,
     finding_to_comment,
     synthesize,
 )
-from app.contracts.final_review_contract import (
+from app.nodes.pr_review.contracts.final_review import (
     SEVERITY_RANK,
     ReviewFinding,
 )

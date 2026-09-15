@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from app.contracts.review_context import (
+from app.nodes.pr_review.contracts.review_context import (
     DiffBasis,
     RepositorySnapshotRef,
     snapshot_identity_payload,

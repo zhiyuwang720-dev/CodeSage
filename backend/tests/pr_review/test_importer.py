@@ -1,6 +1,6 @@
 """spec §6 test_importer: 本地 fixture 仓库 clone 成功, 持久化目录结构正确。"""
-from app.domains.pr_review.diff_importer import import_github_pr
-from app.domains.pr_review.paths import diff_path, repo_dir
+from app.nodes.pr_review.domain.diff_importer import import_github_pr
+from app.nodes.pr_review.domain.paths import diff_path, repo_dir
 from tests.pr_review.conftest import git
 
 

@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.domains.pr_review.orchestrator import ReviewOrchestrator
-from app.execution_plane.review.runtime_dispatcher import PerspectiveResumeIncompleteError
+from app.nodes.pr_review.domain.orchestrator import ReviewOrchestrator
+from app.nodes.pr_review.application.runtime_dispatcher import PerspectiveResumeIncompleteError
 
 # 新增行 2..3(供 findings 落在 enforce_lines 保留范围)
 DIFF = """diff --git a/a.py b/a.py
@@ -45,7 +45,7 @@ def _ctx() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_dispatcher_rejects_incomplete_fallback_payload(monkeypatch):
     """RuntimePerspectiveDispatcher 对 requires_retry 兜底 payload 抛错, 不发 perspective_done。"""
-    from app.execution_plane.review.runtime_dispatcher import RuntimePerspectiveDispatcher
+    from app.nodes.pr_review.application.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class _FakeBridge:
         def __init__(self, **kwargs):

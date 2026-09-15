@@ -14,7 +14,7 @@ from app.contracts.session_state import (
 )
 from app.execution_plane.session.store import AuditSessionPersistenceError, AuditSessionStore
 from app.contracts.interaction_runtime import InteractionRuntime
-from app.infrastructure.persistence.stage_store import AuditStageStoreImpl, audit_stage_store
+from app.nodes.pr_review.persistence.stage_store import AuditStageStoreImpl, audit_stage_store
 
 __all__ = [
     "AgentRuntimeState",

@@ -22,7 +22,7 @@ from app.execution_plane.runtime.runner import RuntimeRunner
 from app.execution_plane.session.store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.tool_gateway.runtime import ToolGateway, ToolRegistry
-from app.tool_gateway.finalize_review import FinalizeReviewTool
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 from app.tool_gateway.registry import build_runtime_tool_registry
 from app.tool_gateway.codec import (
     ToolMessageFormat,

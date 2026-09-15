@@ -10,24 +10,24 @@ from sqlalchemy.orm import selectinload
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.infrastructure.messaging.event_manager import EventManager
 from app.contracts.checkpoint import StageStatus
-from app.contracts.review_execution import ArtifactRef
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
-from app.execution_plane.review.command_router import run_review_pipeline_async
-from app.execution_plane.review.dependencies import ReviewUseCaseDependencies
-from app.execution_plane.review.execution import current_review_llm_service
-from app.execution_plane.review.execution_events import build_review_event_sink
+from app.nodes.pr_review.application.command_router import run_review_pipeline_async
+from app.nodes.pr_review.application.dependencies import ReviewUseCaseDependencies
+from app.nodes.pr_review.application.execution import current_review_llm_service
+from app.nodes.pr_review.application.execution_events import build_review_event_sink
 from app.control_plane.execution_ownership import (
     CancelRequestedError,
     current_execution_context,
     current_execution_lease,
 )
-from app.control_plane.results import review_result_service
-from app.infrastructure.persistence.stage_store import audit_stage_store
-from app.contracts.review_context import RepositorySnapshotRef, ReviewCapabilities
-from app.domains.pr_review.diff_index import parse_unified_diff
+from app.nodes.pr_review.application.results import review_result_service
+from app.nodes.pr_review.persistence.stage_store import audit_stage_store
+from app.nodes.pr_review.contracts.review_context import RepositorySnapshotRef, ReviewCapabilities
+from app.nodes.pr_review.domain.diff_index import parse_unified_diff
 from app.infrastructure.repositories.snapshots import GitSnapshotReader
-from app.tool_gateway.pr_review import PrReviewToolContext
-from app.execution_plane.review.context_builder import build_review_context
+from app.nodes.pr_review.tools.pr_review import PrReviewToolContext
+from app.nodes.pr_review.application.context_builder import build_review_context
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ async def _resume_state(db, task: AgentTask) -> tuple[dict, dict]:
         raw = dict(stage.state_payload or {}).get("stage_result")
         if not raw:
             raise ValueError(f"恢复阶段缺少 StageResult: review:{perspective}")
-        from app.contracts.review_execution import StageResult
+        from app.nodes.pr_review.contracts.review_execution import StageResult
 
         checkpoint = StageResult.model_validate(raw)
         findings = [item.model_dump(mode="json") for item in checkpoint.findings]

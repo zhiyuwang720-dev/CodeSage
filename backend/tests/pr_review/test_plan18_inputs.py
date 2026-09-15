@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.control_plane.review_inputs import prepare_review_input
+from app.nodes.pr_review.application.inputs import prepare_review_input
 
 
 def _git(repo: Path, *args: str) -> str:

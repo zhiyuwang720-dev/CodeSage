@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.control_plane.results import ReviewResultService
+from app.nodes.pr_review.application.results import ReviewResultService
 from app.models.agent_task import AgentTaskPhase, AgentTaskStatus
 
 

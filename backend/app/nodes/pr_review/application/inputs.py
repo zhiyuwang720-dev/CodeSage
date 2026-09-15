@@ -8,13 +8,13 @@ from typing import Any
 from uuid import uuid4
 
 from app.models.agent_task import AgentTask
-from app.contracts.review_execution import (
+from app.nodes.pr_review.contracts.review_execution import (
     ArtifactRef,
     ReviewRunIdentity,
     build_config_fingerprint,
     sha256_bytes,
 )
-from app.contracts.review_context import (
+from app.nodes.pr_review.contracts.review_context import (
     CONTEXT_POLICY_VERSION,
     DIFF_PARSER_VERSION,
     TOOL_PROFILE_VERSION,

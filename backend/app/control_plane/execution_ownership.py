@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.review_execution import ReviewExecutionRun
-from app.contracts.review_execution import ExecutionContext, ReviewRunIdentity
+from app.nodes.pr_review.contracts.review_execution import ExecutionContext, ReviewRunIdentity
 from app.infrastructure.observability.tracing import get_tracer, mark_span_ok, span_attributes
 
 

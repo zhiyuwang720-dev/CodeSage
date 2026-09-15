@@ -1,11 +1,11 @@
 """spec §6 test_agent_permission_matrix: 各视角只能调用自己矩阵内的工具。"""
 import pytest
 
-from app.domains.pr_review.orchestrator import TOOL_MATRICES
-from app.contracts.review_execution import sha256_bytes
-from app.domains.pr_review.diff_index import parse_unified_diff
+from app.nodes.pr_review.domain.orchestrator import TOOL_MATRICES
+from app.nodes.pr_review.contracts.review_execution import sha256_bytes
+from app.nodes.pr_review.domain.diff_index import parse_unified_diff
 from app.tool_gateway.builder import build_runtime_tool_catalog
-from app.tool_gateway.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
+from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
 from app.tool_gateway.registry import build_runtime_tool_registry
 from tests.pr_review.fake_runtime import build_review_runner, make_session_factory
 

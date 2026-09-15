@@ -5,7 +5,7 @@ import asyncio
 import logging
 from typing import Any
 
-from app.control_plane.results import ReviewResultService, review_result_service
+from app.nodes.pr_review.application.results import ReviewResultService, review_result_service
 
 logger = logging.getLogger(__name__)
 

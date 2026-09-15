@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app.models.checkpoint import AuditStageORM
 from app.models.review_execution import ReviewExecutionRun
 from app.contracts.checkpoint import AuditStage, StageStatus
-from app.contracts.review_execution import ArtifactRef, StageResult
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef, StageResult
 from app.control_plane.execution_ownership import (
     guard_managed_execution_write,
 )

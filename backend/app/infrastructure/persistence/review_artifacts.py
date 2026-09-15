@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from app.contracts.review_execution import ArtifactRef, sha256_bytes
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef, sha256_bytes
 
 
 class ArtifactIntegrityError(ValueError):

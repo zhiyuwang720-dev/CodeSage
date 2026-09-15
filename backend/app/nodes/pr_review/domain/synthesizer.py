@@ -11,8 +11,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.domains.pr_review.diff_lines import added_line_index
-from app.contracts.final_review_contract import (
+from app.nodes.pr_review.domain.diff_lines import added_line_index
+from app.nodes.pr_review.contracts.final_review import (
     PERSPECTIVE_ORDER,
     SEVERITY_RANK,
     ReviewFinding,

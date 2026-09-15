@@ -14,8 +14,8 @@ import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.execution_plane.review.command_router import run_review_pipeline
-from app.domains.pr_review.webhook_guard import webhook_guard
+from app.nodes.pr_review.application.command_router import run_review_pipeline
+from app.nodes.pr_review.domain.webhook_guard import webhook_guard
 
 router = APIRouter()
 

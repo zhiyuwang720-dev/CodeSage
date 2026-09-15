@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.contracts.final_review_contract import (
+from app.nodes.pr_review.contracts.final_review import (
     FinalReviewPayload,
     format_validation_errors,
 )

@@ -27,7 +27,7 @@ from app.infrastructure.observability.tracing import (
 from app.db.session import async_session_factory
 from app.db.session import get_pr_review_sync_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
-from app.contracts.review_execution import ExecutionContext
+from app.nodes.pr_review.contracts.review_execution import ExecutionContext
 from app.control_plane.execution_ownership import (
     ActiveLeaseError,
     CancelRequestedError,
@@ -37,8 +37,8 @@ from app.control_plane.execution_ownership import (
     current_execution_lease,
     current_execution_context,
 )
-from app.control_plane.review_policy import build_review_compatibility_config
-from app.control_plane.review_inputs import (
+from app.nodes.pr_review.application.policy import build_review_compatibility_config
+from app.nodes.pr_review.application.inputs import (
     initialize_or_resume_review_input,
     preflight_review_input,
 )
@@ -117,7 +117,7 @@ async def execute_quick_review(
             # Input can fail before a stable run identity exists.  Persist a
             # recoverable terminal state instead of leaving the task RUNNING.
             if task.status not in {AgentTaskStatus.RUNNING, AgentTaskStatus.COMPLETED, AgentTaskStatus.CANCELLED}:
-                from app.control_plane.results import review_result_service
+                from app.nodes.pr_review.application.results import review_result_service
 
                 code = getattr(exc, "code", "input_invalid")
                 await review_result_service.mark_failed(db, task_id, f"{code}: {exc}")
@@ -143,7 +143,7 @@ async def execute_quick_review(
         task.agent_config = agent_config
         await db.commit()
         if prepared.review_mode == "repository_required" and capabilities.source_status != "available":
-            from app.control_plane.results import review_result_service
+            from app.nodes.pr_review.application.results import review_result_service
 
             error = RuntimeError(
                 f"{capabilities.reason_code or 'source_unavailable'}: "
@@ -234,8 +234,8 @@ async def execute_quick_review(
     if deps.runner is not None:
         review_coro = deps.runner(task_id)
     else:
-        from app.execution_plane.review.dependencies import ReviewUseCaseDependencies
-        from app.execution_plane.review.quick_review import execute_review_use_case
+        from app.nodes.pr_review.application.dependencies import ReviewUseCaseDependencies
+        from app.nodes.pr_review.application.quick_review import execute_review_use_case
 
         review_coro = execute_review_use_case(
             task_id,

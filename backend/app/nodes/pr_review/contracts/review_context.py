@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.contracts.review_execution import ArtifactRef
+from app.nodes.pr_review.contracts.review_execution import ArtifactRef
 
 
 ReviewMode = Literal["diff_only", "repository_required"]

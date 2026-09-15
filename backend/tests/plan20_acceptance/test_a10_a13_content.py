@@ -6,7 +6,7 @@ import json
 import threading
 from pathlib import Path
 
-from app.domains.pr_review.synthesizer import synthesize
+from app.nodes.pr_review.domain.synthesizer import synthesize
 from app.infrastructure.observability.content import (
     CAPTURE_STATUS_CAPTURED,
     CAPTURE_STATUS_DISABLED,

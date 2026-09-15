@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.contracts.review_context import ChangeUnit, DIFF_PARSER_VERSION
+from app.nodes.pr_review.contracts.review_context import ChangeUnit, DIFF_PARSER_VERSION
 
 
 _HUNK = re.compile(

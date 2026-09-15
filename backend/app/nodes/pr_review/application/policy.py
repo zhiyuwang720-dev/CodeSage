@@ -4,8 +4,8 @@ from typing import Any
 
 from app.contracts.model_boundary import MODEL_BOUNDARY_VERSION
 from app.core.config import settings
-from app.domains.pr_review.orchestrator import TOOL_MATRICES
-from app.domains.pr_review.prompts import (
+from app.nodes.pr_review.domain.orchestrator import TOOL_MATRICES
+from app.nodes.pr_review.domain.prompts import (
     REVIEW_ARCHITECTURE_PROMPT,
     REVIEW_QUALITY_PROMPT,
     REVIEW_SECURITY_PROMPT,
