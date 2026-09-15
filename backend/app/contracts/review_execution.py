@@ -74,6 +74,9 @@ class ExecutionContext(BaseModel):
     workspace_root: str = Field(min_length=1)
     artifact_root: str = Field(min_length=1)
     deadline_at: datetime
+    review_mode: Literal["diff_only", "repository_required"] = "diff_only"
+    snapshot_id: str | None = None
+    review_capabilities: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("workspace_root", "artifact_root")
     @classmethod

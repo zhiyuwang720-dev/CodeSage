@@ -60,7 +60,6 @@ async def test_explicit_diff_has_priority_over_url_and_git(tmp_path):
             {
                 "diff_file_path": str(diff),
                 "pr_url": "https://github.com/example/repo/pull/1",
-                "repository_path": str(tmp_path / "missing"),
             }
         ),
         compatibility_config={"flow": "test"},

@@ -38,7 +38,10 @@ from app.control_plane.execution_ownership import (
     current_execution_context,
 )
 from app.control_plane.review_policy import build_review_compatibility_config
-from app.control_plane.review_inputs import initialize_or_resume_review_input
+from app.control_plane.review_inputs import (
+    initialize_or_resume_review_input,
+    preflight_review_input,
+)
 
 
 QuickRunner = Callable[[str], Awaitable[None]]
@@ -117,6 +120,26 @@ async def execute_quick_review(
             )
         except ActiveLeaseError:
             return "already_owned"
+        capabilities = await preflight_review_input(
+            prepared,
+            execution_attempt_id=lease.attempt_id,
+            worker_id=lease.worker_id,
+        )
+        task = await db.get(AgentTask, task_id)
+        agent_config = dict(task.agent_config or {})
+        agent_config["review_execution_capabilities"] = capabilities.model_dump(mode="json")
+        task.agent_config = agent_config
+        await db.commit()
+        if prepared.review_mode == "repository_required" and capabilities.source_status != "available":
+            from app.control_plane.results import review_result_service
+
+            error = RuntimeError(
+                f"{capabilities.reason_code or 'source_unavailable'}: "
+                + "; ".join(capabilities.limitations)
+            )
+            await review_result_service.mark_failed(db, task_id, error, lease=lease)
+            await review_execution_ownership.release(db, lease)
+            return AgentTaskStatus.FAILED
         if lease.lease_epoch > 1:
             # 过期 lease 接管与显式 resume 统一消费阶段检查点；claim 已完成 fencing，
             # 此处只在新 owner 下标记恢复意图，不修改稳定运行身份。
@@ -189,6 +212,9 @@ async def execute_quick_review(
         ),
         artifact_root=str(Path(artifact_root).resolve()),
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=int(task.timeout_seconds or 1800)),
+        review_mode=prepared.review_mode,
+        snapshot_id=prepared.snapshot_ref.snapshot_id if prepared.snapshot_ref else None,
+        review_capabilities=capabilities.model_dump(mode="json"),
     )
     lease_token = current_execution_lease.set(lease)
     context_token = current_execution_context.set(execution_context)
