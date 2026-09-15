@@ -5,7 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +25,7 @@ class PrReviewToolContext:
     diff_index: DiffIndex
     mode: Literal["diff_only", "repository_required"]
     snapshot_reader: GitSnapshotReader | None = None
+    evidence_registry: dict[str, dict[str, Any]] = field(default_factory=dict, compare=False)
 
     @property
     def source_identity(self) -> dict[str, Any]:
@@ -93,6 +94,10 @@ def _response(
     }
     if error_code:
         payload["error_code"] = error_code
+    for evidence in payload["evidence_refs"]:
+        evidence_id = str(evidence.get("evidence_id") or "")
+        if evidence_id:
+            context.evidence_registry[evidence_id] = dict(evidence)
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     while len(encoded.encode("utf-8")) > MAX_RESPONSE_BYTES and payload["items"]:
         payload["items"].pop()

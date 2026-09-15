@@ -32,6 +32,14 @@ def _infer_project_root(file_tools: list[RuntimeTool]) -> str | None:
     return None
 
 
+def _infer_pr_review_context(file_tools: list[RuntimeTool]):
+    for tool in file_tools or []:
+        context = getattr(tool, "context", None)
+        if context is not None and hasattr(context, "diff_index"):
+            return context
+    return None
+
+
 def build_runtime_tool_registry(
     *,
     session_store,
@@ -74,7 +82,7 @@ def build_runtime_tool_registry(
     )
     if str(agent_type or "").strip().startswith("review:"):
         # 阶段 02: PR 审查三视角(review:security/architecture/quality)共用 FinalizeReview 终点
-        tools.append(FinalizeReviewTool())
+        tools.append(FinalizeReviewTool(review_context=_infer_pr_review_context(file_tools)))
     tools.extend(
         [
             TodoWriteRuntimeTool(session_store),

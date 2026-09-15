@@ -48,10 +48,10 @@ def test_recon_payload_captures_all_dimensions():
     })()
     payload = build_review_recon_payload(ctx)
     assert payload["repo"] == "o/r" and payload["pr_number"] == 7
-    assert payload["diff_text"] == DIFF
-    assert payload["related_files"][0]["path"] == "caller.py"
-    assert payload["git_history"][0]["message"] == "feat"
-    assert "ci_status" in payload
+    assert payload["inline_diff"] == DIFF
+    assert payload["_model_context_projection"] is True
+    assert "related_files" not in payload and "git_history" not in payload
+    assert payload["mode"] == "diff_only"
     json.dumps(payload, ensure_ascii=False)  # recon_payload 必须可 JSON 序列化
 
 

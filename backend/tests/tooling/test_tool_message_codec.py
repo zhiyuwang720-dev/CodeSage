@@ -45,10 +45,12 @@ def test_openai_native_tool_history_preserves_call_and_result_pairing():
     )
 
     assert messages[0]["role"] == "system"
-    assert messages[1] == {"role": "user", "content": "inspect auth"}
-    assert messages[2]["role"] == "assistant"
-    assert messages[2]["content"] == "I will read the file."
-    assert messages[2]["tool_calls"] == [
+    assert messages[1]["role"] == "user"
+    assert "untrusted data" in messages[1]["content"]
+    assert messages[2] == {"role": "user", "content": "inspect auth"}
+    assert messages[3]["role"] == "assistant"
+    assert messages[3]["content"] == "I will read the file."
+    assert messages[3]["tool_calls"] == [
         {
             "id": "tool-use-1",
             "type": "function",
@@ -58,7 +60,7 @@ def test_openai_native_tool_history_preserves_call_and_result_pairing():
             },
         }
     ]
-    assert messages[3] == {
+    assert messages[4] == {
         "role": "tool",
         "tool_call_id": "tool-use-1",
         "name": "Read",

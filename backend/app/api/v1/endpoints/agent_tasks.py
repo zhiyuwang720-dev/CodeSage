@@ -161,6 +161,9 @@ class AgentTaskResponse(BaseModel):
     recovered_candidates_count: int = 0
     handoff_ready: bool = False
     recovered_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    review_mode: Optional[str] = None
+    review_environment: Optional[str] = None
+    review_limitations: List[str] = Field(default_factory=list)
     
     class Config:
         from_attributes = True
@@ -1008,6 +1011,9 @@ async def get_agent_task(
     if task_runtime_stats.get("tokens_used"):
         tokens_used = max(tokens_used, int(task_runtime_stats["tokens_used"]))
     runtime_result = _get_task_finding_runtime_result(task)
+    review_capabilities = dict(
+        (task.agent_config or {}).get("review_execution_capabilities") or {}
+    )
 
     response_data = {
         "id": task.id,
@@ -1050,6 +1056,9 @@ async def get_agent_task(
         "recovered_candidates_count": runtime_result["recovered_candidates_count"],
         "handoff_ready": runtime_result["handoff_ready"],
         "recovered_candidates": runtime_result["recovered_candidates"],
+        "review_mode": review_capabilities.get("mode"),
+        "review_environment": review_capabilities.get("source_status"),
+        "review_limitations": review_capabilities.get("limitations") or [],
         "audit_scope": task.audit_scope,
         "target_vulnerabilities": task.target_vulnerabilities,
         "verification_level": task.verification_level,

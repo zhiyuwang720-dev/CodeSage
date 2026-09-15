@@ -23,10 +23,11 @@ from app.control_plane.execution_ownership import (
 )
 from app.control_plane.results import review_result_service
 from app.infrastructure.persistence.stage_store import audit_stage_store
-from app.contracts.review_context import RepositorySnapshotRef
+from app.contracts.review_context import RepositorySnapshotRef, ReviewCapabilities
 from app.domains.pr_review.diff_index import parse_unified_diff
 from app.infrastructure.repositories.snapshots import GitSnapshotReader
 from app.tool_gateway.pr_review import PrReviewToolContext
+from app.execution_plane.review.context_builder import build_review_context
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,16 @@ async def execute_review_use_case(
                 mode=context.review_mode,
                 snapshot_reader=snapshot_reader,
             )
+            capabilities = ReviewCapabilities.model_validate(context.review_capabilities)
+            built_context = build_review_context(
+                store=LocalReviewArtifactStore(artifact_root),
+                identity=context.identity,
+                diff_ref=reference,
+                diff_text=diff_text,
+                diff_index=pr_tool_context.diff_index,
+                capabilities=capabilities,
+                snapshot_ref=snapshot,
+            )
             await review_result_service.register(db, task_id)
             await review_result_service.mark_running(
                 db, task, changed_files=_changed_files(diff_text)
@@ -127,6 +138,14 @@ async def execute_review_use_case(
                     "head_sha": context.identity.head_sha,
                     "changed_files": _changed_files(diff_text),
                     "artifact_refs": [reference.model_dump(mode="json")],
+                    "mode": capabilities.mode,
+                    "snapshot_id": capabilities.snapshot_id,
+                    "capabilities": capabilities.model_dump(mode="json"),
+                    "manifest": built_context.manifest.model_dump(mode="json"),
+                    "manifest_hash": built_context.manifest.manifest_hash,
+                    "context_policy_version": capabilities.policy_version,
+                    "input_context_estimated_tokens": built_context.model_context["estimated_tokens"],
+                    "delivered_diff_bytes": len(diff),
                 },
             )
             prefill, sessions = await _resume_state(db, task)
@@ -154,6 +173,7 @@ async def execute_review_use_case(
                     "perspective_token_budget": min(10000, max(1, int(task.token_budget or 100000) // 3)),
                     "session_factory": deps.sync_session_factory(),
                     "pr_tool_context": pr_tool_context,
+                    "model_context": built_context.model_context,
                     "prefill_handoffs": prefill or None,
                     "resume_sessions": sessions or None,
                     "llm_service": deps.llm_service or current_review_llm_service.get(),

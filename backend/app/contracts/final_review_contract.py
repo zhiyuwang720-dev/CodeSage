@@ -55,6 +55,8 @@ class ReviewFinding(BaseModel):
     verdict: ReviewVerdict
     source: ReviewPerspective  # 视角标记(spec 03 分视角评估归因依据)
     contributing_sources: list[ReviewPerspective] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    assessment_scope: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _normalize_contributing_sources(self) -> "ReviewFinding":
@@ -89,6 +91,17 @@ class ReviewFinding(BaseModel):
         return (self.file_path, self.line_start, self.category)
 
 
+class AssessmentScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["diff_only", "repository_required"]
+    snapshot_id: str | None = None
+    coverage_status: Literal["complete", "partial"]
+    limitations: list[str] = Field(default_factory=list)
+    reviewed_unit_ids: list[str] = Field(default_factory=list)
+    unreviewed_unit_ids: list[str] = Field(default_factory=list)
+
+
 class FinalReviewPayload(BaseModel):
     """FinalizeReview 终结工具入参: 评论集 + 审查摘要。"""
 
@@ -96,6 +109,7 @@ class FinalReviewPayload(BaseModel):
 
     findings: list[ReviewFinding] = Field(default_factory=list)
     summary: str = Field(min_length=1, description="审查覆盖范围与结论; 无评论时必填")
+    assessment_scope: AssessmentScope | None = None
 
 
 def format_validation_errors(exc) -> list[dict[str, Any]]:

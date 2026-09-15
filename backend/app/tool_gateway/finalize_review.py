@@ -40,10 +40,15 @@ class FinalizeReviewTool(RuntimeTool):
         "- line_start/line_end 必须落在 diff 新增行(head 分支行号)；评论不新增行直接拒绝。\n"
         "- file_path 必须是仓库相对路径，禁止绝对路径或 ../ 逃逸。\n"
         "- source 必须填写当前视角(security/architecture/quality)。\n"
+        "- Plan21 任务的每条 finding 必须填写本次工具返回的 evidence_refs；最终提交必须填写 "
+        "assessment_scope（mode、snapshot_id、coverage_status、reviewed/unreviewed unit IDs）。\n"
         "- 不要把评论细节放在 summary 等自由文本字段；不要只用自然语言宣布“审查完成”。"
     )
     input_model = FinalReviewPayload
     always_load = True
+
+    def __init__(self, review_context=None):
+        self.review_context = review_context
 
     def validate_input(self, raw_input: dict[str, Any]) -> FinalReviewPayload | InvalidFinalizeReviewInput:
         try:
@@ -89,6 +94,20 @@ class FinalizeReviewTool(RuntimeTool):
                 metadata={"finalization_rejected": True},
             )
 
+        if self.review_context is not None:
+            errors = self._validate_plan21(parsed_input)
+            if errors:
+                return ToolExecutionPayload(
+                    content=(
+                        "FinalizeReview 已拒绝本次提交：证据或覆盖声明与服务端 manifest 不一致。"
+                    ),
+                    output_payload={
+                        "finalization_rejected": True,
+                        "validation_errors": errors,
+                    },
+                    metadata={"finalization_rejected": True},
+                )
+
         final_payload = parsed_input.model_dump(mode="json", exclude_none=True)
         return ToolExecutionPayload(
             content="Received final structured review comments.",
@@ -99,3 +118,38 @@ class FinalizeReviewTool(RuntimeTool):
             },
             metadata={"finalize_review": True},
         )
+
+    def _validate_plan21(self, payload: FinalReviewPayload) -> list[dict[str, str]]:
+        scope = payload.assessment_scope
+        if scope is None:
+            return [{"loc": "assessment_scope", "msg": "Plan21 review requires an assessment scope"}]
+        errors: list[dict[str, str]] = []
+        expected_mode = self.review_context.mode
+        snapshot_id = (
+            self.review_context.snapshot_reader.snapshot.snapshot_id
+            if self.review_context.snapshot_reader is not None
+            else None
+        )
+        if scope.mode != expected_mode:
+            errors.append({"loc": "assessment_scope.mode", "msg": "mode does not match server capability"})
+        if scope.snapshot_id != snapshot_id:
+            errors.append({"loc": "assessment_scope.snapshot_id", "msg": "snapshot does not match server context"})
+        required = {
+            unit.unit_id
+            for unit in self.review_context.diff_index.change_units
+            if unit.status != "binary"
+        }
+        reviewed = set(scope.reviewed_unit_ids)
+        unreviewed = set(scope.unreviewed_unit_ids)
+        if reviewed - required or unreviewed != required - reviewed:
+            errors.append({"loc": "assessment_scope", "msg": "coverage units do not reconcile with manifest"})
+        if scope.coverage_status == "complete" and reviewed != required:
+            errors.append({"loc": "assessment_scope.coverage_status", "msg": "complete coverage requires every text unit"})
+        evidence = self.review_context.evidence_registry
+        for index, finding in enumerate(payload.findings):
+            known = [evidence[item] for item in finding.evidence_refs if item in evidence]
+            if len(known) != len(finding.evidence_refs) or not known:
+                errors.append({"loc": f"findings.{index}.evidence_refs", "msg": "finding requires known evidence from this run"})
+            elif not any(item.get("kind") == "diff" for item in known):
+                errors.append({"loc": f"findings.{index}.evidence_refs", "msg": "finding requires a diff evidence anchor"})
+        return errors
