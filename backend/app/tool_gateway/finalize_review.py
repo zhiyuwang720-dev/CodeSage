@@ -147,8 +147,9 @@ class FinalizeReviewTool(RuntimeTool):
             errors.append({"loc": "assessment_scope.coverage_status", "msg": "complete coverage requires every text unit"})
         evidence = self.review_context.evidence_registry
         for index, finding in enumerate(payload.findings):
-            known = [evidence[item] for item in finding.evidence_refs if item in evidence]
-            if len(known) != len(finding.evidence_refs) or not known:
+            references = list(finding.evidence_refs or [])
+            known = [evidence[item] for item in references if item in evidence]
+            if len(known) != len(references) or not known:
                 errors.append({"loc": f"findings.{index}.evidence_refs", "msg": "finding requires known evidence from this run"})
             elif not any(item.get("kind") == "diff" for item in known):
                 errors.append({"loc": f"findings.{index}.evidence_refs", "msg": "finding requires a diff evidence anchor"})

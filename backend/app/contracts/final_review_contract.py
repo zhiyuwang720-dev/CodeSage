@@ -55,8 +55,8 @@ class ReviewFinding(BaseModel):
     verdict: ReviewVerdict
     source: ReviewPerspective  # 视角标记(spec 03 分视角评估归因依据)
     contributing_sources: list[ReviewPerspective] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    assessment_scope: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] | None = None
+    assessment_scope: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _normalize_contributing_sources(self) -> "ReviewFinding":

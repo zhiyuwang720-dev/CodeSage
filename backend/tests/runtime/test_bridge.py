@@ -460,10 +460,12 @@ def test_bridge_skips_system_transcript_messages_when_building_model_payload():
         )
     )
 
-    assert len(llm.calls[-1]["messages"]) == 2
+    assert len(llm.calls[-1]["messages"]) == 3
     assert llm.calls[-1]["messages"][0]["role"] == "system"
-    assert "Runtime recon payload" in llm.calls[-1]["messages"][0]["content"]
-    assert llm.calls[-1]["messages"][1] == {"role": "user", "content": "inspect"}
+    assert "demo" not in llm.calls[-1]["messages"][0]["content"]
+    assert llm.calls[-1]["messages"][1]["role"] == "user"
+    assert "untrusted data" in llm.calls[-1]["messages"][1]["content"]
+    assert llm.calls[-1]["messages"][2] == {"role": "user", "content": "inspect"}
 
 
 def test_native_tool_calling_reminder_requires_actual_tool_call_or_terminal_json():
