@@ -9,8 +9,8 @@ from arq.connections import RedisSettings
 from arq.worker import Retry, func
 
 from app.core.config import settings
-from app.execution_plane.task_executor import execute_agent_task
-from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
+from app.bootstrap.task_executor import execute_agent_task
+from app.control_plane.scale_ops.submission import AGENT_TASK_JOB_NAME
 from app.infrastructure.observability import configure_observability, extract_trace_context, get_meter, get_tracer
 from app.infrastructure.observability.logging import configure_logging, flush_logs
 from app.infrastructure.observability.metrics import record_execution_attempt
@@ -103,7 +103,7 @@ async def execute_agent_task_job(
                     span.set_attribute("codesage.status", result)
                     record_execution_attempt(status=str(result))
                     if result == "already_owned":
-                        from app.control_plane.execution_ownership import LEASE_SECONDS
+                        from app.control_plane.scale_ops.ownership import LEASE_SECONDS
 
                         mark_span_deferred(span, "already_owned")
                         mark_span_deferred(receive_span, "already_owned")

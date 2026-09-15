@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.contracts.models import RuntimeContinueReason, RuntimeMessageRole, TranscriptItem
 from app.contracts.query_state import QueryLoopState
-from app.execution_plane.session.store import AuditSessionStore
+from app.node_runtime.sessions.store import AuditSessionStore
 
 
 def build_store() -> AuditSessionStore:

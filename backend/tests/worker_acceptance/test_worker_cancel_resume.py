@@ -18,11 +18,12 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import async_session_factory
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
-from app.models.checkpoint import AuditStageORM
+from app.nodes.pr_review.persistence.stage_models import AuditStageORM
 from app.models.project import Project
-from app.models.review_execution import ReviewExecutionRun
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.models.user import User
 from app.control_plane.lifecycle import task_lifecycle_service
+from app.nodes.pr_review.application.commands import pr_review_lifecycle_service
 
 
 pytestmark = pytest.mark.skipif(
@@ -144,7 +145,7 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
         await asyncio.to_thread(process.wait, 10)
 
         async with async_session_factory() as db:
-            command = await task_lifecycle_service.resume(db, task_id)
+            command = await pr_review_lifecycle_service.resume(db, task_id)
             delivery = command.delivery_id
         await redis.hset(control_key, mapping={"release": "1"})
         await redis.delete(record_key)

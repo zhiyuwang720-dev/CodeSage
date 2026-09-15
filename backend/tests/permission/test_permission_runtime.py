@@ -4,9 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.execution_plane.session.store import AuditSessionStore
-from app.tool_gateway.permission.runtime import RuntimePermissionRuntime
-from app.tool_gateway.runtime import ToolExecutionContext
+from app.node_runtime.sessions.store import AuditSessionStore
+from app.node_runtime.tool_gateway.permission.runtime import RuntimePermissionRuntime
+from app.node_runtime.tool_gateway.runtime import ToolExecutionContext
 
 
 def build_store() -> AuditSessionStore:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from app.contracts.models import RuntimeMessageRole, TranscriptItem
-import app.execution_plane.runtime.query_context as query_context
-from app.execution_plane.runtime.query_context import (
+import app.node_runtime.harness.query_context as query_context
+from app.node_runtime.harness.query_context import (
     apply_context_collapse_if_needed,
     apply_history_snip,
     apply_microcompact,

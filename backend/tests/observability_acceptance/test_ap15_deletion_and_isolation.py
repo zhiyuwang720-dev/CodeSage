@@ -17,63 +17,63 @@ CHAT_PATH = "/v1/chat/completions"
 
 DELETION_MAP = [
     {
-        "old_symbol": "app.execution_plane.models.factory.LLMFactory",
+        "old_symbol": "app.node_runtime.llm.factory.LLMFactory",
         "callers": ["service.LLMService", "api.v1.endpoints.config"],
         "replacement": "models.config.ModelCatalog + models.client.SDKModelClient",
         "reason": "adapter 选择职责被 SDK 传输族解析取代",
         "verification": "AP01/AP09",
     },
     {
-        "old_symbol": "app.execution_plane.models.base_adapter.BaseLLMAdapter",
+        "old_symbol": "app.node_runtime.llm.base_adapter.BaseLLMAdapter",
         "callers": ["全部 adapters/*"],
         "replacement": "models.client.SDKModelClient",
         "reason": "自研 HTTP/SSE 与重试框架被 SDK 取代",
         "verification": "AP01/AP04",
     },
     {
-        "old_symbol": "app.execution_plane.models.adapters.AnthropicAdapter",
+        "old_symbol": "app.node_runtime.llm.adapters.AnthropicAdapter",
         "callers": ["factory"],
         "replacement": "LiteLLM anthropic 传输族（protocol=anthropic_messages）",
         "reason": "厂商协议由 SDK 负责",
         "verification": "AP02",
     },
     {
-        "old_symbol": "app.execution_plane.models.protocols.registry",
+        "old_symbol": "app.node_runtime.llm.protocols.registry",
         "callers": ["factory", "service", "runtime.bridge"],
         "replacement": "models.config（模型目录 + 传输族 + tool 格式解析）",
         "reason": "协议分派退出模型层",
         "verification": "AP01/AP02",
     },
     {
-        "old_symbol": "app.execution_plane.models.retry.LLM_RETRY_CONFIG",
+        "old_symbol": "app.node_runtime.llm.retry.LLM_RETRY_CONFIG",
         "callers": ["service"],
         "replacement": "SDKModelClient 有界预算 + QueryLoop 业务预算",
         "reason": "消除 service/adapter/SDK 多层重试倍增",
         "verification": "AP04",
     },
     {
-        "old_symbol": "app.execution_plane.models.errors.AgentError 继承树（Agent/Tool/State/Validation）",
+        "old_symbol": "app.node_runtime.llm.errors.AgentError 继承树（Agent/Tool/State/Validation）",
         "callers": ["仅 retry.py 与该文件自身"],
         "replacement": "models.errors.ModelBoundaryError 及恢复类别",
         "reason": "无生产调用者的重复异常体系",
         "verification": "AP01",
     },
     {
-        "old_symbol": "app.execution_plane.models.prompt_cache",
+        "old_symbol": "app.node_runtime.llm.prompt_cache",
         "callers": ["adapters/litellm_adapter"],
         "replacement": "无（provider prompt cache 只经 SDK 参数表达）",
         "reason": "旧缓存前缀策略已无引用；不再通过改写系统提示词模拟缓存",
         "verification": "AP11",
     },
     {
-        "old_symbol": "app.execution_plane.models.tokenizer",
+        "old_symbol": "app.node_runtime.llm.tokenizer",
         "callers": ["prompt_cache", "memory_compressor"],
         "replacement": "无（预算估算由 Harness/Plan20 负责）",
         "reason": "仅在已删除模块内被引用",
         "verification": "AP01",
     },
     {
-        "old_symbol": "app.execution_plane.models.memory_compressor",
+        "old_symbol": "app.node_runtime.llm.memory_compressor",
         "callers": ["models/__init__ 重导出"],
         "replacement": "运行时 compaction（execution_plane/runtime/compaction）",
         "reason": "模型层不再承担上下文压缩",
@@ -131,7 +131,7 @@ async def test_ap15_no_second_llm_span_in_the_harness_turn(model_harness) -> Non
     证据以源码静态断言给出，避免依赖 SDK 回调在测试事件循环收尾时的落盘时机。
     """
 
-    from app.execution_plane.runtime import query_loop
+    from app.node_runtime.harness import query_loop
 
     source = Path(query_loop.__file__).read_text(encoding="utf-8")
     # QueryLoop 不再自建 provider.request 容器：业务级 model.attempt 直接作为

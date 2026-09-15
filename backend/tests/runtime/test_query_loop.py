@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditSkillInvocationStatus, ToolExecutionReceiptStatus
+from app.node_runtime.persistence.models import AuditSkillInvocationStatus, ToolExecutionReceiptStatus
 from app.contracts.models import (
     RuntimeCompletionMode,
     RuntimeContinueReason,
@@ -18,14 +18,14 @@ from app.contracts.models import (
     ToolExecutionPayload,
     TranscriptItem,
 )
-from app.execution_plane.runtime.query_loop import QueryLoop
-from app.tool_gateway.search import ToolSearchRuntimeTool
+from app.node_runtime.harness.query_loop import QueryLoop
+from app.node_runtime.tool_gateway.search import ToolSearchRuntimeTool
 from app.contracts.query_state import QueryLoopState
-from app.execution_plane.runtime.runner import RuntimeRunner
-from app.execution_plane.session.store import AuditSessionPersistenceError, AuditSessionStore
+from app.node_runtime.harness.runner import RuntimeRunner
+from app.node_runtime.sessions.store import AuditSessionPersistenceError, AuditSessionStore
 from app.services.skill.tool import RuntimeSkillTool
 from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
-from app.tool_gateway.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
+from app.node_runtime.tool_gateway.runtime import RuntimeTool, ToolExecutionContext, ToolOrchestrator, ToolRegistry
 
 
 class FakeModelClient:
@@ -797,39 +797,39 @@ def test_query_loop_runs_pre_model_pipeline_in_restored_order(monkeypatch):
     events: list[str] = []
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.get_messages_after_compact_boundary",
+        "app.node_runtime.harness.query_loop.get_messages_after_compact_boundary",
         lambda messages, state: (events.append("compact_boundary"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.apply_tool_result_budget",
+        "app.node_runtime.harness.query_loop.apply_tool_result_budget",
         lambda messages, state: (events.append("tool_result_budget"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.apply_history_snip",
+        "app.node_runtime.harness.query_loop.apply_history_snip",
         lambda messages, state: (events.append("history_snip"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.apply_microcompact",
+        "app.node_runtime.harness.query_loop.apply_microcompact",
         lambda messages, state: (events.append("microcompact"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.apply_context_collapse_if_needed",
+        "app.node_runtime.harness.query_loop.apply_context_collapse_if_needed",
         lambda messages, state: (events.append("context_collapse"), (list(messages), state))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.auto_compact_if_needed",
+        "app.node_runtime.harness.query_loop.auto_compact_if_needed",
         lambda messages, state, **kwargs: (events.append("autocompact"), type("Decision", (), {"was_compacted": False, "consecutive_failures": None, "compaction_result": None})())[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.append_system_context",
+        "app.node_runtime.harness.query_loop.append_system_context",
         lambda system_prompt, runtime_state: (events.append("append_system_context"), system_prompt)[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.prepend_user_context",
+        "app.node_runtime.harness.query_loop.prepend_user_context",
         lambda messages, runtime_state: (events.append("prepend_user_context"), list(messages))[1],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.normalize_messages_for_model",
+        "app.node_runtime.harness.query_loop.normalize_messages_for_model",
         lambda messages: (events.append("normalize_messages"), list(messages))[1],
     )
 
@@ -886,11 +886,11 @@ def test_query_loop_saves_between_turn_attachments_and_pending_summary(monkeypat
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.build_between_turn_attachments",
+        "app.node_runtime.harness.query_loop.build_between_turn_attachments",
         lambda **kwargs: [TranscriptItem(role=RuntimeMessageRole.USER, content="memory attachment", name="memory_attachment")],
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.start_pending_tool_use_summary",
+        "app.node_runtime.harness.query_loop.start_pending_tool_use_summary",
         lambda **kwargs: {"status": "pending", "tool_names": ["echo"]},
     )
 
@@ -1071,7 +1071,7 @@ def test_query_loop_uses_stop_hook_blocking_when_runtime_requests_correction(mon
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.evaluate_stop_hooks",
+        "app.node_runtime.harness.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": ["Need to justify the auth bypass conclusion with concrete sink evidence."],
             "prevent_continuation": False,
@@ -1096,7 +1096,7 @@ def test_query_loop_respects_stop_hook_prevented_terminal_reason(monkeypatch):
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.evaluate_stop_hooks",
+        "app.node_runtime.harness.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": [],
             "prevent_continuation": True,
@@ -1119,14 +1119,14 @@ def test_query_loop_uses_token_budget_continuation_when_budget_allows_more_work(
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.evaluate_stop_hooks",
+        "app.node_runtime.harness.query_loop.evaluate_stop_hooks",
         lambda **kwargs: {
             "blocking_errors": [],
             "prevent_continuation": False,
         },
     )
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.evaluate_token_budget_continuation",
+        "app.node_runtime.harness.query_loop.evaluate_token_budget_continuation",
         lambda **kwargs: {
             "should_continue": True,
             "message": "Keep investigating until you either exhaust plausible paths or produce stronger evidence.",
@@ -1160,7 +1160,7 @@ def test_query_loop_can_stop_after_tool_execution_when_hook_requests_stop(monkey
     loop = QueryLoop(session_store=store, model_client=client, tool_registry=registry, tool_orchestrator=orchestrator)
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.evaluate_post_tool_hooks",
+        "app.node_runtime.harness.query_loop.evaluate_post_tool_hooks",
         lambda **kwargs: {"hook_stopped": True},
     )
 
@@ -1682,7 +1682,7 @@ def test_query_loop_uses_auto_compact_orchestrator_output_as_model_transcript(mo
         })()
 
     monkeypatch.setattr(
-        "app.execution_plane.runtime.query_loop.auto_compact_if_needed",
+        "app.node_runtime.harness.query_loop.auto_compact_if_needed",
         lambda messages, state, **kwargs: _Decision(),
     )
 

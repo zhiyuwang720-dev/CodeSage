@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.contracts.models import RuntimeMessageRole, TranscriptItem
-from app.tool_gateway.codec import (
+from app.node_runtime.tool_gateway.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )

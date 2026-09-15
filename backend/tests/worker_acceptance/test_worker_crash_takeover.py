@@ -19,9 +19,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import async_session_factory
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
-from app.models.checkpoint import AuditStageORM
+from app.nodes.pr_review.persistence.stage_models import AuditStageORM
 from app.models.project import Project
-from app.models.review_execution import ReviewExecutionRun
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.models.user import User
 
 

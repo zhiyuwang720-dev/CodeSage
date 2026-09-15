@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.encryption import decrypt_sensitive_data
 from app.db.session import async_session_factory, get_db
 from app.models.agent_task import AgentFinding, AgentTask, FindingStatus
-from app.models.audit_session import (
+from app.node_runtime.persistence.models import (
     AuditHandoff,
     AuditCheckpoint,
     AuditMemory,
@@ -35,9 +35,9 @@ from app.models.audit_session import (
 from app.models.project import Project
 from app.models.user import User
 from app.contracts.checkpoint import StageStatus
-from app.execution_plane.runtime.bridge import RuntimeBridge
-from app.execution_plane.models.service import LLMService
-from app.tool_gateway.permission.guardrails import is_guardrails_enabled
+from app.node_runtime.harness.bridge import RuntimeBridge
+from app.node_runtime.llm.service import LLMService
+from app.node_runtime.tool_gateway.permission.guardrails import is_guardrails_enabled
 from app.nodes.pr_review.persistence.stage_store import audit_stage_store
 
 logger = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ async def _build_runtime_follow_up_context(
     db: AsyncSession,
 ) -> tuple[RuntimeBridge, str, int | None]:
     from app.api.v1.endpoints.agent_tasks import _get_project_root, _get_user_config
-    from app.tool_gateway.builder import build_runtime_tool_catalog
+    from app.node_runtime.tool_gateway.builder import build_runtime_tool_catalog
 
     task = await db.get(AgentTask, session.task_id) if session.task_id else None
     project = await db.get(Project, session.project_id)

@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.execution_plane.models import client as client_module
-from app.execution_plane.models.errors import ModelRateLimitError
-from app.execution_plane.models.service import LLMService
+from app.node_runtime.llm import client as client_module
+from app.node_runtime.llm.errors import ModelRateLimitError
+from app.node_runtime.llm.service import LLMService
 
 
 def _payload(content: str = "ok", *, model: str = "stub-model", usage=None, finish_reason: str = "stop"):

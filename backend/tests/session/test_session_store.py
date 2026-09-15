@@ -4,9 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditCheckpointType, AuditMemoryKind, AuditSkillInvocationStatus, ToolExecutionReceiptStatus
+from app.node_runtime.persistence.models import AuditCheckpointType, AuditMemoryKind, AuditSkillInvocationStatus, ToolExecutionReceiptStatus
 from app.contracts.models import RuntimeMemoryRecord, RuntimeMessageRole, RuntimeSessionState, TranscriptItem
-from app.execution_plane.session.store import AuditSessionStore
+from app.node_runtime.sessions.store import AuditSessionStore
 
 
 def build_store() -> AuditSessionStore:

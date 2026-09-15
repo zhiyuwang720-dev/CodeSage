@@ -11,7 +11,10 @@ from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User
 from app.nodes.pr_review.contracts.review_execution import ReviewRunIdentity, sha256_bytes
-from app.control_plane.execution_ownership import (
+from app.nodes.pr_review.persistence.execution_identity import (
+    review_execution_identity_store,
+)
+from app.control_plane.scale_ops.ownership import (
     ActiveLeaseError,
     CancelRequestedError,
     StaleExecutionOwnerError,
@@ -66,7 +69,9 @@ async def test_claim_cancel_resume_and_stale_epoch_on_postgres():
         )
         await db.commit()
         identity = _identity(task_id)
-        await review_execution_ownership.initialize(db, identity, delivery_id="delivery-1")
+        await review_execution_identity_store.initialize(
+            db, identity, delivery_id="delivery-1"
+        )
         first = await review_execution_ownership.claim(
             db, task_id, worker_id="worker-a", delivery_id="delivery-1"
         )

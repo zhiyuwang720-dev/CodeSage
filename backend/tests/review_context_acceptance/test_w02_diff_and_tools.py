@@ -13,7 +13,7 @@ from app.contracts.tools import RuntimeTool, ToolExecutionContext
 from app.nodes.pr_review.domain.diff_index import parse_unified_diff
 from app.infrastructure.repositories.snapshots import GitSnapshotReader, create_snapshot_ref
 from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
-from app.tool_gateway.runtime import ToolGateway, ToolRegistry
+from app.node_runtime.tool_gateway.runtime import ToolGateway, ToolRegistry
 
 
 DIFF = """diff --git a/src/old.py b/src/new.py

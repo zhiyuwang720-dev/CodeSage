@@ -29,7 +29,9 @@ from app.infrastructure.repositories.snapshots import (
     run_git,
 )
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
-from app.control_plane.execution_ownership import review_execution_ownership
+from app.nodes.pr_review.persistence.execution_identity import (
+    review_execution_identity_store,
+)
 
 
 class ReviewInputError(ValueError):
@@ -290,7 +292,7 @@ async def initialize_or_resume_review_input(
     source_dir = prepared_candidate.source_dir
     pr_url = prepared_candidate.pr_url
     store = LocalReviewArtifactStore(artifact_root)
-    persisted = await review_execution_ownership.load_identity(db, str(task.id))
+    persisted = await review_execution_identity_store.load(db, str(task.id))
     if persisted is None:
         reference = store.write_bytes(
             run_id=candidate.run_id,
@@ -299,7 +301,7 @@ async def initialize_or_resume_review_input(
             content=candidate_bytes,
             media_type="text/x-diff",
         )
-        row = await review_execution_ownership.initialize(
+        row = await review_execution_identity_store.initialize(
             db, candidate, delivery_id=delivery_id, commit=False
         )
         identity = ReviewRunIdentity.model_validate(row.identity_json)
@@ -323,7 +325,7 @@ async def initialize_or_resume_review_input(
             prepared_candidate.snapshot_ref,
         )
 
-    identity = await review_execution_ownership.validate_resume_identity(db, candidate)
+    identity = await review_execution_identity_store.validate_resume(db, candidate)
     config = dict(task.agent_config or {})
     raw_reference = config.get("review_execution_input_artifact")
     saved_root = config.get("review_execution_artifact_root")

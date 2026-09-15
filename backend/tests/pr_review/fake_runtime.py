@@ -12,16 +12,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.tool_gateway.builder import build_runtime_tool_catalog
+from app.node_runtime.tool_gateway.builder import build_runtime_tool_catalog
 from app.contracts.models import (
     RuntimeMessageRole,
     RuntimeModelResponse,
     TranscriptItem,
 )
-from app.execution_plane.runtime.runner import RuntimeRunner
-from app.execution_plane.session.store import AuditSessionStore
-from app.tool_gateway.registry import build_runtime_tool_registry
-from app.tool_gateway.codec import build_runtime_model_messages
+from app.node_runtime.harness.runner import RuntimeRunner
+from app.node_runtime.sessions.store import AuditSessionStore
+from app.node_runtime.tool_gateway.registry import build_runtime_tool_registry
+from app.node_runtime.tool_gateway.codec import build_runtime_model_messages
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 
 
 def make_session_factory(tmp_path):
@@ -152,8 +153,11 @@ def build_review_runner(
         session_store=session_store,
         file_tools=build_runtime_tool_catalog(project_root=str(project_root)),
         agent_type=agent_type,
+        terminal_tools=(
+            [FinalizeReviewTool()] if agent_type.startswith("review:") else []
+        ),
     )
-    from app.tool_gateway.runtime import ToolOrchestrator
+    from app.node_runtime.tool_gateway.runtime import ToolOrchestrator
 
     orchestrator = ToolOrchestrator(session_store=session_store, tool_registry=registry)
     runner = RuntimeRunner(

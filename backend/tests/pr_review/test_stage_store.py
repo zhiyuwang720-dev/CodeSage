@@ -154,7 +154,7 @@ async def test_sink_writes_review_stage_on_perspective_done(db_session, monkeypa
     """集成: sink 收到 session_start + perspective_done(findings 本体) → 写 review:* stage。"""
     from app.api.v1.endpoints.agent_tasks import _build_pr_review_event_sink
     from app.models.agent_task import AgentTask, AgentTaskStatus
-    from app.models.review_execution import ReviewExecutionRun
+    from app.control_plane.persistence.execution_models import ReviewExecutionRun
 
     task = AgentTask(id="t-sink", project_id="p", version_label="v1", task_type="pr_review")
     task.status = AgentTaskStatus.RUNNING

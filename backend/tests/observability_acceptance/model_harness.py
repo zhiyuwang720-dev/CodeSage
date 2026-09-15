@@ -11,9 +11,9 @@ import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from app.execution_plane.models.config import LLMConfig
-from app.execution_plane.models.service import LLMService
-from app.execution_plane.models.client import reset_sdk_client
+from app.node_runtime.llm.config import LLMConfig
+from app.node_runtime.llm.service import LLMService
+from app.node_runtime.llm.client import reset_sdk_client
 
 from .fixture_server import FixtureServer, PlannedResponse, RouteScript
 

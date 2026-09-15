@@ -9,11 +9,11 @@ checkmarx_scan / one_click_cve(仅旧 worker 集成使用)
 from .user import User
 from .user_config import UserConfig
 from .project import Project, ProjectMember
-from .prompt_template import PromptTemplate
-from .audit_rule import AuditRule, AuditRuleSet
-from .report_template import AgentTaskReport
-from .checkpoint import AuditStageORM
-from .review_execution import ReviewExecutionRun
+from app.nodes.pr_review.persistence.prompt_models import PromptTemplate
+from app.nodes.pr_review.persistence.rule_models import AuditRule, AuditRuleSet
+from app.nodes.pr_review.persistence.report_models import AgentTaskReport
+from app.nodes.pr_review.persistence.stage_models import AuditStageORM
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from .agent_task import (
     AgentEvent,
     AgentEventType,
@@ -25,7 +25,7 @@ from .agent_task import (
     VulnerabilitySeverity,
     VulnerabilityType,
 )
-from .audit_session import (
+from app.node_runtime.persistence.models import (
     AuditArtifact,
     AuditCheckpoint,
     AuditCheckpointType,

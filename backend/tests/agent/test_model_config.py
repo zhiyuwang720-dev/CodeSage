@@ -1,7 +1,7 @@
 """模型目录与配置解析单元测试（P01/P02/P10）。
 
 替代已删除的 factory/protocols 单测：只覆盖当前唯一配置层
-`app.execution_plane.models.config` 的语义，危险反例（不可用协议、缺 base_url）
+`app.node_runtime.llm.config` 的语义，危险反例（不可用协议、缺 base_url）
 保留。
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.execution_plane.models.config import (
+from app.node_runtime.llm.config import (
     MODEL_BOUNDARY_VERSION,
     ModelCatalog,
     ModelConfigurationError,
@@ -20,7 +20,7 @@ from app.execution_plane.models.config import (
     resolve_sdk_model,
     resolve_tool_message_format,
 )
-from app.execution_plane.models.types import LLMProvider
+from app.node_runtime.llm.types import LLMProvider
 
 
 def test_catalog_exposes_every_provider() -> None:

@@ -37,7 +37,7 @@ async def test_resume_api_delegates_to_lifecycle_then_schedules(monkeypatch):
     resume = AsyncMock(return_value=SimpleNamespace(task=task, delivery_id="delivery-test"))
     schedule = AsyncMock()
     monkeypatch.setattr(
-        "app.control_plane.lifecycle.task_lifecycle_service.resume", resume
+        "app.nodes.pr_review.application.commands.pr_review_lifecycle_service.resume", resume
     )
     monkeypatch.setattr(endpoint, "_schedule_agent_task", schedule)
 
@@ -64,7 +64,7 @@ async def test_resume_api_maps_invalid_state(monkeypatch):
     from app.control_plane.lifecycle import InvalidTaskStateError
 
     monkeypatch.setattr(
-        "app.control_plane.lifecycle.task_lifecycle_service.resume",
+        "app.nodes.pr_review.application.commands.pr_review_lifecycle_service.resume",
         AsyncMock(side_effect=InvalidTaskStateError("Task is not resumable")),
     )
     with pytest.raises(HTTPException) as captured:

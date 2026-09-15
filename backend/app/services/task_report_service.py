@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_task import AgentFinding, AgentTask
 from app.models.project import Project
-from app.models.report_template import AgentTaskReport
+from app.nodes.pr_review.persistence.report_models import AgentTaskReport
 from app.contracts.final_finding_contract import filter_meaningful_exploit_chain, has_meaningful_poc
 from app.contracts.report import ReportPayload, ReportPRInfo, ReportSummary, ReportFindingItem
 from app.services.report_template_file_service import ReportTemplateFileService

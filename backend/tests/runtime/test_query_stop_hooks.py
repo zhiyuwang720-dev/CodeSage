@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app.contracts.models import RuntimeMessageRole, ToolCallRequest, ToolExecutionPayload, ToolExecutionRecord, TranscriptItem
-from app.execution_plane.runtime.query_stop_hooks import build_stop_hook_artifact_messages, evaluate_post_tool_hooks, evaluate_stop_hooks
+from app.node_runtime.harness.query_stop_hooks import build_stop_hook_artifact_messages, evaluate_post_tool_hooks, evaluate_stop_hooks
 
 
 class FakeExecutorRuntime:

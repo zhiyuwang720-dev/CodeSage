@@ -10,17 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditCheckpointType, ToolExecutionReceiptStatus
+from app.node_runtime.persistence.models import AuditCheckpointType, ToolExecutionReceiptStatus
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
-from app.tool_gateway.interactive.todo import TodoWriteRuntimeTool
-from app.execution_plane.session.store import AuditSessionStore
-from app.tool_gateway.runtime import (
+from app.node_runtime.tool_gateway.interactive.todo import TodoWriteRuntimeTool
+from app.node_runtime.sessions.store import AuditSessionStore
+from app.node_runtime.tool_gateway.runtime import (
     RuntimeTool,
     ToolExecutionContext,
     ToolOrchestrator,
     ToolRegistry,
 )
-from app.tool_gateway.write import WriteRuntimeTool
+from app.node_runtime.tool_gateway.write import WriteRuntimeTool
 
 
 class EchoInput(BaseModel):

@@ -11,11 +11,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.models.checkpoint import AuditStageORM
-from app.models.review_execution import ReviewExecutionRun
+from app.nodes.pr_review.persistence.stage_models import AuditStageORM
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.contracts.checkpoint import AuditStage, StageStatus
 from app.nodes.pr_review.contracts.review_execution import ArtifactRef, StageResult
-from app.control_plane.execution_ownership import (
+from app.control_plane.scale_ops.ownership import (
     guard_managed_execution_write,
 )
 

@@ -63,7 +63,7 @@ async def test_dispatcher_rejects_incomplete_fallback_payload(monkeypatch):
                 "turn_count": 0,
             }
 
-    monkeypatch.setattr("app.execution_plane.runtime.bridge.RuntimeBridge", _FakeBridge)
+    monkeypatch.setattr("app.node_runtime.harness.bridge.RuntimeBridge", _FakeBridge)
 
     events: list[dict] = []
 

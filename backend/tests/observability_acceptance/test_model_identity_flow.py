@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.execution_plane.runtime.bridge import RuntimeLLMModelClient
+from app.node_runtime.harness.bridge import RuntimeLLMModelClient
 
 from .fixture_server import PlannedResponse, openai_completion
 

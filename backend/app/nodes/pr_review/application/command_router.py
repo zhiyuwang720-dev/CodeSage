@@ -243,7 +243,7 @@ async def run_review_pipeline_async(
             PrReviewToolContext,
             build_pr_review_tool_catalog,
         )
-        from app.execution_plane.models.service import LLMService
+        from app.node_runtime.llm.service import LLMService
 
         from .runtime_dispatcher import RuntimePerspectiveDispatcher
 

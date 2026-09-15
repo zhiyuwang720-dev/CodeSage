@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -6,8 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_rule import AuditRule, AuditRuleSet
-from app.models.audit_session import AuditMemoryKind
+from app.nodes.pr_review.persistence.rule_models import AuditRule, AuditRuleSet
+from app.node_runtime.persistence.models import AuditMemoryKind
 from app.services.memory.runtime import RuntimeMemoryManager, build_memory_message
 
 

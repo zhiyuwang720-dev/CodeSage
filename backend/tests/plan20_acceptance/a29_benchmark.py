@@ -12,8 +12,8 @@ from tests.observability_acceptance.fixture_server import FixtureServer, Planned
 
 
 async def _run(observability: str, output: Path, calls: int) -> dict:
-    from app.execution_plane.models.client import reset_sdk_client
-    from app.execution_plane.models.service import LLMService
+    from app.node_runtime.llm.client import reset_sdk_client
+    from app.node_runtime.llm.service import LLMService
     from app.infrastructure.observability import configure_observability
     from app.infrastructure.observability.litellm_integration import reset_integration_state
 

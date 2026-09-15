@@ -13,6 +13,12 @@
     {"old":"app.execution_plane.models","new":"app.node_runtime.llm","callers":"bootstrap, PR execution, diagnostics","removal":"22B"},
     {"old":"app.execution_plane.session","new":"app.node_runtime.sessions","callers":"runtime adapters, tests","removal":"22B"},
     {"old":"app.tool_gateway","new":"app.node_runtime.tool_gateway","callers":"runtime, services, tests","removal":"22B"},
-    {"old":"app.control_plane.execution_ownership","new":"app.control_plane.scale_ops.ownership","callers":"worker, lifecycle, results","removal":"22B"}
+    {"old":"app.control_plane.execution_ownership","new":"app.control_plane.scale_ops.ownership","callers":"worker, lifecycle, results","removal":"22B"},
+    {"old":"app.models.audit_session","new":"app.node_runtime.persistence.models","callers":"Alembic history and external imports","removal":"after migration compatibility window"},
+    {"old":"app.models.checkpoint","new":"app.nodes.pr_review.persistence.stage_models","callers":"Alembic history and external imports","removal":"after migration compatibility window"},
+    {"old":"app.models.report_template","new":"app.nodes.pr_review.persistence.report_models","callers":"Alembic history and external imports","removal":"after migration compatibility window"},
+    {"old":"app.models.prompt_template","new":"app.nodes.pr_review.persistence.prompt_models","callers":"Alembic history and external imports","removal":"after migration compatibility window"},
+    {"old":"app.models.audit_rule","new":"app.nodes.pr_review.persistence.rule_models","callers":"Alembic history and external imports","removal":"after migration compatibility window"},
+    {"old":"app.models.review_execution","new":"app.control_plane.persistence.execution_models","callers":"Alembic history and external imports","removal":"after migration compatibility window"}
   ]
 }

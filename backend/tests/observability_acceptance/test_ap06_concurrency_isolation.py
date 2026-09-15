@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from app.execution_plane.models.config import LLMConfig, LLMProvider, resolve_sdk_model
+from app.node_runtime.llm.config import LLMConfig, LLMProvider, resolve_sdk_model
 
 from .fixture_server import (
     PlannedResponse,

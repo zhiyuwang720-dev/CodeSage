@@ -12,7 +12,7 @@ from sqlalchemy import func as sql_func
 
 from app.api import deps
 from app.db.session import get_db
-from app.models.prompt_template import PromptTemplate
+from app.nodes.pr_review.persistence.prompt_models import PromptTemplate
 from app.models.user import User
 from app.schemas.prompt_template import (
     PromptTemplateCreate,
@@ -279,7 +279,7 @@ async def test_prompt_template(
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """测试提示词效果"""
-    from app.execution_plane.models.service import LLMService
+    from app.node_runtime.llm.service import LLMService
     from app.models.user_config import UserConfig
     from app.core.encryption import decrypt_sensitive_data
     

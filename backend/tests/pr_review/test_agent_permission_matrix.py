@@ -4,9 +4,10 @@ import pytest
 from app.nodes.pr_review.domain.orchestrator import TOOL_MATRICES
 from app.nodes.pr_review.contracts.review_execution import sha256_bytes
 from app.nodes.pr_review.domain.diff_index import parse_unified_diff
-from app.tool_gateway.builder import build_runtime_tool_catalog
+from app.node_runtime.tool_gateway.builder import build_runtime_tool_catalog
 from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
-from app.tool_gateway.registry import build_runtime_tool_registry
+from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
+from app.node_runtime.tool_gateway.registry import build_runtime_tool_registry
 from tests.pr_review.fake_runtime import build_review_runner, make_session_factory
 
 
@@ -65,6 +66,7 @@ def test_allowlist_filters_tools(tmp_path):
         ),
         agent_type="review:architecture",
         tool_allowlist=TOOL_MATRICES["architecture"],
+        terminal_tools=[FinalizeReviewTool()],
     )
     names = {t.name for t in registry.enabled_tools()}
     assert "FinalizeReview" in names, "终点工具始终保留"

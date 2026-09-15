@@ -16,7 +16,10 @@ from app.models.user import User
 from app.nodes.pr_review.contracts.final_review import ReviewFinding
 from app.nodes.pr_review.contracts.review_execution import ExecutionContext, ReviewRunIdentity, sha256_bytes
 from app.nodes.pr_review.application.execution import QuickReviewDependencies, execute_quick_review
-from app.control_plane.execution_ownership import (
+from app.nodes.pr_review.persistence.execution_identity import (
+    review_execution_identity_store,
+)
+from app.control_plane.scale_ops.ownership import (
     StaleExecutionOwnerError,
     current_execution_context,
     current_execution_lease,
@@ -208,7 +211,7 @@ async def test_duplicate_first_delivery_keeps_one_stable_identity():
 
     async def initialize(candidate):
         async with async_session_factory() as db:
-            row = await review_execution_ownership.initialize(
+            row = await review_execution_identity_store.initialize(
                 db, candidate, delivery_id=str(uuid4())
             )
             return ReviewRunIdentity.model_validate(row.identity_json)
@@ -223,7 +226,9 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
     task_id, _ = await _new_task("old-owner")
     identity = _identity(task_id)
     async with async_session_factory() as db:
-        await review_execution_ownership.initialize(db, identity, delivery_id="first")
+        await review_execution_identity_store.initialize(
+            db, identity, delivery_id="first"
+        )
         old_lease = await review_execution_ownership.claim(
             db, task_id, worker_id="old-worker", delivery_id="first"
         )
@@ -274,7 +279,9 @@ async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatc
     task_id, _ = await _new_task("report-failure")
     identity = _identity(task_id)
     async with async_session_factory() as db:
-        await review_execution_ownership.initialize(db, identity, delivery_id="report")
+        await review_execution_identity_store.initialize(
+            db, identity, delivery_id="report"
+        )
         lease = await review_execution_ownership.claim(
             db, task_id, worker_id="report-worker", delivery_id="report"
         )

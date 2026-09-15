@@ -15,7 +15,7 @@ from app.nodes.pr_review.application.context_builder import (
     build_review_context,
 )
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
-from app.tool_gateway.codec import build_runtime_model_messages
+from app.node_runtime.tool_gateway.codec import build_runtime_model_messages
 from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 from app.nodes.pr_review.tools.pr_review import PrReviewToolContext, build_pr_review_tool_catalog
 

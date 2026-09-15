@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from app.tool_gateway.permission.runtime import ToolPermissionDecision
+    from app.node_runtime.tool_gateway.permission.runtime import ToolPermissionDecision
 
 from app.contracts.models import ToolExecutionPayload
 
@@ -88,7 +88,7 @@ class RuntimeTool:
     ) -> ToolPermissionDecision:
         del parsed_input, context
         # 契约层静态不依赖 permission(层级在 contracts 之上); 默认放行在调用期惰性装载。
-        from app.tool_gateway.permission.runtime import ToolPermissionDecision
+        from app.node_runtime.tool_gateway.permission.runtime import ToolPermissionDecision
 
         return ToolPermissionDecision(allowed=True)
 

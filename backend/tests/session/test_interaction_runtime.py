@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.execution_plane.session.store import AuditSessionStore
+from app.node_runtime.sessions.store import AuditSessionStore
 from app.contracts.interaction_runtime import InteractionRuntime
 from app.contracts.session_state import SessionRuntimeState
 

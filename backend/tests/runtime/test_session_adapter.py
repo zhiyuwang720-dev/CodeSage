@@ -6,11 +6,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditMemoryKind
-from app.execution_plane.runtime.adapters.session import RuntimeSessionAdapter
+from app.node_runtime.persistence.models import AuditMemoryKind
+from app.node_runtime.harness.adapters.session import RuntimeSessionAdapter
 from app.contracts.models import RuntimeMemoryBundle, RuntimeMemoryRecord, RuntimeMessageRole, RuntimeStopReason, TranscriptItem
 from app.contracts.query_state import QueryLoopState
-from app.execution_plane.session.store import AuditSessionStore
+from app.node_runtime.sessions.store import AuditSessionStore
 
 
 class FakeRunner:

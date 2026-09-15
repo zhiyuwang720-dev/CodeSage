@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.db.session import get_db
-from app.models.audit_rule import AuditRuleSet, AuditRule
+from app.nodes.pr_review.persistence.rule_models import AuditRuleSet, AuditRule
 from app.models.user import User
 from app.schemas.audit_rule import (
     AuditRuleCreate,

@@ -17,8 +17,8 @@ from app.models.user import User
 from app.models.user_config import UserConfig
 from app.services.skill.facade import SkillService
 from app.services.init_agent_assets import init_agent_assets
-from app.execution_plane.models.config import ModelCatalog
-from app.execution_plane.models.service import LLMService
+from app.node_runtime.llm.config import ModelCatalog
+from app.node_runtime.llm.service import LLMService
 from app.services.report_template_file_service import ReportTemplateFileService
 from app.services.skill.file_service import AGENT_TYPES, SkillFileService
 

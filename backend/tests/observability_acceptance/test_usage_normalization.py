@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.execution_plane.models.usage import normalize_usage
+from app.node_runtime.llm.usage import normalize_usage
 
 
 def test_usage_preserves_deepseek_provider_occurrences_without_double_counting() -> None:

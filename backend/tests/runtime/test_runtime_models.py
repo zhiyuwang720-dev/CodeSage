@@ -1,4 +1,4 @@
-from app.execution_plane.runtime.config import RuntimeStack, coerce_runtime_stack
+from app.node_runtime.harness.config import RuntimeStack, coerce_runtime_stack
 from app.contracts.models import (
     RuntimeContinueReason,
     RuntimeMessageRole,

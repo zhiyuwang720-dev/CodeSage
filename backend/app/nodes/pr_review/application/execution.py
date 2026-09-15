@@ -28,7 +28,7 @@ from app.db.session import async_session_factory
 from app.db.session import get_pr_review_sync_session_factory
 from app.models.agent_task import AgentTask, AgentTaskStatus
 from app.nodes.pr_review.contracts.review_execution import ExecutionContext
-from app.control_plane.execution_ownership import (
+from app.control_plane.scale_ops.ownership import (
     ActiveLeaseError,
     CancelRequestedError,
     ExecutionLease,

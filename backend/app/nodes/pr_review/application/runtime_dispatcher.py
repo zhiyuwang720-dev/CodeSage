@@ -147,7 +147,7 @@ class RuntimePerspectiveDispatcher:
                 session_resumed=bool(resume_session_id),
             )
         )
-        from app.execution_plane.runtime.bridge import RuntimeBridge, RuntimeCompletionMode
+        from app.node_runtime.harness.bridge import RuntimeBridge, RuntimeCompletionMode
         from app.nodes.pr_review.tools.finalize_review import FinalizeReviewTool
 
         spec = build_review_perspective_spec(perspective)

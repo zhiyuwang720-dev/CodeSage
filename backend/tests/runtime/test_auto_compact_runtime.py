@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.execution_plane.runtime.compaction.auto_compact import (
+from app.node_runtime.harness.compaction.auto_compact import (
     AUTOCOMPACT_BUFFER_TOKENS,
     MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
     MAX_OUTPUT_TOKENS_FOR_SUMMARY,
@@ -9,7 +9,7 @@ from app.execution_plane.runtime.compaction.auto_compact import (
     get_auto_compact_threshold,
     get_effective_context_window_size,
 )
-from app.execution_plane.runtime.compaction.models import AutoCompactTrackingState
+from app.node_runtime.harness.compaction.models import AutoCompactTrackingState
 from app.contracts.models import RuntimeMessageRole, TranscriptItem
 from app.contracts.query_state import QueryLoopState
 

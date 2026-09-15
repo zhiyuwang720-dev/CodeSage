@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models.audit_session import AuditSkillInvocationStatus
+from app.node_runtime.persistence.models import AuditSkillInvocationStatus
 from app.services.skill.facade import SkillService
 
 

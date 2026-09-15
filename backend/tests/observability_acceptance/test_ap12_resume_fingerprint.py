@@ -6,7 +6,7 @@ import pytest
 
 from app.nodes.pr_review.contracts.review_execution import ReviewRunIdentity, build_config_fingerprint
 from app.nodes.pr_review.application.policy import build_review_compatibility_config
-from app.execution_plane.models.config import MODEL_BOUNDARY_VERSION
+from app.node_runtime.llm.config import MODEL_BOUNDARY_VERSION
 
 SHA = "a" * 64
 

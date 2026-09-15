@@ -12,7 +12,7 @@ from arq.connections import RedisSettings
 from arq.worker import func
 
 from app.nodes.pr_review.application.execution import QuickReviewDependencies, execute_quick_review
-from app.infrastructure.messaging.task_queue import AGENT_TASK_JOB_NAME
+from app.control_plane.scale_ops.submission import AGENT_TASK_JOB_NAME
 from app.worker.agent_worker import execute_agent_task_job
 
 

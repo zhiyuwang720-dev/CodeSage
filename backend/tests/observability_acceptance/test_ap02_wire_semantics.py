@@ -194,7 +194,7 @@ async def test_ap02_unknown_endpoint_protocol_fails_before_sending(model_harness
     model_harness.server.set_default(CHAT_PATH, PlannedResponse(payload=openai_completion()))
     service = model_harness.service(provider="openai", model="fixture-model", protocol="native")
 
-    from app.execution_plane.models.config import ModelConfigurationError
+    from app.node_runtime.llm.config import ModelConfigurationError
 
     with pytest.raises(ModelConfigurationError):
         await service.chat_completion(messages=[{"role": "user", "content": "hi"}])

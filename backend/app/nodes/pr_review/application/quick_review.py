@@ -16,7 +16,7 @@ from app.nodes.pr_review.application.command_router import run_review_pipeline_a
 from app.nodes.pr_review.application.dependencies import ReviewUseCaseDependencies
 from app.nodes.pr_review.application.execution import current_review_llm_service
 from app.nodes.pr_review.application.execution_events import build_review_event_sink
-from app.control_plane.execution_ownership import (
+from app.control_plane.scale_ops.ownership import (
     CancelRequestedError,
     current_execution_context,
     current_execution_lease,

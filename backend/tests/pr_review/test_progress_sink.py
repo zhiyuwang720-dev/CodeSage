@@ -98,7 +98,7 @@ async def test_dispatcher_forwards_tagged_events_to_sink(monkeypatch):
     """
     from types import SimpleNamespace
 
-    import app.execution_plane.runtime.bridge as bridge_mod
+    import app.node_runtime.harness.bridge as bridge_mod
     from app.nodes.pr_review.application.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class Recorder:

@@ -14,7 +14,7 @@ from app.nodes.pr_review.contracts.final_review import (
     format_validation_errors,
 )
 from app.contracts.models import ToolExecutionPayload
-from app.tool_gateway.runtime import RuntimeTool, ToolExecutionContext
+from app.node_runtime.tool_gateway.runtime import RuntimeTool, ToolExecutionContext
 
 
 class InvalidFinalizeReviewInput:

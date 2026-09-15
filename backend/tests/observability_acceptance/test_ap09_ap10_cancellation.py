@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from app.execution_plane.models.config import ModelCatalog, ModelConfigurationError
-from app.execution_plane.models.service import LLMService
+from app.node_runtime.llm.config import ModelCatalog, ModelConfigurationError
+from app.node_runtime.llm.service import LLMService
 
 from .fixture_server import PlannedResponse, openai_completion, openai_stream_chunks
 

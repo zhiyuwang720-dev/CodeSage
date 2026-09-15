@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from app.execution_plane.runtime.compaction.compact import PTL_RETRY_MARKER, compact_conversation, truncate_head_for_ptl_retry
-from app.execution_plane.runtime.compaction.models import AutoCompactTrackingState, CompactionResult
-from app.execution_plane.runtime.compaction.post_compact import build_post_compact_messages
+from app.node_runtime.harness.compaction.compact import PTL_RETRY_MARKER, compact_conversation, truncate_head_for_ptl_retry
+from app.node_runtime.harness.compaction.models import AutoCompactTrackingState, CompactionResult
+from app.node_runtime.harness.compaction.post_compact import build_post_compact_messages
 from app.contracts.models import RuntimeMessageRole, RuntimeModelResponse, TranscriptItem
 from app.contracts.query_state import QueryLoopState
 
@@ -139,7 +139,7 @@ def test_truncate_head_for_ptl_retry_prepends_retry_marker_when_slice_becomes_as
 
 
 def test_partial_compact_conversation_from_preserves_prefix_and_anchors_boundary():
-    from app.execution_plane.runtime.compaction.compact import partial_compact_conversation
+    from app.node_runtime.harness.compaction.compact import partial_compact_conversation
 
     client = _FakeCompactModelClient([
         {"content": "<summary>Partial from summary</summary>"}
@@ -173,7 +173,7 @@ def test_partial_compact_conversation_from_preserves_prefix_and_anchors_boundary
 
 
 def test_partial_compact_conversation_up_to_preserves_suffix_and_anchors_summary():
-    from app.execution_plane.runtime.compaction.compact import partial_compact_conversation
+    from app.node_runtime.harness.compaction.compact import partial_compact_conversation
 
     client = _FakeCompactModelClient([
         {"content": "<summary>Partial up_to summary</summary>"}
@@ -262,7 +262,7 @@ def test_compact_conversation_rebuilds_post_compact_attachments_and_hook_results
 
 
 def test_partial_compact_rebuild_skips_preserved_tail_duplicates():
-    from app.execution_plane.runtime.compaction.compact import partial_compact_conversation
+    from app.node_runtime.harness.compaction.compact import partial_compact_conversation
 
     state = QueryLoopState(
         tool_use_context={
@@ -313,7 +313,7 @@ def test_partial_compact_rebuild_skips_preserved_tail_duplicates():
 
 
 def test_post_compact_rebuild_skips_duplicate_skill_agent_mcp_and_tool_context_from_preserved_tail():
-    from app.execution_plane.runtime.compaction.compact import partial_compact_conversation
+    from app.node_runtime.harness.compaction.compact import partial_compact_conversation
 
     state = QueryLoopState(
         tool_use_context={

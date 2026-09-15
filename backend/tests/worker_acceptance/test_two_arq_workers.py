@@ -17,8 +17,8 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.db.session import async_session_factory
-from app.models.audit_session import AuditSession, ToolExecutionReceipt
-from app.models.checkpoint import AuditStageORM
+from app.node_runtime.persistence.models import AuditSession, ToolExecutionReceipt
+from app.nodes.pr_review.persistence.stage_models import AuditStageORM
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskStatus
 from app.models.project import Project
 from app.models.user import User

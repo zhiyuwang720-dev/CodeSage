@@ -11,7 +11,7 @@ from uuid import uuid4
 from app.core.config import settings
 from app.infrastructure.observability import configure_observability
 from app.infrastructure.observability.tracing import bind_observability_context, reset_observability_context
-from app.execution_plane.models.service import LLMService
+from app.node_runtime.llm.service import LLMService
 
 FIXED_CASE_ID = "deepseek-public-v1"
 FIXED_PROMPT = "Return exactly CODESAGE_SMOKE_OK and nothing else."

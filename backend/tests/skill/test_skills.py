@@ -6,11 +6,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import AuditSkillInvocationStatus
-from app.execution_plane.session.store import AuditSessionStore
+from app.node_runtime.persistence.models import AuditSkillInvocationStatus
+from app.node_runtime.sessions.store import AuditSessionStore
 from app.services.skill.catalog import RuntimeSkillCatalog
 from app.services.skill.tool import RuntimeSkillTool
-from app.tool_gateway.runtime import ToolExecutionContext
+from app.node_runtime.tool_gateway.runtime import ToolExecutionContext
 
 
 class FakeSkillService:

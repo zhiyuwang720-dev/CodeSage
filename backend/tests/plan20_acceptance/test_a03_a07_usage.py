@@ -7,12 +7,12 @@ import json
 
 import pytest
 
-from app.execution_plane.models.client import SDKModelClient, _StreamState
-from app.execution_plane.models.config import LLMConfig, LLMRequest
-from app.execution_plane.models.errors import ModelResponseError
-from app.execution_plane.models.types import LLMProvider
-from app.execution_plane.models.usage import normalize_usage
-from app.execution_plane.runtime.bridge import RuntimeLLMModelClient
+from app.node_runtime.llm.client import SDKModelClient, _StreamState
+from app.node_runtime.llm.config import LLMConfig, LLMRequest
+from app.node_runtime.llm.errors import ModelResponseError
+from app.node_runtime.llm.types import LLMProvider
+from app.node_runtime.llm.usage import normalize_usage
+from app.node_runtime.harness.bridge import RuntimeLLMModelClient
 from tests.observability_acceptance.fixture_server import (
     PlannedResponse,
     anthropic_message,

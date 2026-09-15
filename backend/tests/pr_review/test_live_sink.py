@@ -170,7 +170,7 @@ def test_sink_ignores_unknown_event_types():
 async def test_dispatcher_emits_session_start(monkeypatch):
     from types import SimpleNamespace
 
-    import app.execution_plane.runtime.bridge as bridge_mod
+    import app.node_runtime.harness.bridge as bridge_mod
     from app.nodes.pr_review.application.runtime_dispatcher import RuntimePerspectiveDispatcher
 
     class Recorder:

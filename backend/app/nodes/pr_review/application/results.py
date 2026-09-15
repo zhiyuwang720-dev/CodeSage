@@ -8,11 +8,11 @@ from typing import Iterable
 from sqlalchemy import select
 
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskPhase, AgentTaskStatus
-from app.models.review_execution import ReviewExecutionRun
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.contracts.checkpoint import StageStatus
 from app.nodes.pr_review.contracts.final_review import ReviewFinding
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
-from app.control_plane.execution_ownership import (
+from app.control_plane.scale_ops.ownership import (
     CancelRequestedError,
     ExecutionLease,
     StaleExecutionOwnerError,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.execution_plane.runtime.compaction.prompts import (
+from app.node_runtime.harness.compaction.prompts import (
     BASE_COMPACT_PROMPT,
     NO_TOOLS_PREAMBLE,
     NO_TOOLS_TRAILER,

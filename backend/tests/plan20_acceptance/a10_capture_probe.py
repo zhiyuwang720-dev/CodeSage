@@ -57,8 +57,8 @@ def _attributes(span: dict) -> dict:
 
 
 async def _run(output: Path, run_id: str) -> dict:
-    from app.execution_plane.models.client import reset_sdk_client
-    from app.execution_plane.models.service import LLMService
+    from app.node_runtime.llm.client import reset_sdk_client
+    from app.node_runtime.llm.service import LLMService
     from app.infrastructure.observability import configure_observability
     from app.infrastructure.observability.content import configure_content_store
     from app.infrastructure.observability.litellm_integration import reset_integration_state

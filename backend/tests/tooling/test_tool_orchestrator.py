@@ -7,10 +7,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
-from app.models.audit_session import ToolExecutionReceiptStatus
+from app.node_runtime.persistence.models import ToolExecutionReceiptStatus
 from app.contracts.models import ToolCallRequest, ToolExecutionPayload
-from app.execution_plane.session.store import AuditSessionStore
-from app.tool_gateway.runtime import (
+from app.node_runtime.sessions.store import AuditSessionStore
+from app.node_runtime.tool_gateway.runtime import (
     RuntimeTool,
     ToolExecutionContext,
     ToolOrchestrator,

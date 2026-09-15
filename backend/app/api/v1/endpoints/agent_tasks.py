@@ -33,19 +33,19 @@ from app.models.agent_task import (
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
     VulnerabilitySeverity, FindingStatus,
 )
-from app.models.audit_session import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, ToolExecutionReceipt
-from app.execution_plane.runtime.config import RuntimeStack, coerce_runtime_stack
+from app.node_runtime.persistence.models import AuditCheckpoint, AuditSession, AuditSessionMessage, AuditSessionTurn, ToolExecutionReceipt
+from app.node_runtime.harness.config import RuntimeStack, coerce_runtime_stack
 from app.contracts.final_finding_contract import has_meaningful_poc, is_placeholder_finding
 from app.models.project import Project
-from app.models.review_execution import ReviewExecutionRun
+from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.infrastructure.observability.content import get_content_store
 from app.infrastructure.persistence.review_artifacts import ArtifactIntegrityError
 from app.models.user import User
 from app.models.user_config import UserConfig
 from app.infrastructure.messaging.event_manager import EventManager
 from app.infrastructure.messaging.event_stream import create_agent_event_stream, event_stream_enabled
-from app.infrastructure.messaging.task_queue import enqueue_agent_task, should_use_worker_queue
-from app.execution_plane.task_executor import (
+from app.control_plane.scale_ops.submission import enqueue_agent_task, should_use_worker_queue
+from app.bootstrap.task_executor import (
     clear_task_cancellation,
     is_task_cancelled,
     request_agent_task_cancellation,
@@ -55,7 +55,7 @@ from app.services.skill.file_service import SkillFileService
 from app.contracts.checkpoint import StageStatus
 from app.nodes.pr_review.domain.orchestrator import PERSPECTIVES
 from app.nodes.pr_review.application.results import QUICK_REVIEW_STAGES
-from app.control_plane.execution_ownership import (
+from app.control_plane.scale_ops.ownership import (
     current_execution_lease,
     review_execution_ownership,
 )
@@ -842,10 +842,11 @@ async def start_agent_task(
     project = await db.get(Project, task.project_id)
     if not project or project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    from app.control_plane.lifecycle import InvalidTaskStateError, task_lifecycle_service
+    from app.control_plane.lifecycle import InvalidTaskStateError
+    from app.nodes.pr_review.application.commands import pr_review_lifecycle_service
 
     try:
-        command = await task_lifecycle_service.start(db, task_id)
+        command = await pr_review_lifecycle_service.start(db, task_id)
     except InvalidTaskStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     task = command.task
@@ -1149,10 +1150,11 @@ async def resume_agent_task(
     project = await db.get(Project, task.project_id)
     if not project or project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    from app.control_plane.lifecycle import InvalidTaskStateError, task_lifecycle_service
+    from app.control_plane.lifecycle import InvalidTaskStateError
+    from app.nodes.pr_review.application.commands import pr_review_lifecycle_service
 
     try:
-        command = await task_lifecycle_service.resume(db, task_id)
+        command = await pr_review_lifecycle_service.resume(db, task_id)
     except InvalidTaskStateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     task = command.task
@@ -1967,7 +1969,7 @@ async def generate_audit_report(
 ):
     """Generate a PR audit report for the task (markdown/json/html, audit semantics)."""
     from fastapi.responses import Response
-    from app.models.report_template import AgentTaskReport
+    from app.nodes.pr_review.persistence.report_models import AgentTaskReport
     from app.services.task_report_service import generate_task_report
 
     task = await db.get(AgentTask, task_id)

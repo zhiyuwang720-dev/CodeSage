@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.core.config import settings
-from app.execution_plane.models.service import LLMService
+from app.node_runtime.llm.service import LLMService
 from tests.observability_acceptance.fixture_server import FixtureServer, PlannedResponse, openai_completion
 
 
