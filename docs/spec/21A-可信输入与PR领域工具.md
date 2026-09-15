@@ -1,6 +1,8 @@
 # Spec 21A：可信输入、受限领域工具与按需上下文
 
-版本1.0，2026-09-14。状态：待实施，未验收。依据[Plan21](../plan/21-可信审查上下文与PR领域工具.md)；后续[21B](21B-确定性分包与覆盖恢复.md)；统一[验收与进度](21-验收矩阵与实施进度.md)。
+版本1.2，2026-09-15。状态：verified；W00—W03 已实施，foundation、真实 PostgreSQL/Redis 双 Worker L2、后端回归与前端类型检查通过。依据[Plan21](../plan/21-可信审查上下文与PR领域工具.md)；统一[验收与进度](21-验收矩阵与实施进度.md)。
+
+强制开发顺序：**21A → [22A](22A-模块归属与结果事务边界.md) → [22B](22B-独立节点与可靠投递验收.md) → [21B](21B-确定性分包与覆盖恢复.md) → [22C](22C-远程节点协议与结果投影.md)**。21A先按现有落点完成并验收；不为目录重组回退其可信输入与证据门。后续迁移由22A承担，22B签收前不开展21B实现。
 
 用户已确认：repository_required失败不静默降级；允许固定base/head中的未修改源码检索；先修三视角、再分包。MCP后端是独立候选方案，见[21M](21M-MCP代码图接入候选规格.md)，不作为21A通过前提。本规格不要求开发完整AST/调用图引擎。
 
@@ -22,7 +24,21 @@
 | `control_plane/results.py`及阶段存储 | 原子提交能力/覆盖/证据和结果，守住epoch/cancel门禁 |
 | `code-review-benchmark/offline/codesage_eval/*`（仓库根下） | fixture模式与worker路径校验；JSONL/HTML资源及覆盖展示 |
 
-计划中的模块名是实施落点；若现有模块等价则复用并在台账说明，禁止新旧两套长期并存。原通用任务的Shell/Skill不全局删除；PR入口必须收敛。
+上表是21A开发时的原始落点；若现有模块等价则复用并在台账说明。22A验收后以以下目标归属为准，禁止为满足上表旧路径重新建立实现。原通用任务的Shell/Skill不全局删除；PR入口必须收敛。
+
+| 21A职责 | 22A以后目标所有者 |
+|---|---|
+| review_context/identity/manifest/evidence契约 | nodes/pr_review/contracts |
+| review_inputs、PR配置指纹、输入与resume校验 | nodes/pr_review/application/inputs.py、policy.py |
+| diff索引与证据/完成规则 | nodes/pr_review/domain |
+| context_builder、快速协调与视角dispatcher | nodes/pr_review/application |
+| 六个PR领域工具 | nodes/pr_review/tools |
+| 通用网关执行/codec/回执 | node_runtime/tool_gateway |
+| PR阶段/Findings/报告 | nodes/pr_review/application/results.py及persistence |
+| lease/epoch/cancel与原子提交守卫 | control_plane/scale_ops与bootstrap UoW |
+| 固定Git对象/产物技术适配器 | infrastructure，受PR输入服务调用 |
+
+结果职责移动后仍用同一UoW校验owner并写stage/findings/terminal。平台不解释PR能力、证据或coverage；SSE与结果提交保持独立。21A A-R01—09的行为门禁、错误码、预算和工具限制均保持有效。
 
 ## 2. A-R01：输入模式与身份
 
@@ -142,4 +158,4 @@ intake的StageResult stats/artifacts保存能力与manifest引用；API任务详
 
 旧路径清理须全仓检索：虚构workspace/cwd兜底、PR二次import、clone失败降级、PR通用工具提示、全量recon系统注入、重复diff解析。旧函数有非PR调用者时保留窄兼容外观，PR必须从新入口通过。
 
-按统一验收表A01—A16开发并记录证据；本文件是开发规格，未宣称代码实现或测试通过。
+按统一验收表 A01—A16 开发并记录证据。2026-09-15 已完成 21A 签收；后续重组必须保持本规格的可信输入、固定快照、领域工具、证据与完成门禁。
