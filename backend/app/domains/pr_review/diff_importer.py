@@ -42,11 +42,13 @@ def import_github_pr(
     if not (dest / ".git").exists():
         clone_repo(source, dest)
     if head_ref:
-        run_git(dest, "fetch", "origin", head_ref, check=False)
+        run_git(dest, "fetch", "origin", head_ref)
         head_sha = resolve_sha(dest, "FETCH_HEAD")
     else:
-        run_git(dest, "fetch", "origin", check=False)
-        head_sha = resolve_sha(dest, "HEAD")
+        # A PR URL identifies refs/pull/<number>/head, never the clone's
+        # default branch or whichever HEAD happens to be checked out.
+        run_git(dest, "fetch", "origin", f"refs/pull/{info.number}/head")
+        head_sha = resolve_sha(dest, "FETCH_HEAD")
     base_sha = resolve_sha(dest, base_ref)
     if checkout_base:
         base_used = run_git(dest, "merge-base", base_sha, head_sha).strip()

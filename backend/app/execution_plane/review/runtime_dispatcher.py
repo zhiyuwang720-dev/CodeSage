@@ -230,7 +230,13 @@ class RuntimePerspectiveDispatcher:
                 f"perspective {perspective} incomplete (mode="
                 f"{final_payload.get('runtime_completion_mode')})"
             )
-        findings = [dict(item) for item in (final_payload.get("findings") or [])]
+        assessment_scope = dict(final_payload.get("assessment_scope") or {})
+        findings = []
+        for item in final_payload.get("findings") or []:
+            finding = dict(item)
+            if assessment_scope and not finding.get("assessment_scope"):
+                finding["assessment_scope"] = assessment_scope
+            findings.append(finding)
         if sink is not None:
             # 09-P1: perspective_done 带 findings 本体(非计数)+ session_id,
             # 供外层 sink 写 audit_stages 的 review:* stage 快照(resume 零 LLM 读取)。

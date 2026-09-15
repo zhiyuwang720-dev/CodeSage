@@ -317,7 +317,7 @@ def build_review_context(
 ) -> ReviewContext:
     """组装 ReviewContext 并落盘(§3.3.3); diff-only 模式跳过自动收集。"""
     repo_dir_path = Path(imported.repo_dir) if imported.repo_dir else None
-    if imported.diff_only or repo_dir_path is None or not repo_dir_path.exists():
+    if imported.diff_only:
         ctx = ReviewContext(
             repo=imported.repo,
             pr_number=imported.pr_number,
@@ -331,6 +331,10 @@ def build_review_context(
             pr_key=imported.pr_key,
         )
     else:
+        if repo_dir_path is None or not repo_dir_path.exists():
+            raise RuntimeError(
+                "repository_required source is unavailable; refusing implicit diff_only downgrade"
+            )
         budget = int((options or {}).get("file_budget_bytes", DEFAULT_FILE_BUDGET_BYTES))
         ctx = ReviewContext(
             repo=imported.repo,

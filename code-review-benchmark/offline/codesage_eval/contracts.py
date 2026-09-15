@@ -51,6 +51,8 @@ class CandidateFinding(BaseModel):
     suggestion: str | None = None
     source: str | None = None
     contributing_sources: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    assessment_scope: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvalRunManifest(BaseModel):

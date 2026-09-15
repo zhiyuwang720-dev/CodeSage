@@ -1,6 +1,7 @@
 """spec §6 test_importer: 本地 fixture 仓库 clone 成功, 持久化目录结构正确。"""
 from app.domains.pr_review.diff_importer import import_github_pr
 from app.domains.pr_review.paths import diff_path, repo_dir
+from tests.pr_review.conftest import git
 
 
 def test_local_fixture_clone_to_persistent_dir(fixture_repo):
@@ -31,3 +32,13 @@ def test_clone_is_cached(fixture_repo):
     second = import_github_pr("https://github.com/acme/fixture/pull/7", **kwargs)
     assert first.repo_dir == second.repo_dir
     assert diff_path(first.pr_key).is_file()
+
+
+def test_pr_url_without_head_ref_fetches_pr_head_not_default_head(fixture_repo):
+    git(fixture_repo.path, "update-ref", "refs/pull/8/head", fixture_repo.head_sha)
+    imported = import_github_pr(
+        "https://github.com/acme/fixture/pull/8",
+        clone_source=str(fixture_repo.path),
+    )
+    assert imported.head_sha == fixture_repo.head_sha
+    assert imported.head_sha != git(fixture_repo.path, "rev-parse", "main").strip()

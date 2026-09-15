@@ -66,11 +66,7 @@ def test_clone_success(data_root: Path, source_repo: Path):
     assert Path(imported2.repo_dir) == repo_path
 
 
-def test_clone_failure_falls_back_to_diff_only(data_root: Path, tmp_path: Path):
+def test_clone_failure_does_not_fall_back_to_diff_only(data_root: Path, tmp_path: Path):
     missing = tmp_path / "does-not-exist"
-    imported = import_plain_diff(SAMPLE_DIFF, clone_source=str(missing))
-    # 克隆失败(本地路径不存在 → git 报错)降级 diff-only, 不中断
-    assert imported.diff_only is True
-    assert imported.repo_dir is None
-    # diff 本身仍已落盘可读
-    assert imported.diff_text == SAMPLE_DIFF
+    with pytest.raises(RuntimeError, match="未降级"):
+        import_plain_diff(SAMPLE_DIFF, clone_source=str(missing))

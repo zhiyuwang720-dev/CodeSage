@@ -42,6 +42,7 @@ from app.control_plane.review_inputs import (
     initialize_or_resume_review_input,
     preflight_review_input,
 )
+from app.infrastructure.repositories.snapshots import SnapshotError
 
 
 QuickRunner = Callable[[str], Awaitable[None]]
@@ -101,16 +102,27 @@ async def execute_quick_review(
             raise ValueError(f"Task not found: {task_id}")
         if task.status == AgentTaskStatus.COMPLETED:
             return AgentTaskStatus.COMPLETED
-        prepared = await initialize_or_resume_review_input(
-            db,
-            task,
-            compatibility_config=build_review_compatibility_config(task),
-            artifact_root=(
-                deps.artifact_root
-                or str(Path(settings.MANAGED_PROJECTS_ROOT) / ".review_artifacts")
-            ),
-            delivery_id=delivery,
-        )
+        try:
+            prepared = await initialize_or_resume_review_input(
+                db,
+                task,
+                compatibility_config=build_review_compatibility_config(task),
+                artifact_root=(
+                    deps.artifact_root
+                    or str(Path(settings.MANAGED_PROJECTS_ROOT) / ".review_artifacts")
+                ),
+                delivery_id=delivery,
+            )
+        except (ValueError, SnapshotError) as exc:
+            # Input can fail before a stable run identity exists.  Persist a
+            # recoverable terminal state instead of leaving the task RUNNING.
+            if task.status not in {AgentTaskStatus.RUNNING, AgentTaskStatus.COMPLETED, AgentTaskStatus.CANCELLED}:
+                from app.control_plane.results import review_result_service
+
+                code = getattr(exc, "code", "input_invalid")
+                await review_result_service.mark_failed(db, task_id, f"{code}: {exc}")
+                return AgentTaskStatus.FAILED
+            raise
         try:
             lease = await review_execution_ownership.claim(
                 db,

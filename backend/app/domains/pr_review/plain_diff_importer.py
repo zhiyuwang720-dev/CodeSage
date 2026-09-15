@@ -2,8 +2,8 @@
 
 模式参考 pr-agent PlainDiffGitProvider(GitHub MIT, plain_diff_provider.py 的
 diff 即数据思路): diff 文本来自 stdin/文件, repo/pr_number 可选注入。
-clone_source 可选: 给出时克隆源码到 repos/, 使审查工具能读/搜被改文件;
-克隆失败(私有仓库/网络)自动降级 diff_only=True, 不阻塞审查。
+clone_source 可选: 给出时克隆源码到 repos/, 使审查工具能读/搜被改文件。
+源码已被声明时，获取失败必须显式失败，不能悄悄改变审查能力。
 """
 from __future__ import annotations
 
@@ -49,10 +49,10 @@ def import_plain_diff(
             logger.info(
                 "plain-diff 已克隆源码 %s → %s", clone_source, dest
             )
-        except Exception as exc:  # 私有仓库/网络失败: 降级 diff-only, 审查不中断
-            logger.warning(
-                "plain-diff 克隆源码失败(%s), 降级 diff-only: %s", clone_source, exc
-            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"repository_required 源码准备失败，未降级为 diff_only: {exc}"
+            ) from exc
 
     return ImportedPr(
         pr_key=pr_key,
