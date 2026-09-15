@@ -23,6 +23,10 @@ from app.control_plane.execution_ownership import (
 )
 from app.control_plane.results import review_result_service
 from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.contracts.review_context import RepositorySnapshotRef
+from app.domains.pr_review.diff_index import parse_unified_diff
+from app.infrastructure.repositories.snapshots import GitSnapshotReader
+from app.tool_gateway.pr_review import PrReviewToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,22 @@ async def execute_review_use_case(
             if reference.sha256 != context.identity.diff_sha256:
                 raise ValueError("执行输入与 ReviewRunIdentity 不一致")
             diff_text = diff.decode("utf-8", errors="replace")
+            raw_snapshot = config.get("review_execution_snapshot")
+            snapshot = RepositorySnapshotRef.model_validate(raw_snapshot) if raw_snapshot else None
+            source_dir = config.get("review_execution_source_dir")
+            snapshot_reader = (
+                GitSnapshotReader(Path(source_dir), snapshot)
+                if source_dir and snapshot is not None
+                else None
+            )
+            pr_tool_context = PrReviewToolContext(
+                run_id=context.identity.run_id,
+                diff_index=parse_unified_diff(
+                    diff_text, diff_sha256=context.identity.diff_sha256
+                ),
+                mode=context.review_mode,
+                snapshot_reader=snapshot_reader,
+            )
             await review_result_service.register(db, task_id)
             await review_result_service.mark_running(
                 db, task, changed_files=_changed_files(diff_text)
@@ -133,8 +153,7 @@ async def execute_review_use_case(
                     "max_turns": int(task.max_iterations or 50),
                     "perspective_token_budget": min(10000, max(1, int(task.token_budget or 100000) // 3)),
                     "session_factory": deps.sync_session_factory(),
-                    "workspace_root": config.get("review_execution_source_dir")
-                    or context.workspace_root,
+                    "pr_tool_context": pr_tool_context,
                     "prefill_handoffs": prefill or None,
                     "resume_sessions": sessions or None,
                     "llm_service": deps.llm_service or current_review_llm_service.get(),

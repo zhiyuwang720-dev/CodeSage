@@ -19,7 +19,7 @@ REVIEW_FINALIZER_PROMPTS = [
     "如果审查已经充分完成：调用 FinalizeReview 提交结构化评论集(findings+summary)；"
     "或输出可解析的 {\"findings\": [...], \"summary\": \"...\"} JSON。\n"
     "注意：评论必须落在 diff 新增行(head 行号)；没有可报告问题时提交空 findings 并在 summary 说明范围。\n"
-    "当前为最终提交阶段：除 FinalizeReview 外，其他工具(Read/Bash/Skill 等)已全部关闭，请勿再调用。"
+    "当前为最终提交阶段：除 FinalizeReview 外，其他 PR 领域工具已全部关闭，请勿再调用。"
 ]
 
 

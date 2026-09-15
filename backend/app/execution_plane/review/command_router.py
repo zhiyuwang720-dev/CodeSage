@@ -192,6 +192,7 @@ async def run_review_pipeline_async(
     llm_service = options.pop("llm_service", None)
     session_factory = options.pop("session_factory", None)
     workspace_root = options.pop("workspace_root", None)
+    pr_tool_context = options.pop("pr_tool_context", None)
     event_sink = event_sink if event_sink is not None else options.pop("event_sink", None)
     streaming = bool(options.pop("streaming", False))
     # 09-P2: resume 执行指令(纯数据 dict/str, 但属运行时注入而非持久化审查配置,
@@ -236,15 +237,31 @@ async def run_review_pipeline_async(
             await maybe_awaitable
 
     if dispatcher is None:
-        from app.tool_gateway.builder import build_runtime_tool_catalog
+        from app.contracts.review_execution import sha256_bytes
+        from app.domains.pr_review.diff_index import parse_unified_diff
+        from app.tool_gateway.pr_review import (
+            PrReviewToolContext,
+            build_pr_review_tool_catalog,
+        )
         from app.execution_plane.models.service import LLMService
 
         from .runtime_dispatcher import RuntimePerspectiveDispatcher
 
-        project_root = ctx.source_dir or workspace_root or "."
+        # Compatibility callers without a prepared worker context are safely
+        # constrained to diff-only.  Never turn cwd into repository authority.
+        del workspace_root
+        if pr_tool_context is None:
+            encoded_diff = ctx.diff_text.encode("utf-8")
+            pr_tool_context = PrReviewToolContext(
+                run_id=ctx.pr_key or sha256_bytes(encoded_diff)[:24],
+                diff_index=parse_unified_diff(
+                    ctx.diff_text, diff_sha256=sha256_bytes(encoded_diff)
+                ),
+                mode="diff_only",
+            )
         dispatcher = RuntimePerspectiveDispatcher(
             llm_service=llm_service or LLMService(),
-            tools=build_runtime_tool_catalog(project_root=project_root),
+            tools=build_pr_review_tool_catalog(pr_tool_context),
             project_id=ctx.pr_key or ctx.repo,
             task_id=options.get("task_id"),
             session_factory=session_factory,

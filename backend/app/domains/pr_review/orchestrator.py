@@ -37,16 +37,12 @@ PERSPECTIVE_PROMPTS: dict[str, str] = {
     "quality": REVIEW_QUALITY_PROMPT,
 }
 
-# 工具权限矩阵(§3.1): 键为 build_runtime_tool_registry 产出的工具名
-# PowerShell: Windows 上 is_powershell_runtime_tool_enabled() 默认开启, 注册表已注册;
-#           本机 bash 检测可能命中 WSL 启动器(System32\bash.exe), PowerShell 是可靠兜底 shell。
+# Plan 21A PR profile: only bounded domain tools are model-visible.  The
+# catalog omits source tools in diff_only mode; the allowlist is a second gate.
 TOOL_MATRICES: dict[str, set[str]] = {
-    # Security: Read/Glob/Grep + Bash/PowerShell(受限, 扫描反馈)
-    "security": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
-    # Architecture: Read/Glob/Grep + Bash/PowerShell(重读跨文件引用、验证构建/依赖)
-    "architecture": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
-    # Quality: Read/Glob/Grep + Bash/PowerShell(跑单测, 可选)
-    "quality": {"Read", "Glob", "Grep", "Bash", "PowerShell", "Skill"},
+    "security": {"ListChanges", "ReadDiff", "SearchDiff", "ReadSource", "SearchSource"},
+    "architecture": {"ListChanges", "ReadDiff", "SearchDiff", "ReadSource", "SearchSource"},
+    "quality": {"ListChanges", "ReadDiff", "SearchDiff", "ReadSource", "SearchSource"},
 }
 # 追问轮次上限(§3.2.2: 每视角 ≤2)
 MAX_FOLLOWUPS_PER_PERSPECTIVE = 2

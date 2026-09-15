@@ -694,6 +694,34 @@ class ToolGateway:
                 lifecycle={**lifecycle, "progress_events": progress_events},
             )
 
+        if result.is_error:
+            message = result.content or str(
+                (result.output_payload or {}).get("error_message") or "Tool returned an error"
+            )
+            self._emit_hook_event(
+                event_name="PostToolUseFailure",
+                context=context,
+                tool_name=request.name,
+                payload={
+                    "error": message,
+                    "error_kind": (result.metadata or {}).get("error_kind", "returned_error"),
+                },
+            )
+            return self._finalize_error_record(
+                tool_call_id=tool_call_id,
+                request=request,
+                status=ToolExecutionReceiptStatus.FAILED.value,
+                is_concurrency_safe=prepared_call.is_concurrency_safe,
+                started=started,
+                message=message,
+                output_payload=dict(result.output_payload or {}),
+                metadata={
+                    **dict(result.metadata or {}),
+                    "error_kind": (result.metadata or {}).get("error_kind", "returned_error"),
+                },
+                lifecycle={**lifecycle, "progress_events": progress_events},
+            )
+
         self._emit_hook_event(event_name="PostToolUse", context=context, tool_name=request.name)
         context.report_progress(event="tool_complete", message=f"Completed {prepared_call.tool.user_facing_name(prepared_call.parsed_input)}")
         duration_ms = max(0, int((perf_counter() - started) * 1000))
