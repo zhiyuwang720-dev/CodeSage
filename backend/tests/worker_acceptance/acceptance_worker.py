@@ -12,6 +12,7 @@ from arq.connections import RedisSettings
 from arq.worker import func
 
 from app.nodes.pr_review.application.execution import QuickReviewDependencies, execute_quick_review
+from app.bootstrap.result_uow import sqlalchemy_result_commit_port_factory
 from app.control_plane.scale_ops.submission import AGENT_TASK_JOB_NAME
 from app.worker.agent_worker import execute_agent_task_job
 
@@ -144,6 +145,7 @@ async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None
             worker_id=worker_id,
             artifact_root=os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"],
             observer=observe,
+            result_commit_port_factory=sqlalchemy_result_commit_port_factory,
         ),
         delivery_id=delivery_id,
     )

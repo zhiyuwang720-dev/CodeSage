@@ -28,6 +28,7 @@ from app.control_plane.scale_ops.ownership import (
 )
 from app.nodes.pr_review.persistence.stage_store import audit_stage_store
 from app.nodes.pr_review.application.results import review_result_service
+from app.bootstrap.result_uow import sqlalchemy_result_commit_port_factory
 
 
 pytestmark = pytest.mark.skipif(
@@ -261,6 +262,7 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
                 await review_result_service.commit_success(
                     db, task, old_lease, [_review_finding()],
                     pr_meta={}, artifact_root=str(root),
+                    commit_port_factory=sqlalchemy_result_commit_port_factory,
                 )
     finally:
         current_execution_context.reset(context_token)
@@ -309,6 +311,7 @@ async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatc
                 await review_result_service.commit_success(
                     db, task, lease, [_review_finding("test_gap")],
                     pr_meta={}, artifact_root=str(root),
+                    commit_port_factory=sqlalchemy_result_commit_port_factory,
                 )
     finally:
         current_execution_context.reset(context_token)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -10,6 +11,11 @@ from sqlalchemy import select
 from app.models.agent_task import AgentFinding, AgentTask, AgentTaskPhase, AgentTaskStatus
 from app.control_plane.persistence.execution_models import ReviewExecutionRun
 from app.contracts.checkpoint import StageStatus
+from app.contracts.platform import (
+    AttemptContext,
+    ResultManifestRef,
+    ResultSubmission,
+)
 from app.nodes.pr_review.contracts.final_review import ReviewFinding
 from app.infrastructure.persistence.review_artifacts import LocalReviewArtifactStore
 from app.control_plane.scale_ops.ownership import (
@@ -152,11 +158,13 @@ class ReviewResultService:
         *,
         pr_meta: dict,
         artifact_root: str,
+        commit_port_factory,
     ) -> int:
         """原子提交 Findings、report StageResult 与 COMPLETED 终态。"""
 
         normalized = list(findings)
-        await review_execution_ownership.assert_current_owner(db, lease)
+        if commit_port_factory is None:
+            raise RuntimeError("ResultCommitPort is not configured")
         execution = await db.get(ReviewExecutionRun, str(task.id))
         if execution is None:
             raise RuntimeError("缺少 ReviewExecutionRun")
@@ -176,11 +184,49 @@ class ReviewResultService:
             ).encode("utf-8"),
             media_type="application/json",
         )
-        try:
+        task_id = str(task.id)
+        identity_digest = hashlib.sha256(
+            json.dumps(
+                dict(execution.identity_json or {}),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        attempt_context = AttemptContext(
+            task_id=task_id,
+            attempt_id=lease.attempt_id,
+            node_id=lease.worker_id,
+            lease_epoch=lease.lease_epoch,
+            delivery_id=lease.delivery_id,
+            lease_expires_at=lease.lease_expires_at,
+            identity_digest=identity_digest,
+        )
+        submission = ResultSubmission(
+            task_id=task_id,
+            attempt_id=lease.attempt_id,
+            epoch=lease.lease_epoch,
+            operation="final",
+            idempotency_key=f"final:{lease.lease_epoch}:{lease.attempt_id}",
+            result_schema="pr_review.final.v1",
+            manifest_ref=ResultManifestRef.model_validate(
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "sha256": artifact.sha256,
+                    "size_bytes": artifact.size_bytes,
+                    "media_type": artifact.media_type,
+                }
+            ),
+            outcome="completed",
+        )
+
+        async def business_write(transaction) -> None:
+            current_task = await transaction.get(AgentTask, task_id)
+            if current_task is None:
+                raise RuntimeError("任务不存在")
             # report complete 使用 caller 事务；任何校验/flush 失败都会回滚 findings 和终态。
             await audit_stage_store.complete(
-                db,
-                str(task.id),
+                transaction,
+                task_id,
                 "report",
                 findings=[item.model_dump(mode="json") for item in normalized],
                 payload={
@@ -193,14 +239,14 @@ class ReviewResultService:
             existing = {
                 row.fingerprint: row
                 for row in (
-                    await db.execute(
-                        select(AgentFinding).where(AgentFinding.task_id == str(task.id))
+                    await transaction.execute(
+                        select(AgentFinding).where(AgentFinding.task_id == task_id)
                     )
                 ).scalars()
                 if row.fingerprint
             }
             for finding in normalized:
-                row = self._finding_row(str(task.id), finding)
+                row = self._finding_row(task_id, finding)
                 if row.fingerprint in existing:
                     current = existing[row.fingerprint]
                     current.category = row.category
@@ -210,20 +256,22 @@ class ReviewResultService:
                     current.line_end = row.line_end
                     current.finding_metadata = row.finding_metadata
                 else:
-                    db.add(row)
+                    transaction.add(row)
                     existing[row.fingerprint] = row
-            config = dict(task.agent_config or {})
+            config = dict(current_task.agent_config or {})
             config["pr_meta"] = pr_meta
             config.pop("resume_from_checkpoint", None)
-            task.agent_config = config
-            task.status = AgentTaskStatus.COMPLETED
-            task.current_phase = AgentTaskPhase.REPORTING
-            task.completed_at = datetime.now(timezone.utc)
-            task.findings_count = len(normalized)
-            task.error_message = None
-            await db.commit()
+            current_task.agent_config = config
+            current_task.status = AgentTaskStatus.COMPLETED
+            current_task.current_phase = AgentTaskPhase.REPORTING
+            current_task.completed_at = datetime.now(timezone.utc)
+            current_task.findings_count = len(normalized)
+            current_task.error_message = None
+
+        port = commit_port_factory(db, lease, submission)
+        try:
+            await port.commit(attempt_context, business_write)
         except BaseException:
-            await db.rollback()
             mark_span_error(trace.get_current_span(), "commit_failed")
             raise
         commit_span = trace.get_current_span()

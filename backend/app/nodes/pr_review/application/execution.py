@@ -59,6 +59,7 @@ class QuickReviewDependencies:
     llm_service: Any | None = None
     event_stream_factory: Callable[[], Any] | None = None
     heartbeat_interval: float = 5.0
+    result_commit_port_factory: Callable[..., Any] | None = None
 
 
 current_review_llm_service: ContextVar[Any | None] = ContextVar(
@@ -244,6 +245,7 @@ async def execute_quick_review(
                 sync_session_factory=deps.sync_session_factory,
                 llm_service=deps.llm_service,
                 event_stream_factory=deps.event_stream_factory,
+                result_commit_port_factory=deps.result_commit_port_factory,
             ),
         )
     run_task = asyncio.create_task(review_coro)

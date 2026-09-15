@@ -197,6 +197,7 @@ async def execute_review_use_case(
                 result.findings,
                 pr_meta=pr_meta,
                 artifact_root=artifact_root,
+                commit_port_factory=deps.result_commit_port_factory,
             )
     except (asyncio.CancelledError, CancelRequestedError):
         raise
