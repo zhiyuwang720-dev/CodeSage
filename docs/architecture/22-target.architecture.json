@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CodeSage 目标架构：平台控制面与 PR 节点",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      820
+    ]
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "GitHub / 管理员",
+      "sublabel": "提交任务 · 查询 / SSE",
+      "pos": [
+        35,
+        170
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Runtime & API",
+      "sublabel": "无状态接入与运行命令",
+      "pos": [
+        299,
+        170
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "ops",
+      "type": "backend",
+      "label": "Scale & Ops",
+      "sublabel": "持久队列 · 租约 · 背压",
+      "pos": [
+        563,
+        170
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "node",
+      "type": "backend",
+      "label": "PR Agent 节点 × N",
+      "sublabel": "PR 流程 · Harness · 工具",
+      "pos": [
+        827,
+        170
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "identity",
+      "type": "security",
+      "label": "Identity & Audit",
+      "sublabel": "节点身份 · 策略 · 审计",
+      "pos": [
+        299,
+        410
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "控制面持久状态",
+      "sublabel": "PostgreSQL / Redis",
+      "pos": [
+        563,
+        410
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "local",
+      "type": "database",
+      "label": "PR 节点状态与产物",
+      "sublabel": "Session · 源码 · 证据",
+      "pos": [
+        827,
+        410
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "telemetry",
+      "type": "cloud",
+      "label": "观测与离线报告",
+      "sublabel": "双平面 OTel / JSONL",
+      "pos": [
+        563,
+        650
+      ],
+      "size": [
+        200,
+        82
+      ]
+    },
+    {
+      "id": "model",
+      "type": "external",
+      "label": "模型服务 / MCP",
+      "sublabel": "经 LiteLLM / 受控图适配器",
+      "pos": [
+        1091,
+        170
+      ],
+      "size": [
+        200,
+        82
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "submit",
+      "from": "client",
+      "to": "api",
+      "label": "REST"
+    },
+    {
+      "id": "dispatch",
+      "from": "api",
+      "to": "ops",
+      "label": "运行命令"
+    },
+    {
+      "id": "deliver",
+      "from": "ops",
+      "to": "node",
+      "label": "任务投递"
+    },
+    {
+      "id": "policy",
+      "from": "api",
+      "to": "identity",
+      "label": "策略校验",
+      "labelDy": 90
+    },
+    {
+      "id": "leases",
+      "from": "ops",
+      "to": "state",
+      "label": "原子租约",
+      "labelDy": 90
+    },
+    {
+      "id": "evidence",
+      "from": "node",
+      "to": "local",
+      "label": "检查点",
+      "labelDy": 90
+    },
+    {
+      "id": "models",
+      "from": "node",
+      "to": "model",
+      "label": "模型 / 图查询",
+      "labelDy": -35
+    },
+    {
+      "id": "node-trace",
+      "from": "local",
+      "to": "telemetry",
+      "label": "离线诊断导出"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "控制面可替换实例",
+      "items": [
+        "权威状态在外部持久化层",
+        "PR 语义不进入通用调度器"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "节点自治且受约束",
+      "items": [
+        "PR 业务与轮次执行在节点内",
+        "终态仍需租约与结果提交门禁"
+      ]
+    }
+  ]
+}
