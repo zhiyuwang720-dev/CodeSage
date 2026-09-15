@@ -151,7 +151,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
                 read_calls = await db.scalar(
                     select(func.count(ToolExecutionReceipt.id))
                     .join(AuditSession, ToolExecutionReceipt.session_id == AuditSession.id)
-                    .where(AuditSession.task_id == task_id, ToolExecutionReceipt.tool_name == "Read")
+                    .where(AuditSession.task_id == task_id, ToolExecutionReceipt.tool_name == "ReadDiff")
                 )
                 assert read_calls == 3
     finally:
