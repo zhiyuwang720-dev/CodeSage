@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 from app.nodes.pr_review.domain.prompts import (
     REVIEW_ARCHITECTURE_PROMPT,
@@ -131,6 +134,11 @@ class ReviewOrchestrator:
         for perspective, result in zip(pending, results):
             if isinstance(result, BaseException):
                 error_note = f"{type(result).__name__}: {result}"
+                logger.warning(
+                    "review perspective failed: %s",
+                    perspective,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
                 handoff_map[perspective] = {
                     "from_agent": perspective,
                     "to_agent": "orchestrator",

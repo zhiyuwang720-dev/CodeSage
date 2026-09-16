@@ -22,6 +22,7 @@ from app.contracts.models import (
     TurnExecutionResult,
 )
 from app.node_runtime.tool_gateway.read import GlobRuntimeTool, GrepRuntimeTool, ReadRuntimeTool
+from app.node_runtime.tool_gateway.runtime import RuntimeTool
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +89,13 @@ class FakeLLMServiceWithConfig(FakeLLMService):
 
 
 def build_session_factory():
+    # Register every owner package's mappings before creating the isolated
+    # metadata.  Production startup performs the same registration via
+    # ``app.models``; keeping the helper explicit makes single-test execution
+    # independent from collection order.
+    from app import models as _registered_models
+
+    del _registered_models
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
@@ -316,6 +324,62 @@ def test_bridge_attempts_finalizer_after_incomplete_terminal_action():
     )
 
     assert RuntimeBridge._should_attempt_finalizer(result) is True
+
+
+def test_continue_session_registers_injected_terminal_tool(monkeypatch):
+    class TerminalTool(RuntimeTool):
+        name = "FinalizeReview"
+        description = "finish"
+
+    captured_tool_names: list[list[str]] = []
+
+    async def fake_refresh(self, *, session_id):
+        del self, session_id
+
+    async def fake_run_once(self, *, session_id, model_name):
+        del session_id, model_name
+        captured_tool_names.append(
+            [
+                item["name"]
+                for item in self._query_loop._tool_registry.describe_tools()
+            ]
+        )
+        return TurnExecutionResult(
+            turn_id="turn-resume",
+            stop_reason=RuntimeStopReason.COMPLETED,
+            final_payload={"findings": [], "summary": "resumed"},
+        )
+
+    monkeypatch.setattr(
+        "app.node_runtime.harness.adapters.session.RuntimeSessionAdapter.refresh_session_context",
+        fake_refresh,
+    )
+    monkeypatch.setattr(
+        "app.node_runtime.harness.runner.RuntimeRunner.run_once",
+        fake_run_once,
+    )
+
+    bridge = RuntimeBridge(
+        llm_service=FakeLLMService([]),
+        tools=[],
+        session_factory=build_session_factory(),
+    )
+    session_id = bridge._session_store.create_session(
+        project_id="project-1", system_prompt="system"
+    )
+
+    result = asyncio.run(
+        bridge.continue_session_until_payload(
+            session_id=session_id,
+            payload_extractor=bridge.extract_final_payload,
+            finalizer_prompts=["finalize"],
+            finalizer_tools=[TerminalTool()],
+        )
+    )
+
+    assert len(captured_tool_names) == 1
+    assert "FinalizeReview" in captured_tool_names[0]
+    assert result["final_payload"]["summary"] == "resumed"
 
 
 def test_bridge_finalizer_prompt_does_not_force_empty_findings_for_incomplete_audit():

@@ -243,8 +243,6 @@ async def run_review_pipeline_async(
             PrReviewToolContext,
             build_pr_review_tool_catalog,
         )
-        from app.node_runtime.llm.service import LLMService
-
         from .runtime_dispatcher import RuntimePerspectiveDispatcher
 
         # Compatibility callers without a prepared worker context are safely
@@ -259,8 +257,13 @@ async def run_review_pipeline_async(
                 ),
                 mode="diff_only",
             )
+        resolved_llm_service = llm_service
+        if resolved_llm_service is None:
+            from app.node_runtime.llm.service import LLMService
+
+            resolved_llm_service = LLMService()
         dispatcher = RuntimePerspectiveDispatcher(
-            llm_service=llm_service or LLMService(),
+            llm_service=resolved_llm_service,
             tools=build_pr_review_tool_catalog(pr_tool_context),
             project_id=ctx.pr_key or ctx.repo,
             task_id=options.get("task_id"),

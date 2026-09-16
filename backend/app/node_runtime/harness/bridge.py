@@ -916,7 +916,9 @@ class RuntimeBridge:
         terminal_action_nudge_message: str | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
-        tool_registry = tool_registry or self._build_tool_registry()
+        tool_registry = tool_registry or self._build_tool_registry(
+            terminal_tools=finalizer_tools
+        )
         tool_orchestrator = ToolGateway(
             session_store=self._session_store,
             tool_registry=tool_registry,

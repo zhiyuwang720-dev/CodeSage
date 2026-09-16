@@ -84,7 +84,7 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
         await pool.enqueue_job(
             "acceptance_execute",
             task_id,
-            f"delivery-{index}",
+            str(uuid4()),
             _job_id=f"acceptance:{task_id}",
         )
 

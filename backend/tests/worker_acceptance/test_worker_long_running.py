@@ -44,7 +44,7 @@ async def test_production_timeout_allows_healthy_task_over_sixty_seconds(tmp_pat
     await redis.hset(f"acceptance:control:{task_id}", mapping={"healthy_delay_seconds": "61"})
     pool = await create_pool(RedisSettings.from_dsn(os.environ["REDIS_URL"]),
                              default_queue_name=os.environ["AGENT_TASK_QUEUE_NAME"])
-    await pool.enqueue_job("acceptance_execute", task_id, "delivery-long",
+    await pool.enqueue_job("acceptance_execute", task_id, str(uuid4()),
                            _job_id=f"acceptance:long:{task_id}")
     log = Path(os.environ.get("CODESAGE_ACCEPTANCE_ARTIFACT_ROOT", str(tmp_path))) / "worker-long.log"
     log.parent.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,6 @@
 不允许在此模块之外出现 `litellm.acompletion` 调用或厂商协议分派。
 """
 
-from .client import SDKModelClient, get_sdk_client, reset_sdk_client
 from .config import (
     MODEL_BOUNDARY_VERSION,
     LLMConfig,
@@ -14,7 +13,6 @@ from .config import (
     get_provider_metadata,
 )
 from .errors import ModelBoundaryError
-from .service import LLMService
 from .types import LLMProvider, LLMResponse, LLMUsage
 from .usage import NORMALIZATION_VERSION, normalize_usage
 
@@ -37,3 +35,21 @@ __all__ = [
     "normalize_usage",
     "reset_sdk_client",
 ]
+
+
+def __getattr__(name: str):
+    """Keep optional SDK imports lazy for injected-model and offline runtimes."""
+
+    if name == "LLMService":
+        from .service import LLMService
+
+        return LLMService
+    if name in {"SDKModelClient", "get_sdk_client", "reset_sdk_client"}:
+        from .client import SDKModelClient, get_sdk_client, reset_sdk_client
+
+        return {
+            "SDKModelClient": SDKModelClient,
+            "get_sdk_client": get_sdk_client,
+            "reset_sdk_client": reset_sdk_client,
+        }[name]
+    raise AttributeError(name)

@@ -31,8 +31,6 @@ class DeterministicReviewModel:
     ):
         del temperature, max_tokens, tools, parallel_tool_calls
         perspective = str(agent_type or "unknown")
-        self.calls[perspective] += 1
-        await self.redis.hincrby(f"acceptance:model_calls:{self.task_id}", perspective, 1)
         if (
             perspective != "review:security"
             and await self.redis.hget(f"acceptance:control:{self.task_id}", "block_non_security")
@@ -41,6 +39,14 @@ class DeterministicReviewModel:
                 f"acceptance:control:{self.task_id}", "release"
             ):
                 await asyncio.sleep(0.05)
+        # Count responses that reached the provider boundary, not abandoned
+        # attempts.  A worker may be killed while the deterministic provider is
+        # blocked above; the takeover worker must still produce that
+        # perspective's first ReadDiff response before it can finalize.
+        call_number = await self.redis.hincrby(
+            f"acceptance:model_calls:{self.task_id}", perspective, 1
+        )
+        self.calls[perspective] = int(call_number)
         if self.calls[perspective] == 1:
             model_context = _model_context(messages)
             payload = {"file_id": model_context["files"][0]["file_id"], "max_lines": 200}

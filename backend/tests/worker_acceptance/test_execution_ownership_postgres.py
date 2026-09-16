@@ -69,17 +69,18 @@ async def test_claim_cancel_resume_and_stale_epoch_on_postgres():
         )
         await db.commit()
         identity = _identity(task_id)
+        first_delivery = str(uuid4())
         await review_execution_identity_store.initialize(
-            db, identity, delivery_id="delivery-1"
+            db, identity, delivery_id=first_delivery
         )
         first = await review_execution_ownership.claim(
-            db, task_id, worker_id="worker-a", delivery_id="delivery-1"
+            db, task_id, worker_id="worker-a", delivery_id=first_delivery
         )
 
     async with async_session_factory() as db:
         with pytest.raises(ActiveLeaseError):
             await review_execution_ownership.claim(
-                db, task_id, worker_id="worker-b", delivery_id="duplicate"
+                db, task_id, worker_id="worker-b", delivery_id=str(uuid4())
             )
         assert await review_execution_ownership.request_cancel(db, task_id) is True
 
@@ -90,7 +91,7 @@ async def test_claim_cancel_resume_and_stale_epoch_on_postgres():
         second = await review_execution_ownership.claim(
             db, task_id, worker_id="worker-b", delivery_id=delivery
         )
-        assert second.identity.run_id == first.identity.run_id
+        assert second.identity["run_id"] == first.identity["run_id"]
         assert second.attempt_id != first.attempt_id
         assert second.lease_epoch > first.lease_epoch
 

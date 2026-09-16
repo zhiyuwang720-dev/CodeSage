@@ -227,11 +227,12 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
     task_id, _ = await _new_task("old-owner")
     identity = _identity(task_id)
     async with async_session_factory() as db:
+        first_delivery = str(uuid4())
         await review_execution_identity_store.initialize(
-            db, identity, delivery_id="first"
+            db, identity, delivery_id=first_delivery
         )
         old_lease = await review_execution_ownership.claim(
-            db, task_id, worker_id="old-worker", delivery_id="first"
+            db, task_id, worker_id="old-worker", delivery_id=first_delivery
         )
     async with async_session_factory() as db:
         delivery = await review_execution_ownership.prepare_resume(db, task_id)
@@ -281,11 +282,12 @@ async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatc
     task_id, _ = await _new_task("report-failure")
     identity = _identity(task_id)
     async with async_session_factory() as db:
+        report_delivery = str(uuid4())
         await review_execution_identity_store.initialize(
-            db, identity, delivery_id="report"
+            db, identity, delivery_id=report_delivery
         )
         lease = await review_execution_ownership.claim(
-            db, task_id, worker_id="report-worker", delivery_id="report"
+            db, task_id, worker_id="report-worker", delivery_id=report_delivery
         )
     root = Path(os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"]).resolve()
     context = ExecutionContext(

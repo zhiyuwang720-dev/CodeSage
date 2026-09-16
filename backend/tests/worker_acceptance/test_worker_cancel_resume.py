@@ -121,7 +121,7 @@ async def test_cancel_then_resume_on_another_worker_keeps_completed_stage(repeti
     handles: list[object] = []
     try:
         await pool.enqueue_job(
-            "acceptance_execute", task_id, "cancel-first",
+            "acceptance_execute", task_id, str(uuid4()),
             _job_id=f"cancel-first:{task_id}",
         )
         process, handle = _start_worker(logs / f"cancel-{repetition}-first.log")

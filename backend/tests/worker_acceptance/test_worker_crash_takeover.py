@@ -106,7 +106,7 @@ async def test_duplicate_delivery_is_taken_over_after_lease_expiry(repetition):
     handles: list[object] = []
     try:
         await pool.enqueue_job(
-            "acceptance_execute", task_id, "crash-owner",
+            "acceptance_execute", task_id, str(uuid4()),
             _job_id=f"crash-owner:{task_id}",
         )
         owner, owner_log = _worker(logs / f"crash-{repetition}-owner.log")
@@ -118,7 +118,7 @@ async def test_duplicate_delivery_is_taken_over_after_lease_expiry(repetition):
         calls_before = await redis.hgetall(calls)
 
         await pool.enqueue_job(
-            "acceptance_execute", task_id, "crash-takeover",
+            "acceptance_execute", task_id, str(uuid4()),
             _job_id=f"crash-takeover:{task_id}",
         )
         takeover, takeover_log = _worker(logs / f"crash-{repetition}-takeover.log")
@@ -210,7 +210,7 @@ async def test_single_enqueued_job_is_retried_after_owner_crash(repetition):
     try:
         await asyncio.sleep(1)
         await pool.enqueue_job(
-            "acceptance_execute", task_id, "single-delivery",
+            "acceptance_execute", task_id, str(uuid4()),
             _job_id=f"single-crash:{task_id}",
         )
         original = await _security_barrier(task_id)

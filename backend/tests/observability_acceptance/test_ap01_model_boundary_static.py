@@ -74,7 +74,7 @@ def test_ap01_single_production_sdk_call_site() -> None:
                 }:
                     call_sites.append(f"{path.relative_to(APP_ROOT.parent).as_posix()}:{node.lineno}:{node.func.attr}")
     assert len(call_sites) == 1, call_sites
-    assert call_sites[0].startswith("app/execution_plane/models/client.py")
+    assert call_sites[0].startswith("app/node_runtime/llm/client.py")
 
 
 def test_ap01_no_global_litellm_configuration_mutation_in_production() -> None:
@@ -89,7 +89,9 @@ def test_ap01_no_global_litellm_configuration_mutation_in_production() -> None:
 
 
 def test_ap01_no_provider_protocol_dispatch_in_client() -> None:
-    client = (APP_ROOT / "execution_plane" / "models" / "client.py").read_text(encoding="utf-8")
+    client = (APP_ROOT / "node_runtime" / "llm" / "client.py").read_text(
+        encoding="utf-8"
+    )
     assert "httpx" not in client
     assert "aiohttp" not in client
     for marker in ("if provider ==", "elif provider ==", "if self.config.provider =="):
@@ -105,7 +107,7 @@ def test_ap01_call_graph_evidence(acceptance_artifact_root: Path) -> None:
     payload = {
         "requirement": "P01,P03,P11",
         "acceptance": "AP01",
-        "production_sdk_call_sites": ["app/execution_plane/models/client.py:litellm.acompletion"],
+        "production_sdk_call_sites": ["app/node_runtime/llm/client.py:litellm.acompletion"],
         "llm_service_construction_sites": service_callers,
         "deleted_modules": DELETED_MODULES,
         "legacy_symbols_checked": list(LEGACY_SYMBOLS),
