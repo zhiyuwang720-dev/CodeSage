@@ -54,6 +54,8 @@ class QuickReviewDependencies:
     sync_session_factory: Callable[[], Any] = get_pr_review_sync_session_factory
     runner: QuickRunner | None = None
     worker_id: str | None = None
+    node_id: str | None = None
+    instance_id: str | None = None
     artifact_root: str | None = None
     observer: Callable[[dict[str, Any]], Any] | None = None
     llm_service: Any | None = None
@@ -130,6 +132,8 @@ async def execute_quick_review(
                 task_id,
                 worker_id=_worker_id(deps.worker_id),
                 delivery_id=delivery,
+                node_id=deps.node_id,
+                instance_id=deps.instance_id,
             )
         except ActiveLeaseError:
             return "already_owned"

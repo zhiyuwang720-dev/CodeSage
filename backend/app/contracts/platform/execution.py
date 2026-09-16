@@ -81,6 +81,7 @@ class AttemptContext(_BoundaryModel):
     task_id: str
     attempt_id: str
     node_id: str = Field(min_length=1, max_length=128)
+    instance_id: str = Field(min_length=1, max_length=128)
     lease_epoch: int = Field(ge=1)
     delivery_id: str
     lease_expires_at: datetime

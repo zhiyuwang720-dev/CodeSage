@@ -137,17 +137,18 @@ services:
     environment:
       <<: *product-environment
       AGENT_WORKER_CONCURRENCY: "1"
+      PR_NODE_ID: codesage-product-worker-1
       AGENT_WORKER_HEALTH_CHECK_KEY: codesage:product:worker-1
       OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/worker-1.traces.otlp.jsonl
       OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/worker-1.metrics.otlp.jsonl
-    command: ["python", "-m", "arq", "app.worker.agent_worker.WorkerSettings"]
+    command: ["python", "-m", "arq", "app.nodes.pr_review.worker.WorkerSettings"]
     volumes:
       - ./projects:/workspace/projects
       - ./.codesage/observability:/var/lib/codesage/observability
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on: *product-dependencies
     healthcheck:
-      test: ["CMD", "python", "-m", "arq", "app.worker.agent_worker.WorkerSettings", "--check"]
+      test: ["CMD", "python", "-m", "arq", "app.nodes.pr_review.worker.WorkerSettings", "--check"]
       interval: 10s
       timeout: 8s
       retries: 12
@@ -159,6 +160,7 @@ services:
     environment:
       <<: *product-environment
       AGENT_WORKER_CONCURRENCY: "1"
+      PR_NODE_ID: codesage-product-worker-2
       AGENT_WORKER_HEALTH_CHECK_KEY: codesage:product:worker-2
       OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/worker-2.traces.otlp.jsonl
       OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/worker-2.metrics.otlp.jsonl
@@ -257,10 +259,11 @@ services:
     environment:
       <<: *eval-environment
       AGENT_WORKER_CONCURRENCY: "1"
+      PR_NODE_ID: codesage-eval-worker-1
       AGENT_WORKER_HEALTH_CHECK_KEY: codesage:eval:worker-1
       OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/eval-worker-1.traces.otlp.jsonl
       OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/eval-worker-1.metrics.otlp.jsonl
-    command: ["python", "-m", "arq", "app.worker.agent_worker.WorkerSettings"]
+    command: ["python", "-m", "arq", "app.nodes.pr_review.worker.WorkerSettings"]
     volumes:
       - ./code-review-benchmark/offline/eval-projects:/workspace/projects
       - ./code-review-benchmark/offline/fixtures:/workspace/benchmark/fixtures
@@ -268,7 +271,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on: *eval-dependencies
     healthcheck:
-      test: ["CMD", "python", "-m", "arq", "app.worker.agent_worker.WorkerSettings", "--check"]
+      test: ["CMD", "python", "-m", "arq", "app.nodes.pr_review.worker.WorkerSettings", "--check"]
       interval: 10s
       timeout: 8s
       retries: 12
@@ -281,6 +284,7 @@ services:
     environment:
       <<: *eval-environment
       AGENT_WORKER_CONCURRENCY: "1"
+      PR_NODE_ID: codesage-eval-worker-2
       AGENT_WORKER_HEALTH_CHECK_KEY: codesage:eval:worker-2
       OTEL_LOCAL_TRACE_PATH: /var/lib/codesage/observability/eval-worker-2.traces.otlp.jsonl
       OTEL_LOCAL_METRIC_PATH: /var/lib/codesage/observability/eval-worker-2.metrics.otlp.jsonl

@@ -23,6 +23,7 @@ class SqlAlchemyResultCommitPort:
             or context.attempt_id != self._lease.attempt_id
             or context.lease_epoch != self._lease.lease_epoch
             or context.node_id != self._lease.worker_id
+            or context.instance_id != (self._lease.instance_id or self._lease.worker_id)
         ):
             raise ValueError("result submission does not match the claimed attempt")
         try:
@@ -47,4 +48,3 @@ class SqlAlchemyResultCommitPort:
 
 def sqlalchemy_result_commit_port_factory(transaction, lease, submission):
     return SqlAlchemyResultCommitPort(transaction, lease, submission)
-

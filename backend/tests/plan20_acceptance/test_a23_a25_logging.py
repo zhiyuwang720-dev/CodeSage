@@ -51,7 +51,7 @@ def test_a24_file_rotation_creates_backups(tmp_path: Path) -> None:
 
 def test_a25_local_exporter_is_batch_and_worker_bootstrap_is_shared() -> None:
     setup_source = Path("app/infrastructure/observability/setup.py").read_text(encoding="utf-8")
-    worker_source = Path("app/worker/agent_worker.py").read_text(encoding="utf-8")
+    worker_source = Path("app/nodes/pr_review/worker.py").read_text(encoding="utf-8")
     assert "SimpleSpanProcessor(" not in setup_source
     assert "max_queue_size=2048" in setup_source
     assert "schedule_delay_millis=1000" in setup_source

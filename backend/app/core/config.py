@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     # 正常审查可持续数十分钟；故障验收的 60s timeout 只能由独立 profile 显式配置。
     AGENT_WORKER_JOB_TIMEOUT_SECONDS: int = 3600
     AGENT_WORKER_MAX_TRIES: int = 3
+    PR_NODE_ID: str = "pr-node"
+    PR_NODE_AGENT_VERSION: str = "1"
+    PR_NODE_PROTOCOL_VERSION: int = 1
+    PR_NODE_CAPABILITIES: str = "pr.diff.read,repo.snapshot.read,review.finalize"
+    PR_NODE_HEARTBEAT_SECONDS: int = 5
+    PR_NODE_HEALTH_EXPIRY_SECONDS: int = 20
     AGENT_EVENT_STREAM_ENABLED: bool = False
     AGENT_EVENT_STREAM_MAXLEN: int = 5000
     OTEL_ENABLED: bool = False

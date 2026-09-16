@@ -13,7 +13,7 @@ from app.nodes.pr_review.persistence.prompt_models import PromptTemplate
 from app.nodes.pr_review.persistence.rule_models import AuditRule, AuditRuleSet
 from app.nodes.pr_review.persistence.report_models import AgentTaskReport
 from app.nodes.pr_review.persistence.stage_models import AuditStageORM
-from app.control_plane.persistence.execution_models import ReviewExecutionRun
+from app.control_plane.persistence.execution_models import AgentNodeInstance, ReviewExecutionRun
 from .agent_task import (
     AgentEvent,
     AgentEventType,
@@ -53,6 +53,7 @@ __all__ = [
     "AgentTaskReport",
     "AuditStageORM",
     "ReviewExecutionRun",
+    "AgentNodeInstance",
     "AgentTask",
     "AgentEvent",
     "AgentFinding",

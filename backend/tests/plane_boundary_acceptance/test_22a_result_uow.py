@@ -28,11 +28,14 @@ def _case():
         delivery_id=delivery_id,
         lease_expires_at=now + timedelta(seconds=20),
         identity={"task_id": task_id},
+        node_id="node-a",
+        instance_id=attempt_id,
     )
     context = AttemptContext(
         task_id=task_id,
         attempt_id=attempt_id,
         node_id="node-a",
+        instance_id=attempt_id,
         lease_epoch=3,
         delivery_id=delivery_id,
         lease_expires_at=lease.lease_expires_at,

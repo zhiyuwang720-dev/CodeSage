@@ -52,7 +52,13 @@ async def _watch_task_cancellation(
             return
 
 
-async def execute_agent_task(task_id: str, delivery_id: str | None = None) -> str:
+async def execute_agent_task(
+    task_id: str,
+    delivery_id: str | None = None,
+    *,
+    node_id: str | None = None,
+    instance_id: str | None = None,
+) -> str:
     """Service entrypoint for executing an agent audit task."""
     from app.bootstrap.result_uow import sqlalchemy_result_commit_port_factory
     from app.nodes.pr_review.application.execution import (
@@ -63,7 +69,10 @@ async def execute_agent_task(task_id: str, delivery_id: str | None = None) -> st
     return await execute_quick_review(
         task_id,
         QuickReviewDependencies(
-            result_commit_port_factory=sqlalchemy_result_commit_port_factory
+            result_commit_port_factory=sqlalchemy_result_commit_port_factory,
+            worker_id=(f"{node_id}:{instance_id}" if node_id and instance_id else None),
+            node_id=node_id,
+            instance_id=instance_id,
         ),
         delivery_id=delivery_id,
     )

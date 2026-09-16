@@ -50,6 +50,8 @@ class ExecutionLease:
     delivery_id: str
     lease_expires_at: datetime
     identity: dict[str, Any]
+    node_id: str | None = None
+    instance_id: str | None = None
 
 
 current_execution_lease: ContextVar[ExecutionLease | None] = ContextVar(
@@ -126,6 +128,8 @@ class ReviewExecutionOwnership:
         *,
         worker_id: str,
         delivery_id: str,
+        node_id: str | None = None,
+        instance_id: str | None = None,
         lease_seconds: int = LEASE_SECONDS,
     ) -> ExecutionLease:
         claim_span = trace.get_current_span()
@@ -157,6 +161,8 @@ class ReviewExecutionOwnership:
         row.lease_epoch = int(row.lease_epoch or 0) + 1
         row.attempt_id = str(uuid4())
         row.worker_id = worker_id
+        row.node_id = node_id or worker_id
+        row.instance_id = instance_id
         row.delivery_id = delivery_id
         row.last_heartbeat_at = now
         row.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -174,6 +180,8 @@ class ReviewExecutionOwnership:
             delivery_id=delivery_id,
             lease_expires_at=row.lease_expires_at,
             identity=dict(row.identity_json or {}),
+            node_id=row.node_id,
+            instance_id=row.instance_id,
         )
 
     async def renew(
@@ -190,6 +198,7 @@ class ReviewExecutionOwnership:
             .where(
                 ReviewExecutionRun.task_id == lease.task_id,
                 ReviewExecutionRun.worker_id == lease.worker_id,
+                ReviewExecutionRun.instance_id == lease.instance_id,
                 ReviewExecutionRun.lease_epoch == lease.lease_epoch,
                 ReviewExecutionRun.cancel_requested.is_(False),
                 ReviewExecutionRun.lease_expires_at >= now,
@@ -210,7 +219,12 @@ class ReviewExecutionOwnership:
     async def assert_current_owner(self, db, lease: ExecutionLease) -> ReviewExecutionRun:
         row = await _locked_row(db, lease.task_id)
         now = await _database_now(db)
-        if row is None or row.worker_id != lease.worker_id or row.lease_epoch != lease.lease_epoch:
+        if (
+            row is None
+            or row.worker_id != lease.worker_id
+            or row.instance_id != lease.instance_id
+            or row.lease_epoch != lease.lease_epoch
+        ):
             await db.rollback()
             raise StaleExecutionOwnerError("旧 owner 的 lease_epoch 已失效")
         if row.cancel_requested:
@@ -243,6 +257,8 @@ class ReviewExecutionOwnership:
         # 不改 identity_json/run_id。有效旧 lease 通过递增 epoch 立即作废。
         row.cancel_requested = False
         row.worker_id = None
+        row.node_id = None
+        row.instance_id = None
         row.attempt_id = None
         row.lease_epoch = int(row.lease_epoch or 0) + 1
         row.lease_expires_at = None
@@ -260,9 +276,14 @@ class ReviewExecutionOwnership:
             .where(
                 ReviewExecutionRun.task_id == lease.task_id,
                 ReviewExecutionRun.worker_id == lease.worker_id,
+                ReviewExecutionRun.instance_id == lease.instance_id,
                 ReviewExecutionRun.lease_epoch == lease.lease_epoch,
             )
-            .values(worker_id=None, attempt_id=None, lease_expires_at=None)
+            .values(
+                # node_id/instance_id remain as the last-attempt attribution;
+                # worker_id/attempt_id/lease fields alone represent live ownership.
+                worker_id=None, attempt_id=None, lease_expires_at=None,
+            )
         )
         if result.rowcount != 1:
             await db.rollback()

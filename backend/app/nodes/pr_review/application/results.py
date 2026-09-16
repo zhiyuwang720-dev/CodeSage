@@ -196,6 +196,7 @@ class ReviewResultService:
             task_id=task_id,
             attempt_id=lease.attempt_id,
             node_id=lease.worker_id,
+            instance_id=lease.instance_id or lease.worker_id,
             lease_epoch=lease.lease_epoch,
             delivery_id=lease.delivery_id,
             lease_expires_at=lease.lease_expires_at,

@@ -14,7 +14,7 @@ from arq.worker import func
 from app.nodes.pr_review.application.execution import QuickReviewDependencies, execute_quick_review
 from app.bootstrap.result_uow import sqlalchemy_result_commit_port_factory
 from app.control_plane.scale_ops.submission import AGENT_TASK_JOB_NAME
-from app.worker.agent_worker import execute_agent_task_job
+from app.nodes.pr_review.worker import execute_agent_task_job
 
 
 class DeterministicReviewModel:
@@ -128,8 +128,10 @@ def _latest_evidence_id(messages: list[dict]) -> str:
     raise AssertionError("acceptance model did not receive diff evidence")
 
 
-async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None) -> str:
-    worker_id = f"acceptance:{os.getpid()}"
+async def execute_acceptance_review(
+    redis, task_id: str, delivery_id: str | None, *, node_identity
+) -> str:
+    worker_id = node_identity.worker_id
     print(f"worker_id={worker_id} task_id={task_id}", flush=True)
     await redis.hset(
         f"acceptance:{task_id}",
@@ -149,6 +151,8 @@ async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None
         QuickReviewDependencies(
             llm_service=DeterministicReviewModel(redis, task_id),
             worker_id=worker_id,
+            node_id=node_identity.node_id,
+            instance_id=node_identity.instance_id,
             artifact_root=os.environ["CODESAGE_ACCEPTANCE_ARTIFACT_ROOT"],
             observer=observe,
             result_commit_port_factory=sqlalchemy_result_commit_port_factory,
@@ -163,15 +167,44 @@ async def execute_acceptance_review(redis, task_id: str, delivery_id: str | None
 
 
 async def startup(ctx) -> None:
+    from app.control_plane.scale_ops.node_registry import agent_node_registry
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        identity = await agent_node_registry.register(
+            db,
+            node_id=f"acceptance-node-{os.getpid()}",
+            agent_type="pr_review",
+            entrypoint="quick_review",
+            agent_version="acceptance",
+            protocol_version=1,
+            capabilities=("pr.diff.read", "review.finalize"),
+            max_concurrency=1,
+        )
+    ctx["node_identity"] = identity
+
     async def executor(task_id: str, delivery_id: str | None = None) -> str:
-        return await execute_acceptance_review(ctx["redis"], task_id, delivery_id)
+        return await execute_acceptance_review(
+            ctx["redis"], task_id, delivery_id, node_identity=identity
+        )
 
     ctx["execute_agent_task"] = executor
+
+
+async def shutdown(ctx) -> None:
+    from app.control_plane.scale_ops.node_registry import agent_node_registry
+    from app.db.session import async_session_factory
+
+    identity = ctx.get("node_identity")
+    if identity is not None:
+        async with async_session_factory() as db:
+            await agent_node_registry.unregister(db, identity)
 
 
 class WorkerSettings:
     functions = [func(execute_agent_task_job, name="acceptance_execute")]
     on_startup = startup
+    on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(os.environ["REDIS_URL"])
     queue_name = os.environ["AGENT_TASK_QUEUE_NAME"]
     max_jobs = 1

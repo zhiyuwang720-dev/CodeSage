@@ -16,6 +16,10 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 
 from app.core.config import settings
+from app.control_plane.persistence.execution_models import (
+    AgentNodeInstance,
+    ReviewExecutionRun,
+)
 from app.db.session import async_session_factory
 from app.node_runtime.persistence.models import AuditSession, ToolExecutionReceipt
 from app.nodes.pr_review.persistence.stage_models import AuditStageORM
@@ -127,6 +131,14 @@ async def test_two_independent_arq_workers_execute_overlapping_tasks(tmp_path, r
                 "review:quality": "2",
             }
         async with async_session_factory() as db:
+            runs = [await db.get(ReviewExecutionRun, task_id) for task_id in task_ids]
+            assert all(run.instance_id for run in runs)
+            assert len({run.node_id for run in runs}) == 2
+            instances = [
+                await db.get(AgentNodeInstance, run.instance_id) for run in runs
+            ]
+            assert all(instance is not None for instance in instances)
+            assert len({instance.pid for instance in instances}) == 2
             for task_index, task_id in enumerate(task_ids):
                 task = await db.get(AgentTask, task_id)
                 assert task.status == AgentTaskStatus.COMPLETED
