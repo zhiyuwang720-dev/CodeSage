@@ -6,8 +6,10 @@ import re
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
 from app.db.session import get_sync_session_factory
-from app.execution_plane.harness.json_parser import AgentJsonParser
+from app.utils.agent_json_parser import AgentJsonParser
 from app.execution_plane.runtime.adapters.session import RuntimeSessionAdapter
 from app.services.memory.runtime import RuntimeMemoryManager
 from app.contracts.models import (
@@ -29,6 +31,14 @@ from app.tool_gateway.codec import (
     build_runtime_model_messages,
 )
 from app.execution_plane.models.config import resolve_tool_message_format
+from app.execution_plane.models.runtime_ai import (
+    AIParseError,
+    AIResult,
+    AISchemaValidationError,
+    HarnessIncompleteError,
+    HarnessResult,
+)
+from app.tool_gateway.schema_finalize_review import SchemaFinalizeReviewTool
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
@@ -60,6 +70,18 @@ NATIVE_TOOL_CALLING_REMINDER = (
     "注意：还没有覆盖完所有应审查的文件不等于审查完成。FinalizeReview 调用成功后会终止审查阶段，因此不要把它当作阶段性保存工具。\n"
     "禁止只回复“我将继续/让我继续/下一步我会...”而不调用工具。这样的响应会被视为未完成。\n"
     "不要输出伪工具语法，例如 Tool Call:、Action:、JSON 形式的伪调用；只能使用模型提供方原生 tool_call。"
+)
+DEEP_RUNTIME_SYSTEM_PROMPT = (
+    "You are an autonomous deep review agent. Continue the requested task with the available tools. "
+    "When the task is complete, call FinalizeReview with the complete structured result."
+)
+DEEP_RUNTIME_FINALIZER_PROMPT = (
+    "Submit the final result now by calling FinalizeReview. The complete result must match the "
+    "FinalizeReview JSON Schema exactly. Do not end with natural language unless the JSON is also "
+    "present in the assistant response."
+)
+DEEP_RUNTIME_TERMINAL_NUDGE = (
+    "审查尚未结构化终结：请调用 FinalizeReview 工具提交符合本次 schema 的完整结构化结果。"
 )
 
 
@@ -611,6 +633,173 @@ class RuntimeBridge:
         self._agent_type = agent_type
         self._session_store = AuditSessionStore(session_factory=session_factory or get_sync_session_factory())
 
+    async def ai(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        schema: type[BaseModel] | None = None,
+        response_format: str | None = None,
+        max_tokens: int | None = None,
+    ) -> AIResult:
+        system_parts = [(system or "").strip()]
+        if response_format == "json":
+            system_parts.append("Respond with valid JSON.")
+        if schema is not None:
+            schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+            system_parts.extend(
+                [
+                    "Respond with exactly one JSON object and no surrounding prose.",
+                    "The JSON object must validate against this JSON Schema:",
+                    schema_json,
+                ]
+            )
+        messages = [
+            {"role": "system", "content": "\n\n".join(item for item in system_parts if item).strip()},
+            {"role": "user", "content": prompt},
+        ]
+        response = await self._llm_service.chat_completion(
+            messages=messages,
+            agent_type=self._agent_type,
+            tools=None,
+            parallel_tool_calls=None,
+            max_tokens=max_tokens,
+            purpose="deep_runtime",
+        )
+        raw_text = str(response.get("content") or "")
+        usage = response.get("usage")
+        cost_usd = response.get("response_cost_usd")
+        if schema is None:
+            return AIResult(
+                parsed=None,
+                raw_text=raw_text,
+                usage=dict(usage) if isinstance(usage, dict) else None,
+                cost_usd=cost_usd if isinstance(cost_usd, (int, float)) else None,
+            )
+
+        try:
+            parsed_data = AgentJsonParser.parse_any(raw_text, default=None)
+        except Exception as exc:
+            raise AIParseError(f"Unable to parse AI response as JSON: {exc}", raw_text=raw_text) from exc
+        if parsed_data is None:
+            raise AIParseError("AI response did not contain JSON", raw_text=raw_text)
+
+        try:
+            parsed = schema.model_validate(parsed_data)
+        except ValidationError as exc:
+            raise AISchemaValidationError(
+                "AI response failed schema validation",
+                raw_text=raw_text,
+                validation_errors=exc.errors(include_url=False),
+            ) from exc
+        return AIResult(
+            parsed=parsed,
+            raw_text=raw_text,
+            usage=dict(usage) if isinstance(usage, dict) else None,
+            cost_usd=cost_usd if isinstance(cost_usd, (int, float)) else None,
+        )
+
+    async def harness(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModel],
+        cwd: str | None = None,
+        system_prompt: str | None = None,
+        max_turns: int | None = None,
+        tool_allowlist: set[str] | None = None,
+        tools: list[Any] | None = None,
+        event_sink: Callable[[dict[str, Any]], Any] | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+    ) -> HarnessResult:
+        finalizer_tool = SchemaFinalizeReviewTool(schema)
+        base_tools = list(tools) if tools is not None else list(self._tools)
+        normal_tools: list[Any] = []
+        for tool in base_tools:
+            if getattr(tool, "name", None) == "FinalizeReview":
+                continue
+            if tool_allowlist is not None and getattr(tool, "name", None) not in tool_allowlist:
+                continue
+            normal_tools.append(tool)
+        deep_registry = ToolRegistry([*normal_tools, finalizer_tool])
+
+        recon_payload: dict[str, Any] = {}
+        if cwd:
+            recon_payload["deep_runtime_cwd"] = cwd
+        try:
+            result = await self.run(
+                project_id=project_id or "deep-runtime",
+                task_id=task_id,
+                system_prompt=system_prompt or DEEP_RUNTIME_SYSTEM_PROMPT,
+                recon_payload=recon_payload,
+                user_message=prompt,
+                max_turns=max_turns if max_turns is not None else 50,
+                tool_allowlist=tool_allowlist,
+                event_sink=event_sink,
+                finalizer_prompts=[DEEP_RUNTIME_FINALIZER_PROMPT],
+                finalizer_tools=[finalizer_tool],
+                terminal_action_nudge_message=DEEP_RUNTIME_TERMINAL_NUDGE,
+                _tool_registry=deep_registry,
+                _payload_extractor=self._schema_payload_extractor(schema),
+            )
+        except ValueError as exc:
+            raise HarnessIncompleteError(str(exc)) from exc
+
+        session_id = str(result["session_id"])
+        final_payload = result.get("final_payload")
+        try:
+            parsed = schema.model_validate(final_payload)
+        except (TypeError, ValidationError) as exc:
+            raise HarnessIncompleteError(f"Harness ended without a schema-valid payload: {exc}") from exc
+
+        query_state = self._session_store.load_query_loop_state(session_id)
+        provider_tokens = int(getattr(query_state, "provider_tokens_used", 0) or 0)
+        return HarnessResult(
+            parsed=parsed,
+            session_id=session_id,
+            result=result,
+            usage={"total_tokens": provider_tokens} if provider_tokens > 0 else None,
+            cost_usd=None,
+        )
+
+    def _schema_payload_extractor(self, schema: type[BaseModel]):
+        def extract(snapshot: Any) -> dict[str, Any] | None:
+            for tool_call in reversed(getattr(snapshot, "tool_calls", []) or []):
+                output_payload = getattr(getattr(tool_call, "result", None), "output_payload", None)
+                if not isinstance(output_payload, dict):
+                    continue
+                final_payload = output_payload.get("final_payload")
+                if not isinstance(final_payload, dict):
+                    continue
+                try:
+                    return schema.model_validate(final_payload).model_dump(
+                        mode="json", exclude_none=True
+                    )
+                except ValidationError:
+                    continue
+
+            for message in reversed(getattr(snapshot, "messages", []) or []):
+                if getattr(message, "role", "") != "assistant":
+                    continue
+                text = str(getattr(message, "content", "") or "")
+                candidates: list[Any] = [AgentJsonParser.parse_any(text, default=None)]
+                match = re.search(r"(\{.*\})", text, re.DOTALL)
+                if match:
+                    candidates.append(AgentJsonParser.parse_any(match.group(1), default=None))
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        continue
+                    try:
+                        return schema.model_validate(candidate).model_dump(
+                            mode="json", exclude_none=True
+                        )
+                    except ValidationError:
+                        continue
+            return None
+
+        return extract
+
     async def run(
         self,
         *,
@@ -628,9 +817,12 @@ class RuntimeBridge:
         terminal_action_nudge_message: str | None = None,
         on_session_created: Callable[[str], Any] | None = None,
         runtime_metadata: dict[str, Any] | None = None,
+        _tool_registry: ToolRegistry | None = None,
+        _payload_extractor: Callable[[Any], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
         model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
-        tool_registry = self._build_tool_registry(tool_allowlist=tool_allowlist)
+        tool_registry = _tool_registry or self._build_tool_registry(tool_allowlist=tool_allowlist)
+        bare_runtime = _tool_registry is not None
         tool_orchestrator = ToolGateway(
             session_store=self._session_store,
             tool_registry=tool_registry,
@@ -653,6 +845,8 @@ class RuntimeBridge:
             skill_catalog=RuntimeSkillCatalog(),
             memory_manager=RuntimeMemoryManager(session_factory=self._session_store._session_factory),
             agent_type=self._agent_type,
+            enable_skills=not bare_runtime,
+            enable_memory=not bare_runtime,
         )
         adapter_run_kwargs = dict(
             project_id=project_id,
@@ -672,9 +866,9 @@ class RuntimeBridge:
             max_turns=max_turns,
             model_client=model_client,
             runner_result=result.get("runner_result"),
-            payload_extractor=self.extract_final_payload,
+            payload_extractor=_payload_extractor or self.extract_final_payload,
             finalizer_prompts=finalizer_prompts or self._default_finalizer_prompts(),
-            fallback_payload_builder=self._default_fallback_payload,
+            fallback_payload_builder=None if bare_runtime else self._default_fallback_payload,
             finalizer_tools=finalizer_tools,
         )
         return {

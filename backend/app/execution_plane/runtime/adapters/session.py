@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 from typing import Any
 
 from app.services.skill.facade import SkillService
@@ -27,6 +28,8 @@ class RuntimeSessionAdapter:
         discovery_scheduler: SkillDiscoveryScheduler | None = None,
         skill_service: Any = SkillService,
         agent_type: str = "review:security",
+        enable_skills: bool = True,
+        enable_memory: bool = True,
     ):
         self._session_store = session_store
         self._runner = runner
@@ -37,6 +40,8 @@ class RuntimeSessionAdapter:
         self._discovery_scheduler = discovery_scheduler or SkillDiscoveryScheduler()
         self._skill_service = skill_service
         self._agent_type = agent_type
+        self._enable_skills = bool(enable_skills)
+        self._enable_memory = bool(enable_memory)
 
     async def run(
         self,
@@ -63,35 +68,52 @@ class RuntimeSessionAdapter:
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
         effective_user_message = user_message or self.DEFAULT_USER_MESSAGE
-        skill_context, explicit_skill_injection_text, discovery_snapshot = await self._resolve_skill_context(
-            session_id=session_id,
-            base_system_prompt=system_prompt,
-            user_message=effective_user_message,
-            recon_payload=recon_payload,
-        )
+        skill_context, explicit_skill_injection_text, discovery_snapshot = SimpleNamespace(
+            prompt="",
+            route_message="",
+            route_plan={},
+            available_skills=[],
+            matched_skills=[],
+        ), "", {}
+        if self._enable_skills:
+            skill_context, explicit_skill_injection_text, discovery_snapshot = await self._resolve_skill_context(
+                session_id=session_id,
+                base_system_prompt=system_prompt,
+                user_message=effective_user_message,
+                recon_payload=recon_payload,
+            )
         self._session_store.replace_skills(
             session_id,
             skill_context.available_skills,
             matched_skill_refs=self._matched_skill_refs(skill_context.matched_skills),
         )
 
-        memory_bundle = await self._memory_manager.preload(
-            agent_type=self._agent_type,
-            system_prompt=system_prompt,
-            recon_payload=recon_payload,
-            user_message=effective_user_message,
-            skill_context={
-                "prompt": skill_context.prompt,
-                "route_plan": skill_context.route_plan,
-            },
-        )
-        self._session_store.replace_memories(session_id, memory_bundle.all_memories)
+        instruction_count = 0
+        recall_count = 0
+        memories: list[Any] = []
+        if self._enable_memory:
+            memory_bundle = await self._memory_manager.preload(
+                agent_type=self._agent_type,
+                system_prompt=system_prompt,
+                recon_payload=recon_payload,
+                user_message=effective_user_message,
+                skill_context={
+                    "prompt": skill_context.prompt,
+                    "route_plan": skill_context.route_plan,
+                },
+            )
+            self._session_store.replace_memories(session_id, memory_bundle.all_memories)
+            memories = memory_bundle.all_memories
+            instruction_count = len(memory_bundle.instructions)
+            recall_count = len(memory_bundle.recalls)
+        else:
+            self._session_store.replace_memories(session_id, [])
 
         enriched_system_prompt = self._compose_system_prompt(
             base_system_prompt=system_prompt,
             skill_context=skill_context,
             explicit_skill_injection_text=explicit_skill_injection_text,
-            memories=memory_bundle.all_memories,
+            memories=memories,
         )
         self._session_store.update_system_prompt(session_id, enriched_system_prompt)
         self._persist_runtime_metadata(
@@ -123,8 +145,8 @@ class RuntimeSessionAdapter:
             "runner_result": runner_result,
             "skill_route": skill_context.route_plan,
             "memory_counts": {
-                "instruction": len(memory_bundle.instructions),
-                "recall": len(memory_bundle.recalls),
+                "instruction": instruction_count,
+                "recall": recall_count,
             },
         }
 

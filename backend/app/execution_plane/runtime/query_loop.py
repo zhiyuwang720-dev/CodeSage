@@ -10,7 +10,7 @@ from time import perf_counter
 from opentelemetry import context as otel_context, trace
 
 from app.models.audit_session import AuditCheckpointType
-from app.execution_plane.harness.json_parser import AgentJsonParser
+from app.utils.agent_json_parser import AgentJsonParser
 from app.contracts.models import (
     RuntimeCompletionMode,
     RuntimeContinueReason,

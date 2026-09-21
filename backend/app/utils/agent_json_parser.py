@@ -287,11 +287,11 @@ class AgentJsonParser:
 
         Args:
             data: 可能是字典或其他类型
-            key: 要获取的键
+            key: 需要获取的键
             default: 默认值
 
         Returns:
-            获取的值或默认值
+            数据中对应的值
         """
         if isinstance(data, dict):
             return data.get(key, default)

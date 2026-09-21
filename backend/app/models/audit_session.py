@@ -123,6 +123,7 @@ class AuditSessionTurn(Base):
     checkpoints = relationship("AuditCheckpoint", back_populates="turn")
     tool_calls = relationship("ToolExecutionReceipt", back_populates="turn", order_by="ToolExecutionReceipt.sequence")
     skill_invocations = relationship("AuditSkillInvocation", back_populates="turn", order_by="AuditSkillInvocation.sequence")
+
 class AuditCheckpoint(Base):
     __tablename__ = "audit_checkpoints"
 

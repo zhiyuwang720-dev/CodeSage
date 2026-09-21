@@ -17,6 +17,13 @@ from .errors import ModelBoundaryError
 from .service import LLMService
 from .types import LLMProvider, LLMResponse, LLMUsage
 from .usage import NORMALIZATION_VERSION, normalize_usage
+from .runtime_ai import (
+    AIParseError,
+    AIResult,
+    AISchemaValidationError,
+    HarnessIncompleteError,
+    HarnessResult,
+)
 
 __all__ = [
     "LLMService",
@@ -25,6 +32,11 @@ __all__ = [
     "LLMProvider",
     "LLMResponse",
     "LLMUsage",
+    "AIParseError",
+    "AIResult",
+    "AISchemaValidationError",
+    "HarnessIncompleteError",
+    "HarnessResult",
     "MODEL_BOUNDARY_VERSION",
     "ModelBoundaryError",
     "ModelCatalog",
