@@ -17,9 +17,44 @@ class SemanticBrief(BaseModel):
     confidence: float = Field(default=0.5, ge=0, le=1)
 
 
+class DiffHunk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    old_start: int
+    old_count: int = 1
+    new_start: int
+    new_count: int = 1
+    header: str = ""
+    content: str = ""
+
+
+class DiffStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total_files: int = 0
+    total_additions: int = 0
+    total_deletions: int = 0
+    files_added: int = 0
+    files_modified: int = 0
+    files_deleted: int = 0
+    files_renamed: int = 0
+    files_binary: int = 0
+    test_files: int = 0
+    test_to_code_ratio: float = 0.0
+
+
+class ChangeCluster(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    name: str
+    files: list[str] = Field(default_factory=list)
+    primary_language: str = ""
+
+
 class Anatomy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     files: list[FileChange] = Field(default_factory=list)
+    hunks: dict[str, list[DiffHunk]] = Field(default_factory=dict)
+    stats: DiffStats = Field(default_factory=DiffStats)
+    clusters: list[ChangeCluster] = Field(default_factory=list)
     directories: list[str] = Field(default_factory=list)
     related_paths: list[str] = Field(default_factory=list)
     summary: str = ""
@@ -79,3 +114,13 @@ class CrossAnalysisResult(BaseModel):
     unresolved_risks: list[str] = Field(default_factory=list)
     summary: str = ""
 
+
+class EvidencePackage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    finding_index: int = Field(default=0, ge=0)
+    primary_code: str = ""
+    caller_snippets: list[str] = Field(default_factory=list)
+    cross_ref_snippets: list[str] = Field(default_factory=list)
+    diff_hunk: str = ""
+    import_context: str = ""
+    related_code: str = ""

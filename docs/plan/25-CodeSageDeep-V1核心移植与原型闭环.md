@@ -2,9 +2,10 @@
 
 # Plan 25：CodeSageDeep V1 核心移植与原型闭环
 
-> 版本：v3.1  
-> 状态：**设计草案，等待审计；尚未开始实现**  
-> CodeSage 基线：`a9b0f49e5d29bb835c5eae56f59df4ca6f34e21d`  
+> 版本：v3.4（补充分包执行规格与实现澄清）  
+> 状态：**实施中；Package 25.1～25.3 已完成，先补 25.3A 渐进式编排，再进入 25.4**  
+> CodeSage 起始基线：`a9b0f49e5d29bb835c5eae56f59df4ca6f34e21d`  
+> 当前 HEAD：`92519269`；Package 25.3 已在工作区实现，尚未作为独立提交记录  
 > PR-AF 基线：`48ae7eeb4f07779004db6354728d49ca7b36dbc3`  
 > OCR 基线：`85cecfe5f935da2b2aae8f91ce4fee8ed343a681`
 
@@ -268,6 +269,7 @@ backend/app/domains/deep_review/
 │   ├── input_builder.py
 │   ├── directory_filter.py
 │   ├── plan_repair.py
+│   ├── reviewer_result_mapper.py
 │   ├── cross_repair.py
 │   ├── prompt_loader.py
 │   ├── diff_engine.py
@@ -382,62 +384,326 @@ PR-AF `config.py` 的处理原则：
 
 `max_planner_dimensions` 是 Planner 的目标上限，不是 Repair 后硬上限；Repair 为了保证覆盖可以超过它。`max_final_dimensions = max_planner_dimensions + 1` 是正常 Repair 后的硬上限。超过时执行确定性合并；合并不可能且仍有文件被延期时，该 dimension 标记 `deferred=True`，写入 `unresolved_risks`，run 标记 `partial`。Reviewer 不配置 Finding 配额。Cross 上下文 V1 默认不设字节上限，但字段保留，便于第二版做严格预算。
 
-### 5.2 Semantic Brief
+### 5.2 模型输出 Draft 与业务事实模型
+
+V1 强制区分三类数据，不能再让一个 Pydantic 类同时承担模型输出、领域事实和运行诊断：
+
+| 层 | 位置 | 职责 | 示例 |
+|---|---|---|---|
+| Agent Draft | `agents/<role>.py` | `.ai()` JSON Schema 或动态 `FinalizeReview` 的一次性输入契约 | `SemanticBriefDraft`、`ReviewPlanDraft` |
+| 业务事实 | `schemas/` | 经过显式转换/repair 后供后续阶段消费的领域对象 | `SemanticBrief`、`ReviewPlan`、`ReviewFinding` |
+| 调用与阶段诊断 | `AgentCallResult` / run event | session、usage、cost、fallback、input fingerprint、错误 | `semantic_completed`、`plan_repaired` |
+
+依赖方向固定为：
+
+```text
+agents/<role>.py
+    ├── 定义私有 *Draft
+    ├── 调用 .ai() / .harness(schema=*Draft)
+    └── 显式转换或交给 repair
+              ↓
+schemas/ 中的业务模型
+              ↓
+下一阶段 / JSONL / 最终结果
+```
+
+规则：
+
+1. `schemas/` 禁止 import `agents/`，业务模型禁止嵌套或引用 `*Draft`。Draft 定义只在对应 Agent 模块；该 Agent 将局部 dump 交给 mapper/repair 并返回业务结果，mapper/repair 不反向 import Agent。
+2. Agent Draft 只保存模型能填写的数据，不包含 `fallback`、`deferred`、`source`、`coverage_complete`、`repair_actions`、hash、时间戳或 session id。
+3. 业务模型由显式 mapper 或 repair 构造；不能用 `model_copy(update=...)` 绕过业务模型校验。
+4. 调用元数据不复制进每个领域模型。`AgentCallResult` 保存 usage/session/cost；输入 fingerprint、prompt version 和 fallback 原因写阶段事件。
+5. `extra="forbid"` 是所有 Draft 和业务模型的默认约束。Draft 字段必须提供可执行的 `description` 以及长度、范围或枚举约束。
+6. Pydantic 字段描述不会丢失：`RuntimeBridge.ai()` 把 `model_json_schema()` 注入 system prompt；`RuntimeBridge.harness()` 把 Draft 交给 `SchemaFinalizeReviewTool`，description 会进入 `FinalizeReview` 参数 Schema。
+7. Planner / Reviewer / Cross 只以各自 Draft 创建动态 `FinalizeReview`；`ReviewPlan`、`ReviewerResult`、`CrossAnalysisResult` 等业务模型不得直接作为终结 Schema。
+8. Draft 与业务模型字段即使暂时相似也保持显式转换。这是边界，不是为了复用而应消除的重复。
+
+#### Semantic Draft（`agents/semantic.py`）
+
+```python
+from typing import Annotated
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+BriefItem = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+]
+
+
+class SemanticBriefDraft(BaseModel):
+    """一次 .ai() 返回的待核验语义线索。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    narrative: str = Field(
+        min_length=20,
+        max_length=2000,
+        description="PR 实际行为变化的整体叙述；不是 Finding。",
+    )
+    stated_intent: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="标题、描述和 commit message 明确声称要做的事。",
+    )
+    implemented_intent: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="从 diff 摘要实际观察到的行为变化，只陈述事实。",
+    )
+    intent_gaps: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="声称要做但 diff 中未体现的事项。",
+    )
+    unrelated_changes: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="diff 中存在但 PR 叙述未说明的行为变化。",
+    )
+    risk_surfaces: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="值得后续调查的位置或契约面，不得写成已确认缺陷。",
+    )
+    hypotheses: list[BriefItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="可被后续代码调查证实或推翻的问题，不得写成结论。",
+    )
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="整体语义理解置信度，不是单条线索的置信度。",
+    )
+```
+
+列表元素本身也必须限制到 200 字符；只设置 `list.max_length` 不能限制单条文本。由于 `.ai()` 没有 Harness 内的修正轮次，Schema 失败直接进入确定性 fallback，不再用业务层静默裁剪一个 schema-invalid 输出。
+
+#### Semantic 业务模型（`schemas/pipeline.py`）
 
 ```python
 class SemanticBrief(BaseModel):
-    narrative: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    narrative: str
     stated_intent: list[str] = Field(default_factory=list)
     implemented_intent: list[str] = Field(default_factory=list)
     intent_gaps: list[str] = Field(default_factory=list)
     unrelated_changes: list[str] = Field(default_factory=list)
     risk_surfaces: list[str] = Field(default_factory=list)
     hypotheses: list[str] = Field(default_factory=list)
-    confidence: float = 0.5
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["model", "fallback"]
 ```
 
-这些解释性内容直接使用字符串，不再拆出 `IntentGap`、`RiskSurface` 等小模型，也不包含 AI-generated code 判断。
+转换必须像 PR-AF 的 `_AnatomySemanticResult → AnatomyResult` 一样显式构造，而不是 `brief: SemanticBriefDraft` 嵌套：
 
-### 5.3 Review Plan
+```python
+parsed = ai_result.parsed
+semantic = SemanticBrief(
+    narrative=parsed.narrative.strip(),
+    stated_intent=list(parsed.stated_intent),
+    implemented_intent=list(parsed.implemented_intent),
+    intent_gaps=list(parsed.intent_gaps),
+    unrelated_changes=list(parsed.unrelated_changes),
+    risk_surfaces=list(parsed.risk_surfaces),
+    hypotheses=list(parsed.hypotheses),
+    confidence=parsed.confidence,
+    source="model",
+)
+```
+
+fallback 直接构造 `SemanticBrief(source="fallback", confidence=0)`。`base_commit`、`head_commit`、diff hash、prompt version、session、usage 和 cost 属于 `semantic_completed/semantic_fallback` 阶段事件及 `AgentCallResult`，不进入 `SemanticBrief`。事件时间戳也不参与稳定 hash。
+
+### 5.3 Planner Draft 与业务 Review Plan
+
+#### Planner Draft（`agents/planner.py`）
+
+```python
+class ReviewDimensionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+        description="稳定短名，供 cross-reference hint 引用。",
+    )
+    review_prompt: str = Field(
+        min_length=20,
+        max_length=2000,
+        description="可执行调查任务：行为、需比较的不变量和值得报告的失败后果。",
+    )
+    target_files: list[str] = Field(
+        min_length=1,
+        max_length=64,
+        description="该调查负主审责任的 review 文件路径。",
+    )
+    context_files: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="只作为调查上下文的仓库路径，可跨 dimension 重复。",
+    )
+    priority: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="1 最高，10 最低；仅用于确定性排序与合并。",
+    )
+    rationale: str = Field(
+        default="",
+        max_length=300,
+        description="该调查为何值得执行，不得复述 review_prompt。",
+    )
+
+
+class CrossReferenceHintDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_names: list[str] = Field(
+        min_length=2,
+        max_length=8,
+        description="参与该跨维度关系的 dimension 短名。",
+    )
+    relation: str = Field(
+        min_length=10,
+        max_length=300,
+        description="需要在 Cross Analysis 中核验的具体关系。",
+    )
+    symbol_or_contract: str = Field(
+        min_length=1,
+        max_length=200,
+        description="定位关系所需的具体符号、键名、接口或契约。",
+    )
+
+
+class ReviewPlanDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(default="", max_length=1000, description="调查分区的简短说明。")
+    dimensions: list[ReviewDimensionDraft] = Field(
+        default_factory=list,
+        max_length=32,
+        description="调查任务，不是预期 Finding 列表。",
+    )
+    cross_reference_hints: list[CrossReferenceHintDraft] = Field(
+        default_factory=list,
+        max_length=16,
+        description="只有跨至少两个 dimension 才能核验的关系。",
+    )
+    assumptions: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Plan 当前依赖且需要后续验证的显式假设。",
+    )
+```
+
+`ReviewPlanDraft` 是 Planner Harness 动态 `FinalizeReview` 的唯一 Schema；`priority=1` 最高、`priority=10` 最低。Draft 的 `target_files` 非空；重复、非法和重叠路径由 `plan_repair.py` 处理。`ReviewPlanDraft` 不进入 `schemas/__init__.py`，也不允许被 Planner 之外的模块当作业务输入。
+
+`plan_repair.py` 接收 Agent 内已校验 Draft 的局部 dump 和可信 `ReviewSnapshot`，逐字段构造业务模型，不反向导入 Agent Draft。重复 dimension name 被稳定重命名；无效 hint、只引用一个 dimension 的 hint、或引用修复后不存在名称的 hint 被丢弃并记录 repair action。业务模型定义在 `schemas/pipeline.py`：
 
 ```python
 class ReviewDimension(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     review_prompt: str
     target_files: list[str]
     context_files: list[str] = Field(default_factory=list)
-    priority: int = 1
+    priority: int = Field(ge=1, le=10)
+    rationale: str = ""
     fallback: bool = False
     deferred: bool = False
+    source: Literal["model", "fallback", "merged", "split"] = "model"
+
+
+class CrossReferenceHint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_names: list[str]
+    relation: str
+    symbol_or_contract: str
 
 
 class ReviewPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     summary: str = ""
     dimensions: list[ReviewDimension]
-    cross_reference_hints: list[str] = Field(default_factory=list)
+    cross_reference_hints: list[CrossReferenceHint] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    coverage_complete: bool = False
+    repair_actions: list[str] = Field(default_factory=list)
 ```
 
-这与 PR-AF 的 `ReviewDimension` / `ReviewPlan` 方向一致。Planner 直接返回路径；业务层校验路径、去重、补齐遗漏文件和拆分大组。并发、token 和 turn 上限来自 `DeepReviewConfig`，不由模型决定。
+`ReviewPlan` 是 `plan_repair.py` 的事实模型。`coverage_complete=False` 或存在 `deferred=True` 时，run 必须为 `partial`。
 
 ### 5.4 Reviewer Result
 
+#### Reviewer Draft（`agents/reviewer.py`）
+
+```python
+class ReviewFindingDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(
+        min_length=1,
+        max_length=512,
+        description="本次变更中的仓库相对路径，必须属于当前 dimension 的 target files。",
+    )
+    line_start: int | None = Field(default=None, ge=1, description="head 快照中的起始行。")
+    line_end: int | None = Field(default=None, ge=1, description="head 快照中的结束行。")
+    severity: Literal["critical", "high", "medium", "low"] = Field(
+        description="按已验证的实际影响选择，不按问题类型固定映射。"
+    )
+    title: str = Field(min_length=5, max_length=160, description="具体、可行动的问题标题。")
+    body: str = Field(
+        min_length=20,
+        max_length=4000,
+        description="说明触发条件、错误机制和用户/系统后果。",
+    )
+    evidence: str = Field(
+        default="",
+        max_length=3000,
+        description="支持主张的代码事实，不得捏造未读取的实现。",
+    )
+    suggestion: str = Field(default="", max_length=2000, description="可选修复方向。")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Finding 正确性的置信度。")
+    tags: list[str] = Field(default_factory=list, max_length=8, description="少量检索标签。")
+
+
+class ReviewerResultDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[ReviewFindingDraft] = Field(
+        default_factory=list,
+        max_length=32,
+        description="零到多条值得作者修复的 Finding；没有数量配额。",
+    )
+    summary: str = Field(default="", max_length=1000, description="本 dimension 的调查结论。")
+```
+
+Reviewer Harness 的动态 `FinalizeReview` Schema 是 `ReviewerResultDraft`。模型不填 dimension 名称或来源；`services/reviewer_result_mapper.py` 校验路径属于当前 dimension、行号存在于 head、`line_end >= line_start`，然后逐条构造 `ReviewFinding(dimension_name=..., source="reviewer")`。无效 Draft Finding 被丢弃并记录诊断，不使用不校验的 `model_copy(update=...)`。Draft 没有配额字段，零到多条 finding 都是合法输出。
+
+#### 业务 Review Finding（`schemas/pipeline.py`）
+
 ```python
 class ReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     file_path: str
-    line_start: int | None = None
-    line_end: int | None = None
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
     severity: Literal["critical", "high", "medium", "low"]
     title: str
     body: str
     evidence: str = ""
     suggestion: str = ""
-    confidence: float = 0.5
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     tags: list[str] = Field(default_factory=list)
-
-
-class ReviewerResult(BaseModel):
-    findings: list[ReviewFinding] = Field(default_factory=list)
-    summary: str = ""
+    dimension_name: str = ""
+    source: Literal["reviewer", "cross"] = "reviewer"
 ```
 
 Reviewer 调用新建的四个只读工具调查代码，最后调用 Plan24 的动态 `FinalizeReview` 提交简单结果。不定义 `CodeLocation`、`EvidenceClaim`、子 Reviewer 或 Coverage 模型。
@@ -460,19 +726,56 @@ Evidence 仍采用 PR-AF 的简单字符串集合，由确定性代码从内存 
 ### 5.6 Cross Analysis
 
 ```python
-class FindingDecision(BaseModel):
-    finding_index: int
-    result: Literal["keep", "drop"]
-    reason: str = ""
-    revised_severity: Literal["critical", "high", "medium", "low"] | None = None
+class FindingDecisionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finding_index: int = Field(ge=0, description="本次 Cross 请求中的 0-based Candidate 序号。")
+    result: Literal["keep", "drop"] = Field(description="对该 Candidate 的证据裁决。")
+    reason: str = Field(default="", max_length=500, description="支持裁决的具体代码事实。")
+    revised_severity: Literal["critical", "high", "medium", "low"] | None = Field(
+        default=None,
+        description="只有已验证影响与原值不符时才填写。",
+    )
 
 
-class CrossAnalysisResult(BaseModel):
-    decisions: list[FindingDecision] = Field(default_factory=list)
-    new_findings: list[ReviewFinding] = Field(default_factory=list)
-    unresolved_risks: list[str] = Field(default_factory=list)
-    summary: str = ""
+class CrossFindingDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(min_length=1, max_length=512, description="独立复合风险的主变更位置。")
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
+    severity: Literal["critical", "high", "medium", "low"]
+    title: str = Field(min_length=5, max_length=160, description="不得复述已有 Candidate。")
+    body: str = Field(min_length=20, max_length=4000, description="说明跨文件风险链和独立后果。")
+    evidence: str = Field(default="", max_length=3000, description="至少包含风险链两端的代码事实。")
+    suggestion: str = Field(default="", max_length=2000)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CrossAnalysisResultDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[FindingDecisionDraft] = Field(
+        default_factory=list,
+        description="每个输入 Candidate 恰好一个裁决。",
+    )
+    new_findings: list[CrossFindingDraft] = Field(
+        default_factory=list,
+        max_length=32,
+        description="仅包含新且独立的跨文件/复合风险，可以为空。",
+    )
+    unresolved_risks: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="受限于现有证据无法证实或排除的风险。",
+    )
+    summary: str = Field(default="", max_length=1000, description="全局裁决摘要。")
 ```
+
+Cross Harness 的动态 `FinalizeReview` Schema 是 `CrossAnalysisResultDraft`。业务 repair 转换为 `schemas.pipeline.FindingDecision` 和 `ReviewFinding`；`dimension_name`、`source="cross"` 等归属字段不由模型填写。
+
+业务结果模型继续保留在 `schemas/pipeline.py`：`FindingDecision` / `CrossAnalysisResult` 承载 repair 后的裁决和 finding，`ReviewFinding.source="cross"` 标识 Cross 新增项，`dimension_name` 由业务层补充。
 
 Cross Analysis 只返回 Finding 序号和处理结果。非法序号忽略、重复序号第一次优先、遗漏 Finding 默认保留；解析整体失败时全部保留并将 run 标为 partial。
 
@@ -570,9 +873,10 @@ V1 不引入 AST 全语言统一层，不建设 symbol database。解析失败�
 `agents/semantic.py`：
 
 - 输入 PR title/description、commit messages、diff/anatomy 摘要。
-- 通过注入的 `DeepReviewRuntime.ai(schema=SemanticBrief)` 调用 Plan24 `.ai()`。
+- 在模块内定义带字段 description 的 `SemanticBriefDraft`，通过注入的 `DeepReviewRuntime.ai(schema=SemanticBriefDraft)` 调用 Plan24 `.ai()`。
 - 不开放工具，不进行仓库漫游。
-- JSON/schema 失败时使用确定性 fallback：以 title、description、commit messages 和目录统计组成最小 brief，`confidence=0`。
+- `.ai()` 返回后显式把 Draft 字段构造成 `schemas.pipeline.SemanticBrief(source="model")`；Draft 不离开 Agent 边界。
+- JSON/schema 失败或 narrative 为空时使用确定性 fallback：以 title、description、commit messages 和目录统计组成最小 `SemanticBrief(source="fallback", confidence=0)`。
 
 该阶段回答“PR 想做什么、实际改了什么、风险面和不一致是什么”，但不生成 Finding。
 
@@ -680,7 +984,7 @@ It is not a predicted bug and it must not prescribe how many findings exist.
 - Prefer the smallest number of coherent dimensions; do not pad to max_planner_dimensions.
 - Never output findings, expected issue counts, child reviews, budgets or concurrency.
 - A reviewer may correctly return zero, one or many findings for any dimension.
-- Finish only by calling `FinalizeReview` with a `ReviewPlan`.
+- Finish only by calling `FinalizeReview` with a `ReviewPlanDraft` payload.
 
 # Final self-check before FinalizeReview
 
@@ -690,7 +994,7 @@ It is not a predicted bug and it must not prescribe how many findings exist.
 - Did I avoid finding quotas and unsupported risk claims?
 ```
 
-动态数据追加在该静态 Prompt 后，以清晰标签隔离。`FinalizeReview` 的 Schema 是 `ReviewPlan`，不是自由 JSON；Harness 的普通文本输出不作为阶段结果。
+动态数据追加在该静态 Prompt 后，以清晰标签隔离。`FinalizeReview` 的 Schema 是 Agent 私有的 `ReviewPlanDraft`，不是业务 `ReviewPlan` 或自由 JSON；Harness 的普通文本输出不作为阶段结果。
 
 #### 6.5.5 提示词效果增强
 
@@ -705,7 +1009,7 @@ V1 使用以下方法提升 Planning 质量，而不增加模型调用或 Schema
 
 #### 6.5.6 输出与失败边界
 
-- 通过 `DeepReviewRuntime.harness(schema=ReviewPlan)` 和动态 `FinalizeReview` 结束。
+- 通过 `DeepReviewRuntime.harness(schema=ReviewPlanDraft)` 创建动态 `FinalizeReview`；返回 Draft 后必须进入 `plan_repair.py`，只有 repair 产出的 `ReviewPlan` 能进入下一阶段。
 - `context_files` 可以跨 dimension 重复；`target_files` 的唯一归属由下一阶段确定性修复。
 - Schema/终结失败由现有 QueryLoop 在同一次 Harness 内反馈修正；Agent 不另开一次 Planning 调用。
 - Harness 最终失败时直接导致 run failed；不猜测模型意图，也不进入 fallback。
@@ -737,7 +1041,7 @@ V1 使用以下方法提升 Planning 质量，而不增加模型调用或 Schema
 - 只开放四个 Deep Review 只读工具以及动态 `FinalizeReview`。
 - 通过 `asyncio.Semaphore` 限制并发；V1 默认值写入运行配置而非模型 Schema。
 - 不允许 Reviewer 创建子 Reviewer 或子任务。
-- 每个 Reviewer 最终只提交 `ReviewerResult`。
+- 每个 Reviewer 最终只向 `FinalizeReview` 提交 `ReviewerResultDraft`；mapper 产出的业务 `ReviewerResult` 才能进入 Candidate 汇总。
 
 `target_files` 表示该 Reviewer 对这些变更文件负主审责任，不表示只能读取这些文件；Reviewer 可用四个工具读取 `context_files` 或搜索固定 head 中的必要调用者。它不得因为另一个 dimension 也可能涉及同一业务而跳过自己的调查，也不得把 context-only 文件上的既存问题当成本 PR Finding。
 
@@ -892,7 +1196,7 @@ Then inspect relationships across candidates and files:
   and an optional revised severity.
 - `new_findings` contains only verified cross-file/compound issues, and may be empty.
 - Finding count is not a goal. Preserve every valid issue and create no filler.
-- Finish only by calling `FinalizeReview` with `CrossAnalysisResult`.
+- Finish only by calling `FinalizeReview` with a `CrossAnalysisResultDraft` payload.
 
 # Final self-check before FinalizeReview
 
@@ -918,7 +1222,7 @@ Then inspect relationships across candidates and files:
 
 #### 6.10.6 输出修复与失败语义
 
-返回 `CrossAnalysisResult` 后由 `services/cross_repair.py` 做确定性修复：
+返回 `CrossAnalysisResultDraft` 后由 `services/cross_repair.py` 显式构造业务 `CrossAnalysisResult`：
 
 - 越界 `finding_index` 忽略。
 - 同一 Candidate 多次裁决时第一次出现优先。
@@ -933,7 +1237,7 @@ Then inspect relationships across candidates and files:
 
 `scoring.py`：
 
-- 从 PR-AF 确定性评分逻辑中保留 severity、confidence、证据完整度和 diff proximity。
+- 保留 PR-AF 的 severity × confidence 基础评分；证据完整度和 diff proximity 是本项目的简单辅助排序扩展，原源码没有这两个评分函数。具体原型权重与辅助值定义见 Spec25.6。
 - 删除 AI provenance、adversary stage 和 coverage multiplier。
 - 评分只用于排序和最低门槛，不覆盖 Cross Analysis 的显式 drop。
 
@@ -960,13 +1264,24 @@ Then inspect relationships across candidates and files:
 
 每个 `agents/*.py` 只负责：
 
-1. 加载对应 Markdown prompt。
-2. 把结构化输入格式化为带边界标记的文本。
-3. 选择 `.ai()` 或 `.harness()`。
-4. 声明 schema、tool allowlist、max turns 和 agent type。
-5. 返回解析后的简单 Pydantic 模型与 usage/session metadata。
+1. 在本模块定义私有 `*Draft` 及其字段 description。
+2. 加载对应 Markdown prompt。
+3. 把业务输入格式化为带边界标记的文本。
+4. 选择 `.ai()` 或 `.harness()`，并把本模块 Draft 作为 schema。
+5. 调用 mapper/repair 后返回业务模型，以及 usage/session metadata；Draft 不离开这次 Agent 调用的映射边界。
 
 业务修复、去重、补齐和评分不进入 agent 文件。
+
+各角色的转换位置固定如下：
+
+| Agent | Runtime Schema | Agent 返回/下一步 |
+|---|---|---|
+| Semantic | `SemanticBriefDraft` | Agent 内显式构造 `SemanticBrief`；失败构造 fallback business model |
+| Planner | `ReviewPlanDraft` | Agent 将局部 dump 交 `plan_repair.py`，返回 `ReviewPlan` |
+| Reviewer | `ReviewerResultDraft` | Agent 将局部 dump 交 `reviewer_result_mapper.py`，返回业务 Finding/Result |
+| Cross | `CrossAnalysisResultDraft` | Agent 将局部 dump 交 `cross_repair.py`，返回 `CrossAnalysisResult` |
+
+Draft 类名以下划线开头或不从 `agents/__init__.py` 导出；`schemas/__init__.py` 只导出业务模型。
 
 所有 Agent 调用使用同一个内部包装，避免 orchestrator 到处散落不同的异常处理：
 
@@ -1046,6 +1361,105 @@ code_search(query, is_regex=false, path_prefix=None)
 
 ## 8. 编排器设计
 
+### 8.1 渐进式编排，而不是最后一次性拼装
+
+从 Package 25.3A 起建立 `DeepReviewService.run()`、`services/orchestrator.py` 和 `__main__.py`。以后每个 Package 在交付新阶段时必须同时把该阶段接入 run，并增加从 CLI/fake runtime 经过该阶段的端到端测试；禁止等到 25.7 再第一次组合全部模块。
+
+当前 25.1～25.3 只能组成 **Preparation Pipeline**，不能声称完成 Deep Review：
+
+```text
+ReviewInput
+  → build_review_snapshot（固定 commit、diff、commit messages、filter）
+  → compute_blast_radius（fixed head）
+  → build_anatomy（hunks、stats、clusters、related paths）
+  → preparation report
+```
+
+此时 CLI 必须明确输出：
+
+```json
+{
+  "mode": "preparation",
+  "pipeline_complete": false,
+  "completed_stage": "anatomy",
+  "base_commit": "...",
+  "head_commit": "...",
+  "review_paths": [],
+  "context_paths": [],
+  "excluded_count": 0,
+  "stats": {},
+  "clusters": [],
+  "related_paths": []
+}
+```
+
+该 report 是开发期 smoke 输出，不是 `DeepReviewResult`，也不能使用 `completed/partial` 冒充审计终态。25.4 接入后 report 增加 Semantic/Plan 摘要；25.5～25.7 逐步接入 Reviewer、Cross 与 finalization。25.8 才冻结默认 CLI 为最终 `DeepReviewResult`；`--through anatomy` 保留为准备链路诊断入口。
+
+开发期输出也必须是显式类型，不使用自由 `dict` 替代契约：
+
+```python
+class PreparationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    mode: Literal["preparation"] = "preparation"
+    pipeline_complete: Literal[False] = False
+    completed_stage: Literal["anatomy"] = "anatomy"
+    base_commit: str
+    head_commit: str
+    review_paths: list[str]
+    context_paths: list[str]
+    excluded_count: int = Field(ge=0)
+    stats: DiffStats
+    clusters: list[ChangeCluster]
+    related_paths: list[str]
+```
+
+`PreparationReport` 位于 `schemas/output.py`，只表示“按要求到达显式停止阶段”，不是失败或部分审计。
+
+### 8.2 内存 Run Context
+
+阶段间数据只在当前进程的轻量 dataclass 中传递，不新增 Pydantic “万能状态模型”：
+
+```python
+@dataclass
+class DeepReviewRunContext:
+    review_input: ReviewInput
+    snapshot: ReviewSnapshot | None = None
+    anatomy: Anatomy | None = None
+    blast_radius: list[str] = field(default_factory=list)
+    semantic: SemanticBrief | None = None
+    plan: ReviewPlan | None = None
+    reviewer_results: list[ReviewerResult] = field(default_factory=list)
+    evidence: dict[int, EvidencePackage] = field(default_factory=dict)
+    cross_analysis: CrossAnalysisResult | None = None
+    diagnostics: list[str] = field(default_factory=list)
+```
+
+`DeepReviewRunContext` 不进入 `schemas/`、不传给模型、不作为恢复协议，也不整体写入 JSONL。业务模型进入对应字段；usage/session/error 仍通过 `AgentCallResult` 和阶段事件记录。
+
+### 8.3 阶段输入组合与转换
+
+| 阶段 | 可信输入 | 组合规则 | 输出/下一阶段事实 |
+|---|---|---|---|
+| Input/Filter | `ReviewInput`、Git refs、`DeepReviewConfig` | 固定 base/head/merge-base；读取 diff 与 commit messages；Directory Filter 分类 | `ReviewSnapshot` |
+| Anatomy | `snapshot.changes/review_paths/head_commit` | 先算 blast radius，再把 related paths 交给 `build_anatomy` | `Anatomy` + `blast_radius` |
+| Semantic | PR title/description、snapshot commit messages、Anatomy 紧凑摘要和有界 diff 摘要 | 静态 Prompt + 稳定排序的 untrusted JSON block；不传完整业务对象 repr | `SemanticBriefDraft → SemanticBrief` |
+| Planning | review/context paths、FilterDecision 摘要、Anatomy、SemanticBrief、config hints | 构造 Planner 文本；工具 catalog 绑定同一 snapshot；禁止传 Draft | `ReviewPlanDraft → plan_repair → ReviewPlan` |
+| Reviewer | 一个 repaired dimension、SemanticBrief、相关 target diff、context paths | 每个 dimension 构造独立输入；工具仍绑定同一 snapshot | `ReviewerResultDraft → mapper → ReviewerResult` |
+| Candidate | 全部业务 ReviewerResult | 按稳定键 gather/sort/编号；不调用模型 | `list[ReviewFinding]` + index map |
+| Evidence | Candidate、snapshot、blast radius | 确定性有界提取；失败只降级对应 Candidate | `dict[int, EvidencePackage]` |
+| Cross | 编号 Candidate 摘要、Evidence、SemanticBrief、Plan hints、Anatomy 关系 | 单次 Harness；不传 Reviewer transcript 或 Agent Draft | `CrossAnalysisResultDraft → cross_repair → CrossAnalysisResult` |
+| Finalize | Candidate、Cross decisions/new findings、Evidence | score、dedup、merge、polish；零模型调用 | `DeepReviewResult` |
+
+每个输入 builder 必须是独立、可单测的确定性函数。前一阶段的 Draft 永远不能直接成为后一阶段输入；只有业务模型或可信 snapshot 可以跨阶段。
+
+### 8.4 进度事件与日志
+
+每个阶段统一发出 `stage_started` / `stage_completed` / `stage_failed`，字段至少包括 `run_id`、`stage`、`duration_ms` 和无敏感信息的计数摘要。CLI 将事件以单行日志写入 stderr；stdout 只保留 JSON 输出。
+
+25.3A 同时建立最小 `DeepReviewStore`/JsonL append，以便运行崩溃后看到最后完成阶段；25.7 再补齐 Reviewer 并发稳定排序、完整 usage、终态 result 和取消事件。日志与 JSONL 不保存完整 diff、源码、Prompt 或 Draft 原文。
+
 `services/runtime.py` 先定义最小运行时边界：
 
 ```python
@@ -1082,7 +1496,7 @@ Plan25 前置改造已让 `HarnessResult.usage` 聚合 `total_tokens/input_token
 class DeepReviewService:
     def __init__(
         self,
-        runtime_factory: DeepReviewRuntimeFactory,
+        runtime_factory: DeepReviewRuntimeFactory | None = None,
         *,
         config: DeepReviewConfig,
         store: DeepReviewStore,
@@ -1091,8 +1505,12 @@ class DeepReviewService:
     async def run(
         self,
         review_input: ReviewInput,
-    ) -> DeepReviewResult: ...
+        *,
+        through: Literal["anatomy", "planning", "review", "cross", "final"] | None = None,
+    ) -> PreparationReport | DeepReviewResult: ...
 ```
+
+25.3A 的 Preparation Pipeline 返回 `PreparationReport`，不需要 runtime factory，也不得初始化模型服务；只有 `through="final"` 的完整链路返回 `DeepReviewResult`。25.4 首次执行 Semantic/Planner 时要求 factory 存在，否则返回明确配置错误。在后续 Package 尚未支持某个 `through` 值时，CLI 必须在运行前以配置错误拒绝，不得静默降级到较早阶段。
 
 职责：
 
@@ -1114,7 +1532,7 @@ class DeepReviewService:
 
 V1 不把这条原型链路接入现有 AgentTask/Worker。验证效果后再决定如何纳入平台执行模型。
 
-### 8.1 部分失败策略
+### 8.5 部分失败策略
 
 | 阶段 | 失败行为 |
 |---|---|
@@ -1162,7 +1580,7 @@ run_started
 input_loaded
 filter_completed
 semantic_completed / semantic_fallback
-plan_completed / plan_repaired / plan_fallback
+plan_completed / plan_repaired
 reviewer_completed / reviewer_failed
 evidence_completed
 cross_analysis_completed / cross_analysis_fallback
@@ -1215,7 +1633,7 @@ RuntimeBridge 自身的 transcript、turn、tool call 和 checkpoint 继续使�
 
 ### 10.1 Domain Entry Point
 
-不修改现有 `backend/app/cli.py`。通过 `deep_review/__main__.py` 暴露独立入口：
+不修改现有 `backend/app/cli.py`。Package 25.3A 就通过 `deep_review/__main__.py` 暴露独立入口，而不是等到最后：
 
 ```powershell
 python -m app.domains.deep_review `
@@ -1223,8 +1641,11 @@ python -m app.domains.deep_review `
   --base <base-sha> `
   --head <head-sha> `
   --output result.json `
-  --store-dir .codesage/deep-review
+  --store-dir .codesage/deep-review `
+  --through anatomy
 ```
+
+开发期 `--through` 表示显式停止位置。25.3A 仅支持 `anatomy`；后续 Package 在加入阶段的同时扩展合法值。省略时默认运行到当前已实现的最远阶段，并在输出中明确 `pipeline_complete`。25.8 完整闭环后，默认值冻结为 `final`。
 
 建议参数：
 
@@ -1238,6 +1659,7 @@ python -m app.domains.deep_review `
 --max-files-per-work-item
 --max-review-turns
 --max-cross-turns
+--through
 --output
 --store-dir
 ```
@@ -1245,9 +1667,24 @@ python -m app.domains.deep_review `
 约束：
 
 - 日志写 stderr。
-- `--output` 写标准 `DeepReviewResult` JSON；未提供时 JSON 写 stdout。
-- CLI 返回码：成功 `0`，输入/配置错误 `2`，运行失败 `1`；`partial` 仍返回 `0`，状态在 JSON 中明确表达。
+- Preparation 阶段的 `--output` 写开发期 preparation report；完整链路写标准 `DeepReviewResult`。未提供时 JSON 写 stdout。
+- CLI 返回码：到达显式 `--through` 目标或最终 `completed/partial` 为 `0`，输入/配置错误为 `2`，阶段失败为 `1`。
 - 必须同时提供 `--repo`、`--base`、`--head`；不存在 `--diff-file`、stdin diff 或 PR URL 模式。
+- 日志至少打印 Input、Filter、Blast Radius、Anatomy 的 start/completed/failed；只写计数、commit 和 duration，不打印完整 diff。
+
+当前仓库的手工 smoke 命令：
+
+```powershell
+python -m app.domains.deep_review `
+  --repo E:/Mac/CodeSage `
+  --base a4595a82 `
+  --head a9b0f49e `
+  --through anatomy `
+  --output .codesage/deep-review/manual-preparation.json `
+  --store-dir .codesage/deep-review
+```
+
+这组 SHA 只用于开发者本机验收。普通 CI/单元测试必须在临时目录创建包含 base/head 两个 commit 的最小 Git repo；不得依赖 CodeSage 历史永久存在、完整 clone 或本地绝对路径。
 
 ### 10.2 AACR Bench Adapter
 
@@ -1334,6 +1771,7 @@ backend/tests/deep_review/
 ```text
 aacr-bench-main/evaluation/reviewers/codesage_deep.py
 aacr-bench-main/evaluation/reviewers/__init__.py  # 仅在当前 registry 需要时
+aacr-bench-main/evaluation/pipeline.py           # 仅 reviewer choice/import/dispatch/预检注册
 aacr-bench-main/evaluation/config.py              # 仅增加显式 reviewer 配置时
 ```
 
@@ -1355,7 +1793,11 @@ aacr-bench-main/evaluation/config.py              # 仅增加显式 reviewer 配
 
 每个包必须可独立测试，不进行一次性大提交。
 
-### Package 25.1：领域骨架与简单 Schema
+25.3A～25.9 的逐包接口、实施顺序、失败处理、测试输入和交付标准见 [Spec25 分包索引](../spec/25-CodeSageDeep-V1核心移植与原型闭环.md)。不得只凭本节摘要直接实施整个包。
+
+分包规格统一以下原文未充分说明的边界：PreparationReport 随阶段扩展；max_final_dimensions 限制活动组而不删除 deferred 记录；Cross decisions 不使用固定 256 条上限；没有接入实际 token 容量参数前不宣称每组 token 硬限制；模型 CLI 使用显式 --allow-model-calls。AACR adapter 写 review.comments 并在现有 pipeline.py 注册，不改 evaluator/judge。
+
+### Package 25.1：领域骨架与简单 Schema（已完成）
 
 新增目录、PR-AF 风格 input/pipeline/output schema、typed config、Runtime Protocol/Factory 和 prompt loader。
 
@@ -1365,7 +1807,7 @@ aacr-bench-main/evaluation/config.py              # 仅增加显式 reviewer 配
 feat(deep-review): add v1 domain schemas and package skeleton
 ```
 
-### Package 25.2：Git Intake、OCR Directory Filter 与四个工具
+### Package 25.2：Git Intake、OCR Directory Filter 与四个工具（已完成）
 
 移植 PR-AF diff input 和 OCR 过滤规则；实现 `file_read`、`file_read_diff`、`file_find`、`code_search` 及安全边界测试。
 
@@ -1375,7 +1817,7 @@ feat(deep-review): add v1 domain schemas and package skeleton
 feat(deep-review): add repository intake filtering and review tools
 ```
 
-### Package 25.3：Diff / Anatomy / Evidence 核心
+### Package 25.3：Diff / Anatomy / Evidence 核心（已完成）
 
 移植 `diff_engine.py`、`blast_radius.py`、`evidence.py`，建立有界输入和失败降级。
 
@@ -1385,9 +1827,21 @@ feat(deep-review): add repository intake filtering and review tools
 feat(deep-review): port diff anatomy and evidence services
 ```
 
+### Package 25.3A：渐进式 Orchestrator、CLI 与 Preparation Smoke
+
+在进入模型阶段前先增加 `DeepReviewService.run()`、显式线性 orchestrator、`PreparationReport`、最小 JsonL event store 和 `python -m app.domains.deep_review`。当前只串联 Input/Filter、Blast Radius、Anatomy，输出 `pipeline_complete=false` 的 preparation report；日志写 stderr。
+
+自动端到端测试创建临时 Git repo；`a4595a82 → a9b0f49e` 只作为开发者本地 smoke。完成此包后，后续每个 Package 必须同步扩展 run 和 CLI 测试。
+
+建议提交：
+
+```text
+feat(deep-review): add incremental preparation runner and cli
+```
+
 ### Package 25.4：Semantic、Planner 与 Plan Repair
 
-增加两个 agent、Review Plan 调查职责 Prompt、四工具 allowlist、Prompt 契约夹具和路径不变量测试。
+增加两个 agent 私有 Draft、带 description 的 Schema、Draft→业务模型显式转换、Review Plan 调查职责 Prompt、四工具 allowlist、Prompt 契约夹具和路径不变量测试；同步把 Semantic/Planning 接入现有 run。
 
 建议提交：
 
@@ -1415,9 +1869,9 @@ feat(deep-review): add bounded parallel review dimensions
 feat(deep-review): add cross analysis and deterministic finalization
 ```
 
-### Package 25.7：JsonL Repository 与 Orchestrator
+### Package 25.7：完整编排与 JsonL 终态收口
 
-串联完整阶段，记录运行事件、usage、duration 和 partial/failure。
+在 25.3A 的增量骨架上完成全链路终态、Reviewer 并发稳定落盘、usage/duration、partial/failure/cancelled 和最终 `result.json`，而不是首次创建 Orchestrator。
 
 建议提交：
 
@@ -1425,9 +1879,9 @@ feat(deep-review): add cross analysis and deterministic finalization
 feat(deep-review): add jsonl-backed v1 orchestrator
 ```
 
-### Package 25.8：独立入口与 AACR Adapter
+### Package 25.8：CLI 契约冻结与 AACR Adapter
 
-增加 `python -m app.domains.deep_review` 独立入口、标准输出和 benchmark 薄适配器，不修改现有 CLI。
+将已持续使用的 `python -m app.domains.deep_review` 默认阶段冻结为 `final`，稳定标准输出和退出码；增加 benchmark 薄适配器，不修改现有 CLI。
 
 建议拆成两个提交：
 
@@ -1460,9 +1914,12 @@ partial/fallback 次数
 ### 14.1 Schema 与结构化终结
 
 - 所有 V1 Schema JSON round-trip。
-- Semantic `.ai()` 可解析简单结构；失败走 fallback。
-- 每个 Harness 成功调用动态 `FinalizeReview`。
+- Agent Draft 只定义在对应 `agents/<role>.py`，不会从 `schemas` 导出；`schemas` 不反向 import `agents`。
+- Draft 的 Field description 出现在 `model_json_schema()`，并能被 `.ai()`/动态 `FinalizeReview` 使用。
+- Semantic `.ai()` 可解析 `SemanticBriefDraft` 并显式构造 `SemanticBrief`；失败走可区分的 fallback。
+- Planner/Reviewer/Cross 每个 Harness 以对应 Draft 创建动态 `FinalizeReview`，不得使用业务模型作为终结 Schema。
 - 非法终结 payload 被拒绝后可以修正重试。
+- Draft→业务模型转换会重新校验，不使用跳过校验的 `model_copy(update=...)`。
 - Reviewer/Cross 不需要构造复杂嵌套对象。
 
 ### 14.2 Directory Filter 与工具
@@ -1528,7 +1985,9 @@ partial/fallback 次数
 ### 14.7 独立入口与边界
 
 - `python -m app.domains.deep_review --help`。
-- 临时 Git repo 的 base/head 离线 smoke。
+- 25.3A 的临时 Git repo base/head smoke 到达 `completed_stage=anatomy`、`pipeline_complete=false`，且不初始化模型 Runtime。
+- 以后每个 Package 都有一条 fake runtime CLI 测试证明新增阶段已接入 run；不能只做孤立单元测试。
+- `a4595a82 → a9b0f49e` 只用于本地手工 smoke，不进入普通 CI 依赖。
 - stdout/stderr 分离。
 - `backend/tests/deep_review` 全套通过。
 - 静态测试确认 Domain 不 import quick-review、旧 PR tools、API、Worker 或 ORM。
@@ -1565,7 +2024,7 @@ Plan25 完成必须同时满足：
 11. `file_read`、`file_read_diff`、`file_find`、`code_search` 全部由 Deep Review 独立实现，使用路径而不是 ID。
 12. Domain 运行事件通过 `DeepReviewStore` 写入 JsonL；Runtime transcript 继续使用现有 AuditSessionStore。
 13. 崩溃可诊断，重跑创建新 run，不实现 stage resume。
-14. 独立入口可对本地 repo/base/head 完成一次端到端 deep review，不支持 diff-only。
+14. 独立入口从 25.3A 起可对本地 repo/base/head 完成 preparation smoke，并随每个 Package 渐进接入新阶段；最终可完成端到端 deep review，不支持 diff-only。
 15. AACR adapter 可运行一个显式 opt-in case 并产出统一结果。
 16. 除 `.ai()` / `.harness()` 和动态 `FinalizeReview` 外，Deep Review 不依赖 quick-review 旧实现。
 
@@ -1613,4 +2072,4 @@ Plan25 完成必须同时满足：
 4. **Merge/Polish**：V1 明确为零模型调用，是否同意先用基准结果证明需要后再增加 `.ai()`。
 5. **AACR 范围**：Plan25 只增加 reviewer adapter，不修改 evaluator/judge，是否足够支撑第一轮效果验证。
 
-如果以上方向通过审计，实施严格按照 25.1 → 25.9 分包推进，不在实现阶段重新扩大领域模型或基础设施范围。
+如果以上方向通过审计，实施严格按照 25.1 → 25.2 → 25.3 → 25.3A → 25.4 → … → 25.9 分包推进，不在实现阶段重新扩大领域模型或基础设施范围。

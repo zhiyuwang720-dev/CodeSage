@@ -23,7 +23,7 @@ class DeepReviewConfig(BaseModel):
     tool_timeout_seconds: int = Field(default=10, ge=1)
     max_cross_context_bytes: int | None = Field(default=None, ge=1)
     max_candidate_count: int | None = Field(default=None, ge=1)
-    max_evidence_bytes_per_finding: int = Field(default=24_000, ge=1)
+    max_evidence_bytes_per_finding: int = Field(default=24_000, ge=512)
     min_severity: Literal["critical", "high", "medium", "low"] = "low"
     semantic_role: str = "deep_review:semantic"
     planner_role: str = "deep_review:planner"
