@@ -1839,6 +1839,20 @@ feat(deep-review): port diff anatomy and evidence services
 feat(deep-review): add incremental preparation runner and cli
 ```
 
+### Package 25.3B：Preparation 性能与 Blast Radius 边界
+
+真实 smoke 暴露了固定 head 全量 Python 分析的尾延迟：当前 495 个文件会启动约 495 次 `git show`。本包在 25.4 前冻结确定性性能边界：一次 `git cat-file --batch` 批量读取 blob；保留 AST 和一跳反向依赖语义；增加文件数、总字节数和超时上限；支持 `PYTHONPATH=backend` 场景下的唯一路径后缀模块别名。超限或超时走 `blast_radius_degraded`，不阻塞 Preparation。
+
+Anatomy 聚类不升级为语义聚类。cluster ID 改为由目录 key 派生稳定哈希，新增目录深度和单簇文件数上限；超大目录按剩余路径递归拆分。
+
+详细边界见 [Spec 25.3B](../spec/25.3B-Preparation性能与BlastRadius边界.md)。
+
+建议提交：
+
+```text
+perf(deep-review): batch blast radius and stabilize anatomy clusters
+```
+
 ### Package 25.4：Semantic、Planner 与 Plan Repair
 
 增加两个 agent 私有 Draft、带 description 的 Schema、Draft→业务模型显式转换、Review Plan 调查职责 Prompt、四工具 allowlist、Prompt 契约夹具和路径不变量测试；同步把 Semantic/Planning 接入现有 run。

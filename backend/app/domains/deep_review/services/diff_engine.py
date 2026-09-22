@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from collections import defaultdict
 from pathlib import PurePosixPath
 
@@ -75,20 +76,81 @@ def compute_stats(changes: list[FileChange]) -> DiffStats:
     )
 
 
-def cluster_changes(changes: list[FileChange]) -> list[ChangeCluster]:
+def _cluster_id(name: str) -> str:
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+    return f"cluster_{digest}"
+
+
+def _directory_key(path: str, depth: int) -> tuple[str, ...]:
+    parts = path.split("/")
+    return tuple(parts[: max(1, depth)]) if len(parts) > 1 else ("root",)
+
+
+def _group_name(parts: tuple[str, ...]) -> str:
+    return "/".join(parts) if parts else "root"
+
+
+def _bounded_groups(
+    prefix: tuple[str, ...],
+    changes: list[FileChange],
+    max_files: int,
+) -> list[tuple[tuple[str, ...], list[FileChange]]]:
+    if len(changes) <= max_files:
+        return [(prefix, changes)]
+
+    next_index = len(prefix)
     grouped: dict[str, list[FileChange]] = defaultdict(list)
+    can_split_by_path = False
     for change in changes:
-        directory = change.path.rsplit("/", 1)[0] if "/" in change.path else "root"
-        grouped[directory].append(change)
+        parts = change.path.split("/")
+        if next_index < len(parts) - 1:
+            key = parts[next_index]
+            can_split_by_path = True
+        else:
+            key = parts[-1]
+        grouped[key].append(change)
+
+    if not can_split_by_path:
+        ordered = sorted(changes, key=lambda item: item.path)
+        return [
+            ((*prefix, f"part_{index:03d}"), ordered[index : index + max_files])
+            for index in range(0, len(ordered), max_files)
+        ]
+
+    groups: list[tuple[tuple[str, ...], list[FileChange]]] = []
+    for key in sorted(grouped):
+        groups.extend(_bounded_groups((*prefix, key), grouped[key], max_files))
+    return groups
+
+
+def cluster_changes(
+    changes: list[FileChange],
+    *,
+    directory_depth: int = 1,
+    max_files_per_cluster: int = 24,
+) -> list[ChangeCluster]:
+    if max_files_per_cluster < 1:
+        raise ValueError("max_files_per_cluster must be positive")
+    if directory_depth < 1:
+        raise ValueError("directory_depth must be positive")
+
+    grouped: dict[tuple[str, ...], list[FileChange]] = defaultdict(list)
+    for change in changes:
+        grouped[_directory_key(change.path, directory_depth)].append(change)
+
+    bounded: list[tuple[tuple[str, ...], list[FileChange]]] = []
+    for prefix in sorted(grouped):
+        bounded.extend(_bounded_groups(prefix, grouped[prefix], max_files_per_cluster))
 
     clusters: list[ChangeCluster] = []
-    for index, directory in enumerate(sorted(grouped)):
-        files = grouped[directory]
+    for prefix, files in sorted(bounded, key=lambda item: _group_name(item[0])):
+        directory = _group_name(prefix)
+        files = sorted(files, key=lambda item: item.path)
         languages = [language for language in (detect_language(item.path) for item in files) if language]
         primary = max(sorted(set(languages)), key=languages.count) if languages else ""
         clusters.append(
             ChangeCluster(
-                id=f"cluster_{index}",
+                id=_cluster_id(directory),
                 name=directory,
                 files=[item.path for item in files],
                 primary_language=primary,
@@ -97,9 +159,19 @@ def cluster_changes(changes: list[FileChange]) -> list[ChangeCluster]:
     return clusters
 
 
-def build_anatomy(changes: list[FileChange], related_paths: list[str] | None = None) -> Anatomy:
+def build_anatomy(
+    changes: list[FileChange],
+    related_paths: list[str] | None = None,
+    *,
+    directory_depth: int = 1,
+    max_files_per_cluster: int = 24,
+) -> Anatomy:
     stats = compute_stats(changes)
-    clusters = cluster_changes(changes)
+    clusters = cluster_changes(
+        changes,
+        directory_depth=directory_depth,
+        max_files_per_cluster=max_files_per_cluster,
+    )
     directories = sorted({item.path.rsplit("/", 1)[0] if "/" in item.path else "root" for item in changes})
     summary = (
         f"Files: {stats.total_files}; +{stats.total_additions}/-{stats.total_deletions}; "

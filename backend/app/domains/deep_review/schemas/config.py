@@ -19,10 +19,14 @@ class DeepReviewConfig(BaseModel):
     max_file_bytes: int = Field(default=1_000_000, ge=1)
     max_tool_read_lines: int = Field(default=400, ge=1)
     max_tool_output_bytes: int = Field(default=100_000, ge=512)
+    max_import_graph_files: int = Field(default=2_000, ge=1)
+    max_import_scan_bytes: int = Field(default=32_000_000, ge=1)
     max_search_results: int = Field(default=100, ge=1)
     tool_timeout_seconds: int = Field(default=10, ge=1)
     max_cross_context_bytes: int | None = Field(default=None, ge=1)
     max_candidate_count: int | None = Field(default=None, ge=1)
+    cluster_directory_depth: int = Field(default=1, ge=1)
+    max_cluster_files: int = Field(default=24, ge=1)
     max_evidence_bytes_per_finding: int = Field(default=24_000, ge=512)
     min_severity: Literal["critical", "high", "medium", "low"] = "low"
     semantic_role: str = "deep_review:semantic"

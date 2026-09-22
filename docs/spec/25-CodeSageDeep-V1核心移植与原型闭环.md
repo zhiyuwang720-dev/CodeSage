@@ -14,6 +14,7 @@ OCR：`85cecfe5f935da2b2aae8f91ce4fee8ed343a681`
 | 顺序 | 独立 Spec | 本包完成后的可观察结果 |
 |---|---|---|
 | 1 | [25.3A：渐进式编排与 Preparation 入口](25.3A-渐进式编排与Preparation入口.md) | CLI 离线运行到 anatomy，产出准备报告和 JSONL |
+| 2 | [25.3B：Preparation 性能与 Blast Radius 边界](25.3B-Preparation性能与BlastRadius边界.md) | 批量读取 head blob，限制影响面扫描成本，稳定 Anatomy cluster |
 | 2 | [25.4：Semantic、Planner 与 Plan Repair](25.4-Semantic与Planner及PlanRepair.md) | run 接入两个模型阶段，输出经过修复的调查计划 |
 | 3 | [25.5：并行 Reviewer 与 Candidate 汇总](25.5-并行Reviewer与Candidate汇总.md) | 有界并行审查、部分失败记录和稳定 Candidate |
 | 4 | [25.6：Cross Analysis 与确定性收尾](25.6-CrossAnalysis与确定性收尾.md) | 全部 Candidate 的裁决及可计算的最终结果 |

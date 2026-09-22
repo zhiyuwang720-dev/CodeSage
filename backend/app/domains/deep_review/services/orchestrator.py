@@ -129,6 +129,7 @@ class PreparationOrchestrator:
                 context.snapshot.input.repo_path,
                 context.snapshot.head_commit,
                 self.config,
+                diagnostics=context.diagnostics,
             )
         except BlastRadiusError as exc:
             context.diagnostics.append(f"blast_radius_degraded: {_safe_error(exc)}")
@@ -152,7 +153,12 @@ class PreparationOrchestrator:
             change for change in context.snapshot.changes if change.path in allowed_paths
         ]
         try:
-            anatomy = build_anatomy(allowed_changes, context.blast_radius)
+            anatomy = build_anatomy(
+                allowed_changes,
+                context.blast_radius,
+                directory_depth=self.config.cluster_directory_depth,
+                max_files_per_cluster=self.config.max_cluster_files,
+            )
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
