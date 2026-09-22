@@ -20,6 +20,9 @@ def hydrate_query_loop_state(state: QueryLoopState, *, messages: list[Transcript
         turn_count=max(1, state.turn_count),
         transition=state.transition,
         provider_tokens_used=state.provider_tokens_used,
+        provider_input_tokens_used=state.provider_input_tokens_used,
+        provider_output_tokens_used=state.provider_output_tokens_used,
+        provider_cost_usd=state.provider_cost_usd,
     )
 
 
@@ -42,6 +45,9 @@ def build_continue_state(
         turn_count=max(1, state.turn_count) + 1,
         transition=transition,
         provider_tokens_used=state.provider_tokens_used,
+        provider_input_tokens_used=state.provider_input_tokens_used,
+        provider_output_tokens_used=state.provider_output_tokens_used,
+        provider_cost_usd=state.provider_cost_usd,
     )
 
 
@@ -59,4 +65,7 @@ def build_terminal_state(state: QueryLoopState, *, messages: list[TranscriptItem
         turn_count=max(1, state.turn_count),
         transition=None,
         provider_tokens_used=state.provider_tokens_used,
+        provider_input_tokens_used=state.provider_input_tokens_used,
+        provider_output_tokens_used=state.provider_output_tokens_used,
+        provider_cost_usd=state.provider_cost_usd,
     )

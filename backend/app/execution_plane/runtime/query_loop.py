@@ -1031,6 +1031,7 @@ class QueryLoop:
             protocol=payload.get("protocol"),
             perspective=payload.get("perspective"),
             purpose=str(payload.get("purpose") or "review"),
+            response_cost_usd=payload.get("response_cost_usd"),
             native_tool_call_count=len(list(payload.get("tool_calls") or [])),
             has_terminal_tool_call=any(
                 str((item or {}).get("name") or "").strip() in TERMINAL_TOOL_NAMES
@@ -1171,7 +1172,7 @@ class QueryLoop:
                 model_response.usage,
                 model_name=model_response.request_model or model_name,
             )
-            state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
+            self._accumulate_provider_usage(state, model_response)
             assistant_message_id = None
             working_messages = list(state.messages)
             if model_response.content or model_response.reasoning_content or model_response.tool_calls:
@@ -1478,7 +1479,7 @@ class QueryLoop:
             model_response.usage,
             model_name=model_response.request_model or model_name,
         )
-        state.provider_tokens_used += self._provider_total_tokens(model_response.usage)
+        self._accumulate_provider_usage(state, model_response)
         if assistant_message_id is not None:
             assistant_message = self._session_store.get_message(assistant_message_id)
             if assistant_message is not None:
@@ -1611,6 +1612,23 @@ class QueryLoop:
         if output_tokens is None:
             output_tokens = values.get("completion_tokens")
         return max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
+
+    @staticmethod
+    def _accumulate_provider_usage(state: QueryLoopState, response: RuntimeModelResponse) -> None:
+        usage = dict(response.usage or {})
+        state.provider_tokens_used += QueryLoop._provider_total_tokens(usage)
+        input_value = usage.get("input_tokens")
+        if input_value is None:
+            input_value = usage.get("prompt_tokens")
+        output_value = usage.get("output_tokens")
+        if output_value is None:
+            output_value = usage.get("completion_tokens")
+        state.provider_input_tokens_used += max(0, int(input_value or 0))
+        state.provider_output_tokens_used += max(0, int(output_value or 0))
+        if response.response_cost_usd is not None:
+            state.provider_cost_usd = (state.provider_cost_usd or 0.0) + float(
+                response.response_cost_usd
+            )
 
     @staticmethod
     def _format_stream_error_for_exception(event: dict[str, Any]) -> str:

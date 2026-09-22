@@ -144,6 +144,7 @@ class RuntimeLLMModelClient:
             protocol=response.get("protocol"),
             perspective=response.get("perspective"),
             purpose=str(response.get("purpose") or "review"),
+            response_cost_usd=response.get("response_cost_usd"),
         )
 
     async def complete_stream(
@@ -417,6 +418,7 @@ class RuntimeLLMModelClient:
                 "protocol": payload.get("protocol"),
                 "perspective": payload.get("perspective"),
                 "purpose": payload.get("purpose") or "review",
+                "response_cost_usd": payload.get("response_cost_usd"),
             }
         if event_type == "error":
             return {
@@ -755,12 +757,23 @@ class RuntimeBridge:
 
         query_state = self._session_store.load_query_loop_state(session_id)
         provider_tokens = int(getattr(query_state, "provider_tokens_used", 0) or 0)
+        input_tokens = int(getattr(query_state, "provider_input_tokens_used", 0) or 0)
+        output_tokens = int(getattr(query_state, "provider_output_tokens_used", 0) or 0)
+        raw_cost = getattr(query_state, "provider_cost_usd", None)
+        cost_usd = float(raw_cost) if isinstance(raw_cost, (int, float)) else None
         return HarnessResult(
             parsed=parsed,
             session_id=session_id,
             result=result,
-            usage={"total_tokens": provider_tokens} if provider_tokens > 0 else None,
-            cost_usd=None,
+            usage={
+                "total_tokens": provider_tokens,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+                "usage_complete": input_tokens > 0 and output_tokens > 0,
+                "cost_available": cost_usd is not None,
+            },
+            cost_usd=cost_usd,
         )
 
     def _schema_payload_extractor(self, schema: type[BaseModel]):

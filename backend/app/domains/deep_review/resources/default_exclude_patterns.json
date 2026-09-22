@@ -1,0 +1,10 @@
+[
+  "**/*_test.go", "**/src/test/java/**/*.java", "**/*.test.{js,jsx,ts,tsx}",
+  "**/*.spec.{js,jsx,ts,tsx}", "**/__tests__/**", "**/*_test.py",
+  "**/test_*.py", "**/*_spec.rb", "**/*Test.java", "**/*Tests.java",
+  "**/*_test.rs", "**/*.snap", "**/testdata/**", "**/fixtures/**",
+  "**/*.generated.*", "**/*.gen.go", "**/*.pb.go", "**/vendor/**",
+  "**/node_modules/**", "**/dist/**", "**/build/**", "**/.idea/**",
+  "**/.vscode/**", "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"
+]
+

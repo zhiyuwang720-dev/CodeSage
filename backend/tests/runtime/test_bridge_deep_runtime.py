@@ -231,12 +231,56 @@ def test_harness_tool_call_success_and_persistence() -> None:
 
     assert isinstance(result.parsed, StrictReviewResult)
     assert result.result["final_payload"]["summary"] == "done"
-    assert result.usage == {"total_tokens": 9}
+    assert result.usage == {
+        "total_tokens": 9,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": None,
+        "usage_complete": False,
+        "cost_available": False,
+    }
+    assert result.cost_usd is None
     snapshot = bridge._session_store.load_session_snapshot(result.session_id)
     assert snapshot.session.recon_payload["deep_runtime_cwd"] == str(Path.cwd())
     assert len(snapshot.tool_calls) == 1
     assert snapshot.skills == []
     assert snapshot.memories == []
+
+
+def test_harness_accumulates_input_output_and_cost() -> None:
+    class CostedHarnessLLMService:
+        def __init__(self):
+            self.calls = 0
+
+        async def chat_completion_stream(self, **kwargs):
+            del kwargs
+            self.calls += 1
+            yield {
+                "type": "done",
+                "content": "done",
+                "usage": {"input_tokens": 11, "output_tokens": 5},
+                "tool_calls": [
+                    {
+                        "id": "call-cost",
+                        "name": "FinalizeReview",
+                        "arguments": json.dumps(strict_payload(), ensure_ascii=False),
+                    }
+                ],
+            }
+
+    llm = CostedHarnessLLMService()
+    bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
+
+    result = asyncio.run(bridge.harness("review", schema=StrictReviewResult))
+
+    assert llm.calls == 1
+    assert result.usage["total_tokens"] == 16
+    assert result.usage["input_tokens"] == 11
+    assert result.usage["output_tokens"] == 5
+    assert result.usage["usage_complete"] is True
+    assert result.usage["cost_available"] is False
+    assert result.usage["cost_usd"] is None
+    assert result.cost_usd is None
 
 
 def test_harness_assistant_json_fallback() -> None:

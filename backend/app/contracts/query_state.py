@@ -20,6 +20,9 @@ class QueryLoopState:
     turn_count: int = 1
     transition: RuntimeContinueReason | None = None
     provider_tokens_used: int = 0
+    provider_input_tokens_used: int = 0
+    provider_output_tokens_used: int = 0
+    provider_cost_usd: float | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -44,6 +47,9 @@ class QueryLoopState:
             "turn_count": int(self.turn_count),
             "transition": self.transition.value if self.transition is not None else None,
             "provider_tokens_used": int(self.provider_tokens_used),
+            "provider_input_tokens_used": int(self.provider_input_tokens_used),
+            "provider_output_tokens_used": int(self.provider_output_tokens_used),
+            "provider_cost_usd": self.provider_cost_usd,
         }
 
     @classmethod
@@ -87,4 +93,7 @@ class QueryLoopState:
             turn_count=max(1, int(raw.get("turn_count") or 1)),
             transition=transition,
             provider_tokens_used=max(0, int(raw.get("provider_tokens_used") or 0)),
+            provider_input_tokens_used=max(0, int(raw.get("provider_input_tokens_used") or 0)),
+            provider_output_tokens_used=max(0, int(raw.get("provider_output_tokens_used") or 0)),
+            provider_cost_usd=raw.get("provider_cost_usd"),
         )
