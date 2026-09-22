@@ -40,13 +40,13 @@ async def _head_python_blobs(
     result = await run_git_output_bounded(
         repo_path,
         ["ls-tree", "-r", "-z", head_commit],
-        max_bytes=config.max_import_scan_bytes,
+        max_bytes=config.max_import_tree_bytes,
         timeout_seconds=config.tool_timeout_seconds,
     )
     if result.returncode != 0:
         raise BlastRadiusError("could not read the fixed head tree")
     if result.truncated:
-        raise BlastRadiusError("head tree listing exceeded max_tool_output_bytes")
+        raise BlastRadiusError("head tree listing exceeded max_import_tree_bytes")
     secret_filter = DirectoryFilter(config)
     paths: list[str] = []
     for record in result.stdout.split("\0"):
@@ -210,10 +210,12 @@ async def _read_head_blobs(
         raise BlastRadiusError(f"could not batch read head blobs: {exc}") from exc
     if result.returncode != 0:
         raise BlastRadiusError("git cat-file --batch failed")
-    if result.truncated:
+    if result.stdout_truncated:
         raise BlastRadiusError(
             f"import graph scan limit exceeded: {config.max_import_scan_bytes} bytes"
         )
+    if result.stderr_truncated:
+        raise BlastRadiusError("git cat-file diagnostics exceeded output limit")
 
     contents: dict[str, str] = {}
     skipped = 0

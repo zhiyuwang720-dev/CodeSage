@@ -19,6 +19,7 @@ class DeepReviewConfig(BaseModel):
     max_file_bytes: int = Field(default=1_000_000, ge=1)
     max_tool_read_lines: int = Field(default=400, ge=1)
     max_tool_output_bytes: int = Field(default=100_000, ge=512)
+    max_import_tree_bytes: int = Field(default=1_000_000, ge=1)
     max_import_graph_files: int = Field(default=2_000, ge=1)
     max_import_scan_bytes: int = Field(default=32_000_000, ge=1)
     max_search_results: int = Field(default=100, ge=1)

@@ -51,7 +51,7 @@ async def run_git_output_bounded(
             process.kill()
             await process.wait()
         return BoundedGitResult(
-            process.returncode or 0,
+            0 if process.returncode is None else process.returncode,
             stdout.decode("utf-8", "replace"),
             stderr.decode("utf-8", "replace"),
             stdout_truncated or stderr_truncated,
@@ -66,7 +66,8 @@ class BoundedGitBinaryResult(NamedTuple):
     returncode: int
     stdout: bytes
     stderr: str
-    truncated: bool
+    stdout_truncated: bool
+    stderr_truncated: bool
 
 
 async def run_git_binary_bounded(
@@ -110,6 +111,11 @@ async def run_git_binary_bounded(
             process.stdin.close()
             await process.stdin.wait_closed()
 
+    async def terminate_process() -> None:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
     try:
         stdout_result, stderr_result, _ = await asyncio.wait_for(
             asyncio.gather(
@@ -126,14 +132,17 @@ async def run_git_binary_bounded(
         except TimeoutError:
             process.kill()
             await process.wait()
-        return BoundedGitBinaryResult(
-            process.returncode or 0,
-            stdout,
-            stderr.decode("utf-8", "replace"),
-            stdout_truncated or stderr_truncated,
-        )
     except (TimeoutError, asyncio.TimeoutError):
-        process.kill()
-        await process.wait()
+        await terminate_process()
         raise TimeoutError("git output timeout") from None
-        raise TimeoutError("git output timeout") from None
+    except BaseException:
+        await terminate_process()
+        raise
+    returncode = process.returncode
+    return BoundedGitBinaryResult(
+        0 if returncode is None else returncode,
+        stdout,
+        stderr.decode("utf-8", "replace"),
+        stdout_truncated,
+        stderr_truncated,
+    )

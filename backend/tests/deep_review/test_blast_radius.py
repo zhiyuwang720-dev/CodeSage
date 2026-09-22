@@ -98,6 +98,47 @@ async def test_file_limit_degrades_blast_radius(tmp_path: Path) -> None:
         )
 
 
+async def test_total_blob_limit_degrades_blast_radius(tmp_path: Path) -> None:
+    repo = tmp_path / "byte-limit-repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+    (repo / "a.py").write_text("from b import value\n", encoding="utf-8")
+    (repo / "b.py").write_text("value = 1\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    head = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(BlastRadiusError, match="import graph scan limit exceeded"):
+        await compute_blast_radius(
+            ["b.py"],
+            str(repo),
+            head,
+            DeepReviewConfig(max_import_scan_bytes=10),
+        )
+
+
+async def test_ambiguous_suffix_alias_creates_no_edge(tmp_path: Path) -> None:
+    repo = tmp_path / "ambiguous-repo"
+    (repo / "one").mkdir(parents=True)
+    (repo / "two").mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+    (repo / "one" / "foo.py").write_text("value = 1\n", encoding="utf-8")
+    (repo / "two" / "foo.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "caller.py").write_text("from foo import value\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    head = git(repo, "rev-parse", "HEAD")
+
+    graph = await build_import_graph(str(repo), head, DeepReviewConfig())
+
+    assert graph == {}
+    assert await compute_blast_radius(
+        ["one/foo.py"], str(repo), head, DeepReviewConfig(), import_graph=graph
+    ) == []
 async def test_oversized_file_is_skipped_with_diagnostic(tmp_path: Path) -> None:
     repo = tmp_path / "oversized-repo"
     (repo / "pkg").mkdir(parents=True)
