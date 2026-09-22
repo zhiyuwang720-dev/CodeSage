@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
-from .pipeline import ReviewFinding
+from .pipeline import ChangeCluster, DiffStats, ReviewFinding
 
 
 class ReviewMetrics(BaseModel):
@@ -29,3 +29,21 @@ class DeepReviewResult(BaseModel):
     unresolved_risks: list[str] = Field(default_factory=list)
     metrics: ReviewMetrics
 
+
+class PreparationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1)
+    mode: Literal["preparation"]
+    pipeline_complete: Literal[False]
+    completed_stage: Literal["anatomy"]
+    base_commit: str = Field(min_length=7)
+    head_commit: str = Field(min_length=7)
+    merge_base: str = Field(min_length=7)
+    review_paths: list[str] = Field(default_factory=list)
+    context_paths: list[str] = Field(default_factory=list)
+    excluded_count: int = Field(default=0, ge=0)
+    stats: DiffStats
+    clusters: list[ChangeCluster] = Field(default_factory=list)
+    related_paths: list[str] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)

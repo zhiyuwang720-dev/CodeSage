@@ -30,6 +30,10 @@ class ReviewSnapshot:
         return self.filter_result.review_paths
 
     @property
+    def context_paths(self) -> list[str]:
+        return self.filter_result.context_paths
+
+    @property
     def allowed_paths(self) -> set[str]:
         return {*self.filter_result.review_paths, *self.filter_result.context_paths}
 
@@ -55,9 +59,9 @@ def _run_git(repo: Path, *args: str, check: bool = True) -> subprocess.Completed
 def _resolve_commit(repo: Path, ref: str) -> str:
     if not ref.strip() or ref.strip().startswith("-"):
         raise ReviewInputError(f"invalid ref: {ref}")
-    result = _run_git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    result = _run_git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
     value = result.stdout.strip()
-    if not value:
+    if result.returncode != 0 or not value:
         raise ReviewInputError(f"ref not found: {ref}")
     return value
 
