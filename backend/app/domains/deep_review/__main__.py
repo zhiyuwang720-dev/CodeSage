@@ -32,8 +32,46 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--exclude", action="append", default=[], metavar="PATTERN")
     parser.add_argument("--max-concurrency", type=int, default=4)
     parser.add_argument("--store-dir", default=".codesage/deep-review")
-    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="write the PreparationReport JSON to this path; the filename does not change its contents",
+    )
     return parser
+
+
+def _create_temporary_sqlite_runtime(config: DeepReviewConfig, database_path: Path):
+    # TEMPORARY SQLITE SESSION STORE BEGIN
+    # Deep Review prototype only: RuntimeBridge still stores Harness sessions via AuditSessionStore.
+    # Remove this block when Deep Review has its own backend-neutral Runtime session store.
+    from sqlalchemy import create_engine
+    from sqlalchemy.engine import URL
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    import app.models.audit_session  # noqa: F401 - register RuntimeBridge tables with Base.metadata.
+    from app.domains.deep_review.services.runtime import RuntimeBridgeDeepReviewRuntimeFactory
+    from app.execution_plane.models.service import LLMService
+
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(URL.create("sqlite", database=str(database_path)))
+    try:
+        Base.metadata.create_all(bind=engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+        llm_service = LLMService()
+        # Validate both roles before the first paid Semantic request.
+        llm_service.get_config_for(config.semantic_role)
+        llm_service.get_config_for(config.planner_role)
+        runtime_factory = RuntimeBridgeDeepReviewRuntimeFactory(
+            llm_service=llm_service,
+            session_factory=session_factory,
+        )
+    except Exception:
+        engine.dispose()
+        raise
+    # TEMPORARY SQLITE SESSION STORE END
+    return runtime_factory, engine
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -50,31 +88,76 @@ async def _run(args: argparse.Namespace) -> int:
         description=args.description,
     )
     runtime_factory = None
+    session_engine = None
     requested_stage = args.through or "anatomy"
+    artifact_dir = (
+        args.output.parent if args.output is not None else Path(args.store_dir)
+    ).resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
     if requested_stage == "planning":
-        from app.domains.deep_review.services.runtime import (
-            RuntimeBridgeDeepReviewRuntimeFactory,
+        runtime_factory, session_engine = _create_temporary_sqlite_runtime(
+            config,
+            artifact_dir / "sessions.sqlite3",
         )
-        from app.execution_plane.models.service import LLMService
-
-        llm_service = LLMService()
-        # Validate both roles before the first paid Semantic request.
-        llm_service.get_config_for(config.semantic_role)
-        llm_service.get_config_for(config.planner_role)
-        runtime_factory = RuntimeBridgeDeepReviewRuntimeFactory(llm_service=llm_service)
     service = DeepReviewService(
         config=config,
         store=JsonlDeepReviewStore(args.store_dir),
         runtime_factory=runtime_factory,
     )
-    report = await service.run(review_input, through=requested_stage)
-    encoded = report.model_dump_json(indent=2)
-    if args.output is None:
-        sys.stdout.write(encoded + "\n")
-    else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(encoded + "\n", encoding="utf-8")
-    return 0
+    try:
+        report = await service.run(review_input, through=requested_stage)
+        encoded = report.model_dump_json(indent=2)
+        if args.output is None:
+            sys.stdout.write(encoded + "\n")
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(encoded + "\n", encoding="utf-8")
+
+        summary = {
+            "status": "completed",
+            "run_id": report.run_id,
+            "mode": report.mode,
+            "completed_stage": report.completed_stage,
+            "pipeline_complete": report.pipeline_complete,
+            "base_commit": report.base_commit,
+            "head_commit": report.head_commit,
+            "review_files": len(report.review_paths),
+            "context_files": len(report.context_paths),
+            "dimension_count": len(report.plan.dimensions) if report.plan is not None else 0,
+            "semantic_source": report.semantic.source if report.semantic is not None else None,
+            "observations": [item.model_dump(mode="json") for item in report.agent_observations],
+            "report_path": str(args.output.resolve()) if args.output is not None else None,
+            "sessions_database": (
+                str(artifact_dir / "sessions.sqlite3") if session_engine is not None else None
+            ),
+            "event_store": str(Path(args.store_dir).resolve()),
+        }
+        (artifact_dir / "summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return 0
+    except Exception as exc:
+        failure_summary = {
+            "status": "failed",
+            "requested_stage": requested_stage,
+            "base_ref": args.base,
+            "head_ref": args.head,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+            "sessions_database": (
+                str(artifact_dir / "sessions.sqlite3") if session_engine is not None else None
+            ),
+            "event_store": str(Path(args.store_dir).resolve()),
+        }
+        (artifact_dir / "summary.json").write_text(
+            json.dumps(failure_summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        raise
+    finally:
+        if session_engine is not None:
+            session_engine.dispose()
 
 
 def main(argv: list[str] | None = None) -> int:

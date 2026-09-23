@@ -36,7 +36,7 @@ PR-AF 已经证明了一条高 Recall 的深度审计路线：先构造可信 di
 其中改动最大的两个阶段是：
 
 - **Review Plan**：从“预判可能有多少问题”改为“划分调查工作与覆盖边界”。它只决定谁调查什么、需要读取哪些上下文以及要验证什么，不预测 Finding，也不设置 Finding 配额。
-- **Cross Analysis**：把 Evidence Verification、Adversarial Challenge、跨文件一致性和 Cross-file Compound Risk 合成一次有工具的 Harness。它验证已有 Candidate，也只在多条证据组合出独立风险时新增 Finding。
+- **Cross Analysis**：把 Evidence Verification、Adversarial Challenge、Candidate 一致性与重复关系判断、跨文件一致性和 Cross-file Compound Risk 合成一次有工具的 Harness。它验证已有 Candidate，裁决同一根因的冗余 Candidate，并且只在多条证据组合出独立风险时新增 Finding。
 
 ### 0.2 原型闭环的核心选择
 
@@ -249,10 +249,14 @@ backend/app/domains/deep_review/
 │
 ├── prompts/
 │   ├── semantic.md
+│   ├── semantic_user.md
 │   ├── planner.md
+│   ├── planner_user.md
 │   ├── reviewer.md
 │   ├── reviewer_fallback.md
-│   └── cross_analysis.md
+│   ├── reviewer_user.md
+│   ├── cross_analysis.md
+│   └── cross_analysis_user.md
 │
 ├── schemas/
 │   ├── __init__.py
@@ -1086,21 +1090,22 @@ Evidence 提取失败不会删除 Candidate，只写入空字段和 JSONL 诊断
 
 ### 6.10 Cross Analysis：一次 `.harness()`
 
-`agents/cross_analysis.py` 是 V1 唯一的全局推理阶段。它不是第二轮全量 Review，也不是把四个旧阶段的 Prompt 简单拼接起来；它利用“全部 Candidate + 确定性 Evidence + 跨文件读取能力”在一次 Harness 中完成四项相互依赖的裁决。
+`agents/cross_analysis.py` 是 V1 唯一的全局推理阶段。它不是第二轮全量 Review，也不是把多个旧阶段的 Prompt 简单拼接起来；它利用“全部 Candidate + 确定性 Evidence + 跨文件读取能力”在一次 Harness 中完成相互依赖的裁决。
 
-#### 6.10.1 四项职责
+#### 6.10.1 五项职责
 
 1. **Evidence Verification**：比较 Candidate 的 claim、diff hunk、head 源码和调用上下文，确认代码是否真的具有所述行为、场景是否可达、问题是否由本次变更引入。
 2. **Adversarial Challenge**：主动寻找最强的无害解释、上游 guard、下游处理、类型约束或不变量；只有这些反证不足以推翻 Candidate 时才保留。
 3. **Cross-file Consistency**：检查变更端与另一端的契约是否一致，例如生产/消费、写入/读取、声明/实现、配置/使用、同步/异步、成功/失败分支和迁移前/迁移后语义。
-4. **Cross-file Compound Risk**：判断多个 Candidate 或证据是否形成一个单条 Candidate 未表达的独立风险链，例如一个变更创造前置条件、另一个变更移除保护，组合后产生更严重后果。
+4. **Candidate Duplicate/Relationship Adjudication**：检查 Candidate 是否指向同一根因、触发条件和可修复问题。对已验证的语义重复，通过逐 index `drop` 保留证据最完整、位置最明确的代表 Candidate，并在 reason 中引用代表 index。仅标题相似、同文件同行或共用证据不足以证明重复；相关但可独立触发或修复的问题仍分别保留。
+5. **Cross-file Compound Risk**：判断多个 Candidate 或证据是否形成一个单条 Candidate 未表达的独立风险链，例如一个变更创造前置条件、另一个变更移除保护，组合后产生更严重后果。
 
 Cross Analysis 不负责：
 
 - 重新从所有文件开始一次无边界审查，或执行 Coverage Loop。
 - 为每个 Candidate 重写文案；保持的 Finding 只允许修正 severity，确定性 polish 负责格式。
 - 用“缺少足够时间”直接删除 Candidate；证据不足但无法证伪时保留并写入 `unresolved_risks`。
-- 把两个相似 Finding 合并成“新风险”；普通重复由确定性 dedup 处理。
+- 把相似 Candidate 合并成一个新的 compound Finding；已验证的同根因语义重复由 Cross 的逐 Candidate 裁决处理，不能只依赖最终精确键去重。
 - 重复原 Candidate 作为 `new_findings`，或为了显得有产出而强制生成 compound finding。
 
 #### 6.10.2 输入契约
@@ -1144,7 +1149,7 @@ Cross Analysis 使用与 Planner/Reviewer 相同的四个只读工具，但目�
 
 #### 6.10.4 Cross Analysis Prompt 规格
 
-实现文件：`prompts/cross_analysis.md`。以下规范把 PR-AF 原 Evidence Verifier、Adversary、Consistency 和 Compound Finder 的关键目标压缩进一次调用，同时保持输出模型简单。
+实现文件：`prompts/cross_analysis.md` 与 `prompts/cross_analysis_user.md`。以下规范把 PR-AF 原 Evidence Verifier、Adversary、Consistency、重复关系判断和 Compound Finder 的关键目标压缩进一次调用，同时保持输出模型简单。
 
 ```markdown
 # Role
@@ -1170,6 +1175,10 @@ Then inspect relationships across candidates and files:
 
 - Compare producer/consumer, writer/reader, declaration/implementation,
   configuration/use, complementary branches and old/new representation semantics.
+- Detect candidates that describe the same verified root cause. Keep the
+  best-supported representative and drop redundant candidates with a reason that
+  cites its index. Similar wording alone is insufficient; independently
+  actionable issues must remain separate.
 - Look for a chain where one change creates a precondition and another removes a
   protection, or where individually minor facts combine into a distinct failure.
 - Emit a `new_finding` only when it states a new, independently actionable risk
@@ -1211,11 +1220,12 @@ Then inspect relationships across candidates and files:
 
 为在一次 Harness 内替代多个高成本阶段，V1 使用以下设计：
 
-- **固定四步裁决顺序**：先事实核验，再构造反证，再跨文件对照，最后判断 compound risk，避免一看到 Candidate 标题就确认原结论。
+- **固定五步裁决顺序**：先事实核验，再构造反证，接着检查一致性与重复关系，再跨文件对照并判断 compound risk，避免一看到 Candidate 标题就确认原结论。
 - **Candidate 去权威化**：明确其为 untrusted hypothesis，并省略 Reviewer transcript；Cross 读取的是主张和证据，不继承原推理语气。
 - **强制最强无害解释**：每个 Candidate 都必须寻找 guard/constraint/handler，再给 verdict，降低局部代码导致的误报。
 - **Drop 的证据门槛**：`drop` 必须指出推翻或阻断场景的具体代码事实；证据暂缺不等于误报，默认进入 keep/unresolved 路径以保护 Recall。
 - **Compound 新增门槛**：要求新的机制、独立后果、至少两个跨文件事实和准确位置，阻止把重复/相似项包装成新 Finding。
+- **重复裁决边界**：Cross 只基于已核实的同一根因裁决语义重复；确定性 dedup 只处理规范化 path/line/title 精确键，不推测语义相似。
 - **一次结构化终结**：只返回 index decision、少量 new findings 和 unresolved strings，不复制 PR-AF 的多层 Verification/Challenge/Obligation DTO。
 - **上下文压缩但不抽样 Candidate**：所有 Candidate 都进入编号摘要；先截断重复 caller/cross-ref 片段，不按 severity 丢 Candidate。若仍超过硬上下文限制，本次 Cross 明确失败并走 keep-all fallback，不偷偷只分析前 N 条。
 - **Prompt 夹具测试**：覆盖“被上游 guard 推翻”“severity 下调”“跨文件键不一致”“两项组合形成独立风险”“仅重复表述不得新增”五类固定案例。
@@ -1230,7 +1240,8 @@ Then inspect relationships across candidates and files:
 - 非法 `revised_severity` 保留原严重度。
 - `drop` reason 为空时不执行删除，降级为 `keep` 并记录诊断。
 - 新 Finding 必须引用本次 review 集合中的规范化路径；行号超出 head 文件范围时丢弃并记录诊断。
-- 新 Finding 与原 Candidate 或其他新 Finding 明显重复时不在此阶段做语义猜测，交给确定性 dedup 选择赢家。
+- 已核实的语义重复 Candidate 由 Cross decisions 保留一个代表项并 drop 冗余项；`cross_repair.py` 不自行做语义去重。
+- 新 Finding 与存活 Candidate 或其他 new Finding 的精确重复由确定性 dedup 清理；dedup 不根据语义相似性删除不同位置或不同 claim。
 - Harness 整体失败、结果超出上下文上限或终结始终无效时，保留全部原 Candidate、不新增 Finding、把风险写入 `unresolved_risks`，并将 run 标记为 `partial`。
 
 ### 6.11 Deterministic Finalization
@@ -1875,7 +1886,7 @@ feat(deep-review): add bounded parallel review dimensions
 
 ### Package 25.6：Cross Analysis 与确定性收尾
 
-增加一次同时执行 evidence verification、adversarial challenge、cross-file consistency 和 compound risk 的 Cross Harness，以及 Prompt 契约夹具、`cross_repair.py`、scoring、merge gate 和 polish。
+增加一次同时执行 evidence verification、adversarial challenge、Candidate 一致性/重复关系判断、cross-file consistency 和 compound risk 的 Cross Harness，以及 Prompt 契约夹具、`cross_repair.py`、scoring、merge gate 和 polish。
 
 建议提交：
 
@@ -1971,8 +1982,8 @@ partial/fallback 次数
 - 单 Reviewer 失败不取消已成功结果。
 - Candidate 编号稳定。
 - 全部 Candidate 摘要由代码生成且包含位置、claim、evidence 和 reviewer。
-- Cross prompt 固定执行 evidence verification、adversarial challenge、cross-file consistency 和 compound risk 四项职责。
-- Cross prompt 夹具覆盖 guard 推翻、severity 修正、跨文件不一致、独立 compound risk 和重复项不得新增。
+- Cross prompt 固定执行 evidence verification、adversarial challenge、候选一致性/重复关系判断、cross-file consistency 和 compound risk。
+- Cross prompt 夹具覆盖 guard 推翻、severity 修正、跨文件不一致、同根因重复与独立相关项、独立 compound risk 和重复项不得新增。
 - Cross 越界、重复、遗漏和非法 severity 按约定修复。
 - Cross 的空 drop reason 被修复为 keep 并留下诊断。
 - Cross 完全失败时 keep all 并标记 `partial`。
@@ -1981,7 +1992,7 @@ partial/fallback 次数
 ### 14.5 确定性收尾
 
 - 相同输入产生相同排序和 hash。
-- duplicate findings 只保留确定性赢家。
+- Cross 先裁决已验证的语义重复；确定性 dedup 再处理精确 duplicate key，并保留稳定赢家。
 - merge/polish 不调用模型。
 - secret 内容不出现在最终结果或 JSONL。
 
@@ -2031,7 +2042,7 @@ Plan25 完成必须同时满足：
 4. Directory Filter 的关键语义与 OCR 对齐，并有 parity test。
 5. Planner 只产生调查职责，不产生预期 Finding 或问题配额；不论模型如何输出，所有可审查文件最终恰好有一个主 dimension。
 6. Reviewer 对每个 dimension 可以合法返回 0..N 个 Finding，不能为了配额制造结果。
-7. Cross Analysis 在一次 Harness 内完成 evidence verification、adversarial challenge、cross-file consistency 和 compound risk，并对全部 Candidate 给出可修复的索引裁决。
+7. Cross Analysis 在一次 Harness 内完成 evidence verification、adversarial challenge、Candidate 一致性/重复关系判断、cross-file consistency 和 compound risk，并对全部 Candidate 给出可修复的索引裁决。
 8. Reviewer 和 Cross 通过 `DeepReviewRuntime.harness()` + `FinalizeReview` 返回 PR-AF 风格简单模型。
 9. 不生成子代理，不执行 Coverage Loop，不按 Finding 追加模型调用。
 10. Evidence、scoring、dedup、merge、polish 均可离线单测。
