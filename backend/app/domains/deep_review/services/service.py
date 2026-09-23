@@ -11,7 +11,7 @@ from app.domains.deep_review.services.runtime import DeepReviewRuntimeFactory
 from app.domains.deep_review.storage.protocol import DeepReviewStore, DeepReviewStoreError
 
 
-SUPPORTED_THROUGH_STAGES = {"anatomy", "planning"}
+SUPPORTED_THROUGH_STAGES = {"anatomy", "planning", "review"}
 
 
 class DeepReviewService:
@@ -25,6 +25,7 @@ class DeepReviewService:
         self.config = config
         self.store = store
         self.runtime_factory = runtime_factory
+        self._reviewer_semaphore = asyncio.Semaphore(config.max_concurrent_reviewers)
 
     async def run(
         self,
@@ -38,8 +39,8 @@ class DeepReviewService:
             raise ValueError(
                 f"unsupported --through stage: {requested_stage!r}; supported stages: {supported}"
             )
-        if requested_stage == "planning" and self.runtime_factory is None:
-            raise ValueError("planning requires a deep review runtime factory")
+        if requested_stage in {"planning", "review"} and self.runtime_factory is None:
+            raise ValueError(f"{requested_stage} requires a deep review runtime factory")
 
         run_id = f"{uuid.uuid4().hex[:12]}"
         try:
@@ -55,6 +56,7 @@ class DeepReviewService:
             config=self.config,
             store=self.store,
             runtime_factory=self.runtime_factory,
+            reviewer_semaphore=self._reviewer_semaphore,
         )
         try:
             return await orchestrator.run_preparation(run_id, review_input, through=requested_stage)

@@ -6,7 +6,7 @@ from importlib.resources import files
 
 _PROMPTS = {
     "semantic", "semantic_user", "planner", "planner_user",
-    "reviewer", "reviewer_fallback", "cross_analysis",
+    "reviewer", "reviewer_fallback", "reviewer_user", "cross_analysis",
 }
 _PLACEHOLDER = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
 

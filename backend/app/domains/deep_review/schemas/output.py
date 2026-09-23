@@ -32,11 +32,25 @@ class DeepReviewResult(BaseModel):
 
 class AgentObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stage: Literal["semantic", "planning"]
+    stage: Literal["semantic", "planning", "reviewer"]
+    dimension_name: str | None = None
     session_id: str | None = None
     usage: dict[str, Any] | None = None
     cost_usd: float | None = Field(default=None, ge=0)
     error: str | None = Field(default=None, max_length=500)
+
+
+class ReviewerDimensionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dimension_name: str
+    dimension_order: int = Field(ge=0)
+    status: Literal["succeeded", "failed", "deferred", "degraded"]
+    target_files: list[str] = Field(default_factory=list)
+    context_files: list[str] = Field(default_factory=list)
+    summary: str = ""
+    finding_count: int = Field(default=0, ge=0)
+    error: str | None = Field(default=None, max_length=500)
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class PreparationReport(BaseModel):
@@ -45,7 +59,7 @@ class PreparationReport(BaseModel):
     run_id: str = Field(min_length=1)
     mode: Literal["preparation"]
     pipeline_complete: Literal[False]
-    completed_stage: Literal["anatomy", "planning"]
+    completed_stage: Literal["anatomy", "planning", "review"]
     base_commit: str = Field(min_length=7)
     head_commit: str = Field(min_length=7)
     merge_base: str = Field(min_length=7)
@@ -58,4 +72,12 @@ class PreparationReport(BaseModel):
     diagnostics: list[str] = Field(default_factory=list)
     semantic: SemanticBrief | None = None
     plan: ReviewPlan | None = None
+    reviewers: list[ReviewerDimensionReport] = Field(default_factory=list)
+    candidates: list[ReviewFinding] = Field(default_factory=list)
+    candidate_count: int = Field(default=0, ge=0)
+    reviewer_dimensions_started: int = Field(default=0, ge=0)
+    reviewer_dimensions_succeeded: int = Field(default=0, ge=0)
+    reviewer_dimensions_failed: int = Field(default=0, ge=0)
+    reviewer_dimensions_deferred: int = Field(default=0, ge=0)
+    reviewer_dimensions_degraded: int = Field(default=0, ge=0)
     agent_observations: list[AgentObservation] = Field(default_factory=list)

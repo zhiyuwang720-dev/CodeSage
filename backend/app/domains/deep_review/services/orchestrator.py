@@ -1,16 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
-from app.domains.deep_review.schemas.output import AgentObservation, PreparationReport
-from app.domains.deep_review.schemas.pipeline import Anatomy, ReviewPlan, SemanticBrief
+from app.domains.deep_review.schemas.output import (
+    AgentObservation,
+    PreparationReport,
+    ReviewerDimensionReport,
+)
+from app.domains.deep_review.schemas.pipeline import (
+    Anatomy,
+    ReviewDimension,
+    ReviewFinding,
+    ReviewPlan,
+    SemanticBrief,
+)
 from app.domains.deep_review.agents.planner import run_planner_agent
+from app.domains.deep_review.agents.reviewer import ReviewerAgentOutcome, run_reviewer_agent
 from app.domains.deep_review.agents.semantic import run_semantic_agent
 from app.domains.deep_review.services.blast_radius import BlastRadiusError, compute_blast_radius
 from app.domains.deep_review.services.diff_engine import build_anatomy
@@ -36,6 +48,13 @@ class DeepReviewRunContext:
     anatomy: Anatomy | None = None
 
 
+@dataclass(slots=True)
+class ReviewerExecution:
+    dimension_order: int
+    outcome: ReviewerAgentOutcome
+    duration_ms: int
+
+
 def _safe_error(exc: BaseException) -> str:
     message = str(exc).strip() or exc.__class__.__name__
     return message[:500]
@@ -48,10 +67,14 @@ class PreparationOrchestrator:
         config: DeepReviewConfig,
         store: DeepReviewStore,
         runtime_factory: DeepReviewRuntimeFactory | None = None,
+        reviewer_semaphore: asyncio.Semaphore | None = None,
     ):
         self.config = config
         self.store = store
         self.runtime_factory = runtime_factory
+        self.reviewer_semaphore = reviewer_semaphore or asyncio.Semaphore(
+            config.max_concurrent_reviewers
+        )
 
     async def run_preparation(
         self,
@@ -67,10 +90,19 @@ class PreparationOrchestrator:
         semantic = None
         plan = None
         observations: list[AgentObservation] = []
-        if through == "planning":
+        reviewer_reports: list[ReviewerDimensionReport] = []
+        candidates = []
+        reviewer_counts: dict[str, int] = {}
+        if through in {"planning", "review"}:
             semantic, semantic_observation = await self._run_semantic_stage(run_id, context)
             plan, plan_observation = await self._run_planning_stage(run_id, context, semantic)
             observations = [semantic_observation, plan_observation]
+        if through == "review":
+            assert semantic is not None and plan is not None and context.anatomy is not None
+            reviewer_reports, candidates, reviewer_observations, reviewer_counts = (
+                await self._run_reviewer_stage(run_id, context, plan, semantic)
+            )
+            observations.extend(reviewer_observations)
 
         decisions = context.snapshot.filter_result.decisions
         report = PreparationReport(
@@ -90,6 +122,10 @@ class PreparationOrchestrator:
             diagnostics=context.diagnostics,
             semantic=semantic,
             plan=plan,
+            reviewers=reviewer_reports,
+            candidates=candidates,
+            candidate_count=len(candidates),
+            **reviewer_counts,
             agent_observations=observations,
         )
         self.store.append(
@@ -112,6 +148,200 @@ class PreparationOrchestrator:
             len(report.related_paths),
         )
         return report
+
+    async def _run_reviewer_stage(
+        self,
+        run_id: str,
+        context: DeepReviewRunContext,
+        plan: ReviewPlan,
+        semantic: SemanticBrief,
+    ) -> tuple[
+        list[ReviewerDimensionReport],
+        list[ReviewFinding],
+        list[AgentObservation],
+        dict[str, int],
+    ]:
+        assert context.anatomy is not None
+        self._stage_started(run_id, "reviewer")
+        started = time.monotonic()
+        try:
+            # Validate every cap before launching any model call, so a malformed
+            # repaired Plan cannot partially spend on an over-wide dimension.
+            active = [
+                (order, dimension)
+                for order, dimension in enumerate(plan.dimensions)
+                if not dimension.deferred
+            ]
+            turn_limits = {
+                order: self.config.reviewer_turn_limit(len(dimension.target_files))
+                for order, dimension in active
+            }
+            executions = await self._execute_reviewers(
+                run_id,
+                context,
+                semantic,
+                active,
+                turn_limits,
+            )
+
+            execution_by_order = {item.dimension_order: item for item in executions}
+            reviewer_reports: list[ReviewerDimensionReport] = []
+            observations: list[AgentObservation] = []
+            findings: list[ReviewFinding] = []
+            for order, dimension in enumerate(plan.dimensions):
+                if dimension.deferred:
+                    reviewer_reports.append(
+                        ReviewerDimensionReport(
+                            dimension_name=dimension.name,
+                            dimension_order=order,
+                            status="deferred",
+                            target_files=list(dimension.target_files),
+                            context_files=list(dimension.context_files),
+                            error="deferred_by_plan_repair",
+                        )
+                    )
+                    continue
+
+                execution = execution_by_order[order]
+                call = execution.outcome.call
+                observation = _agent_observation("reviewer", call, dimension.name)
+                observations.append(observation)
+                if call.value is None:
+                    report = ReviewerDimensionReport(
+                        dimension_name=dimension.name,
+                        dimension_order=order,
+                        status="failed",
+                        target_files=list(dimension.target_files),
+                        context_files=list(dimension.context_files),
+                        error=call.error or "unknown",
+                    )
+                    self._append_agent_event(
+                        run_id,
+                        "reviewer_failed",
+                        observation,
+                        dimension_order=order,
+                        target_files=list(dimension.target_files),
+                        duration_ms=execution.duration_ms,
+                    )
+                else:
+                    status = "degraded" if execution.outcome.degraded else "succeeded"
+                    report = ReviewerDimensionReport(
+                        dimension_name=dimension.name,
+                        dimension_order=order,
+                        status=status,
+                        target_files=list(dimension.target_files),
+                        context_files=list(dimension.context_files),
+                        summary=call.value.summary,
+                        finding_count=len(call.value.findings),
+                        diagnostics=list(execution.outcome.diagnostics),
+                    )
+                    findings.extend(call.value.findings)
+                    self._append_agent_event(
+                        run_id,
+                        "reviewer_completed",
+                        observation,
+                        dimension_order=order,
+                        status=status,
+                        target_files=list(dimension.target_files),
+                        duration_ms=execution.duration_ms,
+                        summary=call.value.summary,
+                        findings=[item.model_dump(mode="json") for item in call.value.findings],
+                        diagnostics=list(execution.outcome.diagnostics),
+                    )
+                reviewer_reports.append(report)
+                self._log_agent_observation(observation)
+
+            started_count = len(active)
+            succeeded_count = sum(item.status == "succeeded" for item in reviewer_reports)
+            failed_count = sum(item.status == "failed" for item in reviewer_reports)
+            deferred_count = sum(item.status == "deferred" for item in reviewer_reports)
+            degraded_count = sum(item.status == "degraded" for item in reviewer_reports)
+            if started_count and succeeded_count == 0:
+                raise PreparationError(
+                    "all reviewer dimensions failed or degraded; refusing to continue"
+                )
+
+            candidates = _sort_candidates(findings, plan)
+            self.store.append(
+                run_id,
+                "candidate_aggregation_completed",
+                {
+                    "candidate_count": len(candidates),
+                    "candidates": [item.model_dump(mode="json") for item in candidates],
+                },
+            )
+
+            counts = {
+                "reviewer_dimensions_started": started_count,
+                "reviewer_dimensions_succeeded": succeeded_count,
+                "reviewer_dimensions_failed": failed_count,
+                "reviewer_dimensions_deferred": deferred_count,
+                "reviewer_dimensions_degraded": degraded_count,
+            }
+            self._stage_completed(
+                run_id,
+                "reviewer",
+                started,
+                **counts,
+                candidate_count=len(candidates),
+            )
+            return reviewer_reports, candidates, observations, counts
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._stage_failed(run_id, "reviewer", exc, started)
+            raise
+
+    async def _execute_reviewers(
+        self,
+        run_id: str,
+        context: DeepReviewRunContext,
+        semantic: SemanticBrief,
+        active: list[tuple[int, ReviewDimension]],
+        turn_limits: dict[int, int],
+    ) -> list[ReviewerExecution]:
+        if not active:
+            return []
+        if self.runtime_factory is None:
+            raise PreparationError("reviewer stage requires a deep review runtime factory")
+
+        async def execute(order: int, dimension: ReviewDimension) -> ReviewerExecution:
+            async with self.reviewer_semaphore:
+                dimension_started = time.monotonic()
+                self.store.append(
+                    run_id,
+                    "reviewer_started",
+                    {
+                        "dimension_order": order,
+                        "dimension_name": dimension.name,
+                        "target_files": list(dimension.target_files),
+                        "max_turns": turn_limits[order],
+                    },
+                )
+                outcome = await run_reviewer_agent(
+                    self.runtime_factory,
+                    snapshot=context.snapshot,
+                    semantic=semantic,
+                    dimension=dimension,
+                    config=self.config,
+                )
+            return ReviewerExecution(
+                dimension_order=order,
+                outcome=outcome,
+                duration_ms=max(0, int((time.monotonic() - dimension_started) * 1000)),
+            )
+
+        tasks = [asyncio.create_task(execute(order, dimension)) for order, dimension in active]
+        try:
+            async with asyncio.timeout(self.config.max_duration_seconds):
+                # gather preserves Plan order even when calls complete out of order.
+                return list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _run_semantic_stage(
         self, run_id: str, context: DeepReviewRunContext
@@ -320,9 +550,15 @@ class PreparationOrchestrator:
             logger.exception("deep_review.stage_failed run_id=%s stage=%s", run_id, stage)
 
     def _append_agent_event(
-        self, run_id: str, record_type: str, observation: AgentObservation
+        self,
+        run_id: str,
+        record_type: str,
+        observation: AgentObservation,
+        **details: Any,
     ) -> None:
-        self.store.append(run_id, record_type, observation.model_dump(mode="json"))
+        payload = observation.model_dump(mode="json")
+        payload.update(details)
+        self.store.append(run_id, record_type, payload)
 
     @staticmethod
     def _log_agent_observation(observation: AgentObservation) -> None:
@@ -340,11 +576,43 @@ class PreparationOrchestrator:
         )
 
 
-def _agent_observation(stage: str, call: AgentCallResult) -> AgentObservation:
+def _agent_observation(
+    stage: Literal["semantic", "planning", "reviewer"],
+    call: AgentCallResult,
+    dimension_name: str | None = None,
+) -> AgentObservation:
     return AgentObservation(
         stage=stage,
+        dimension_name=dimension_name,
         session_id=call.session_id,
         usage=call.usage,
         cost_usd=call.cost_usd,
         error=call.error,
     )
+
+
+def _sort_candidates(
+    findings: list[ReviewFinding], plan: ReviewPlan
+) -> list[ReviewFinding]:
+    dimension_order = {
+        dimension.name: index for index, dimension in enumerate(plan.dimensions)
+    }
+    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+    def key(finding):
+        canonical = json.dumps(
+            finding.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return (
+            dimension_order.get(finding.dimension_name, len(dimension_order)),
+            finding.file_path,
+            finding.line_start or 0,
+            severity_rank[finding.severity],
+            finding.title,
+            canonical,
+        )
+
+    return sorted(findings, key=key)

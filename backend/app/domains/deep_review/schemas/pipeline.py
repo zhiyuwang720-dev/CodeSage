@@ -104,6 +104,7 @@ class ReviewFinding(BaseModel):
     confidence: float = Field(default=0.5, ge=0, le=1)
     tags: list[str] = Field(default_factory=list)
     dimension_name: str = ""
+    source: Literal["reviewer", "cross"] = "reviewer"
 
 
 class ReviewerResult(BaseModel):

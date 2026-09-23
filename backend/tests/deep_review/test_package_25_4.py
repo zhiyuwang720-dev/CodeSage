@@ -91,10 +91,16 @@ def dimension(name: str, paths: list[str], contexts: list[str] | None = None) ->
 
 
 class FakeRuntime:
-    def __init__(self, *, ai_payload=None, plan_payload=None, error: Exception | None = None):
+    def __init__(
+        self, *, ai_payload=None, plan_payload=None, review_payload=None,
+        error: Exception | None = None,
+    ):
         self.ai_payload = ai_payload if ai_payload is not None else semantic_payload()
         self.plan_payload = plan_payload if plan_payload is not None else {
             "dimensions": [dimension("values", ["a.py", "b.py", "c.py"], ["unchanged.py"])]
+        }
+        self.review_payload = review_payload if review_payload is not None else {
+            "findings": [], "summary": "No actionable issue found.",
         }
         self.error = error
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -113,8 +119,13 @@ class FakeRuntime:
         self.calls.append(("harness", kwargs))
         if self.error:
             raise self.error
+        payload = (
+            self.plan_payload
+            if kwargs["schema"].__name__ == "ReviewPlanDraft"
+            else self.review_payload
+        )
         return SimpleNamespace(
-            parsed=kwargs["schema"].model_validate(self.plan_payload),
+            parsed=kwargs["schema"].model_validate(payload),
             session_id="session-planner",
             usage={"total_tokens": 20, "usage_complete": False},
             cost_usd=None,
@@ -633,3 +644,66 @@ def test_planning_cli_with_fake_runtime_writes_observations(
     assert [item["stage"] for item in payload["agent_observations"]] == ["semantic", "planning"]
     assert payload["agent_observations"][0]["session_id"] is None
     assert payload["agent_observations"][1]["session_id"] == "session-planner"
+
+
+def test_review_cli_runs_preparation_and_reviewer_with_fake_runtime(
+    review_repo: tuple[Path, str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domains.deep_review import __main__ as cli
+    from app.domains.deep_review.services import runtime as runtime_module
+
+    repo, base, head = review_repo
+    output = tmp_path / "review-report.json"
+    semantic = FakeRuntime()
+    planner = FakeRuntime(review_payload={
+        "findings": [{
+            "file_path": "a.py",
+            "line_start": 1,
+            "line_end": 1,
+            "severity": "high",
+            "title": "Changed value breaks caller",
+            "body": "When this value reaches the caller, its required behavior is no longer preserved.",
+            "evidence": "a.py line 1 changes VALUE from 1 to 2.",
+            "suggestion": "Preserve the caller contract.",
+            "confidence": 0.9,
+            "tags": ["behavior"],
+        }],
+        "summary": "The value change breaks the caller contract.",
+    })
+    fake_factory = FakeFactory(semantic, planner)
+
+    class FakeLLMService:
+        def get_config_for(self, role: str) -> object:
+            return object()
+
+    llm_package = types.ModuleType("app.execution_plane.models")
+    llm_package.__path__ = []
+    llm_module = types.ModuleType("app.execution_plane.models.service")
+    llm_module.LLMService = FakeLLMService
+    monkeypatch.setitem(sys.modules, "app.execution_plane.models", llm_package)
+    monkeypatch.setitem(sys.modules, "app.execution_plane.models.service", llm_module)
+    monkeypatch.setattr(
+        runtime_module,
+        "RuntimeBridgeDeepReviewRuntimeFactory",
+        lambda **kwargs: fake_factory,
+    )
+
+    assert cli.main([
+        "--repo", str(repo), "--base", base, "--head", head,
+        "--through", "review", "--store-dir", str(tmp_path / "events"),
+        "--output", str(output),
+    ]) == 0
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["completed_stage"] == "review"
+    assert payload["pipeline_complete"] is False
+    assert payload["reviewer_dimensions_started"] == 1
+    assert payload["reviewer_dimensions_succeeded"] == 1
+    assert payload["reviewer_dimensions_failed"] == 0
+    assert payload["candidate_count"] == 1
+    assert payload["candidates"][0]["dimension_name"] == "values"
+    assert payload["candidates"][0]["source"] == "reviewer"
+    assert [item["stage"] for item in payload["agent_observations"]] == [
+        "semantic", "planning", "reviewer",
+    ]
+    assert payload["agent_observations"][-1]["session_id"] == "session-planner"

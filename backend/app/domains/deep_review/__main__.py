@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.domains.deep_review",
-        description="Run the CodeSageDeep offline preparation pipeline.",
+        description="Run the CodeSageDeep offline review pipeline.",
     )
     parser.add_argument("--repo", required=True, help="Path to a local Git worktree")
     parser.add_argument("--base", required=True, help="Base commit or ref")
     parser.add_argument("--head", required=True, help="Head commit or ref")
-    parser.add_argument("--through", choices=["anatomy", "planning"], default=None)
+    parser.add_argument("--through", choices=["anatomy", "planning", "review"], default=None)
     parser.add_argument("--title", default="")
     parser.add_argument("--description", default="")
     parser.add_argument("--include", action="append", default=[], metavar="PATTERN")
@@ -36,12 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=None,
-        help="write the PreparationReport JSON to this path; the filename does not change its contents",
+        help="write the current stage report JSON to this path; the filename does not change its contents",
     )
     return parser
 
 
-def _create_temporary_sqlite_runtime(config: DeepReviewConfig, database_path: Path):
+def _create_temporary_sqlite_runtime(
+    config: DeepReviewConfig,
+    database_path: Path,
+    *,
+    include_reviewer: bool = False,
+):
     # TEMPORARY SQLITE SESSION STORE BEGIN
     # Deep Review prototype only: RuntimeBridge still stores Harness sessions via AuditSessionStore.
     # Remove this block when Deep Review has its own backend-neutral Runtime session store.
@@ -60,9 +65,11 @@ def _create_temporary_sqlite_runtime(config: DeepReviewConfig, database_path: Pa
         Base.metadata.create_all(bind=engine)
         session_factory = sessionmaker(bind=engine, expire_on_commit=False)
         llm_service = LLMService()
-        # Validate both roles before the first paid Semantic request.
+        # Validate all roles needed for the requested model-backed stage.
         llm_service.get_config_for(config.semantic_role)
         llm_service.get_config_for(config.planner_role)
+        if include_reviewer:
+            llm_service.get_config_for(config.reviewer_role)
         runtime_factory = RuntimeBridgeDeepReviewRuntimeFactory(
             llm_service=llm_service,
             session_factory=session_factory,
@@ -94,10 +101,11 @@ async def _run(args: argparse.Namespace) -> int:
         args.output.parent if args.output is not None else Path(args.store_dir)
     ).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    if requested_stage == "planning":
+    if requested_stage in {"planning", "review"}:
         runtime_factory, session_engine = _create_temporary_sqlite_runtime(
             config,
             artifact_dir / "sessions.sqlite3",
+            include_reviewer=requested_stage == "review",
         )
     service = DeepReviewService(
         config=config,
@@ -124,6 +132,12 @@ async def _run(args: argparse.Namespace) -> int:
             "review_files": len(report.review_paths),
             "context_files": len(report.context_paths),
             "dimension_count": len(report.plan.dimensions) if report.plan is not None else 0,
+            "reviewer_dimensions_started": report.reviewer_dimensions_started,
+            "reviewer_dimensions_succeeded": report.reviewer_dimensions_succeeded,
+            "reviewer_dimensions_failed": report.reviewer_dimensions_failed,
+            "reviewer_dimensions_deferred": report.reviewer_dimensions_deferred,
+            "reviewer_dimensions_degraded": report.reviewer_dimensions_degraded,
+            "candidate_count": report.candidate_count,
             "semantic_source": report.semantic.source if report.semantic is not None else None,
             "observations": [item.model_dump(mode="json") for item in report.agent_observations],
             "report_path": str(args.output.resolve()) if args.output is not None else None,
