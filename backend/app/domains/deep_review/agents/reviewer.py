@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ChangeType
@@ -22,9 +24,45 @@ from app.domains.deep_review.services.prompt_loader import load_prompt
 from app.domains.deep_review.services.reviewer_result_mapper import map_reviewer_result
 from app.domains.deep_review.services.runtime import AgentCallResult
 from app.domains.deep_review.tools.catalog import build_review_tools
+from app.execution_plane.session.store import AuditSessionPersistenceError
 
 
 ShortTag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
+def _is_persistence_failure(exc: BaseException) -> bool:
+    """Detect a typed transcript persistence failure wrapped by RuntimeBridge."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (AuditSessionPersistenceError, SQLAlchemyError)):
+            return True
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    """Keep a short diagnostic while removing common credential forms."""
+    message = " ".join(str(exc).split()) or exc.__class__.__name__
+    message = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [REDACTED]",
+        message,
+    )
+    message = re.sub(
+        r"(?i)\b(api[_-]?key|authorization|access[_-]?token|token)\s*[:=]\s*[^,;\s]+",
+        r"\1=[REDACTED]",
+        message,
+    )
+    message = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[REDACTED]", message)
+    return f"{exc.__class__.__name__}: {message}"[:500]
 
 
 class ReviewFindingDraft(BaseModel):
@@ -240,10 +278,12 @@ async def run_reviewer_agent(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if _is_persistence_failure(exc):
+            raise
         return ReviewerAgentOutcome(
             call=AgentCallResult(
                 value=None,
-                error=type(exc).__name__,
+                error=_safe_error_message(exc),
                 session_id=harness_result.session_id if harness_result is not None else getattr(exc, "session_id", None),
                 usage=harness_result.usage if harness_result is not None else getattr(exc, "usage", None),
                 cost_usd=harness_result.cost_usd if harness_result is not None else getattr(exc, "cost_usd", None),

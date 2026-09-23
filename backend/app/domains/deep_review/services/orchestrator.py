@@ -256,9 +256,9 @@ class PreparationOrchestrator:
             failed_count = sum(item.status == "failed" for item in reviewer_reports)
             deferred_count = sum(item.status == "deferred" for item in reviewer_reports)
             degraded_count = sum(item.status == "degraded" for item in reviewer_reports)
-            if started_count and succeeded_count == 0:
+            if started_count and failed_count == started_count:
                 raise PreparationError(
-                    "all reviewer dimensions failed or degraded; refusing to continue"
+                    "all reviewer dimensions failed; refusing to continue"
                 )
 
             candidates = _sort_candidates(findings, plan)

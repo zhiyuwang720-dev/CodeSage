@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.domains.deep_review.agents.reviewer import (
     ReviewFindingDraft,
@@ -24,6 +25,8 @@ from app.domains.deep_review.services.output_formatter import (
 )
 from app.domains.deep_review.services.reviewer_result_mapper import map_reviewer_result
 from app.domains.deep_review.services.prompt_loader import load_prompt
+from app.execution_plane.models.runtime_ai import HarnessIncompleteError
+from app.execution_plane.session.store import AuditSessionPersistenceError
 
 
 def git(repo: Path, *args: str) -> str:
@@ -299,3 +302,66 @@ async def test_reviewer_agent_selects_prompt_schema_tools_and_turn_limit(
     }
     assert all(tool.context.head_commit == reviewer_snapshot.head_commit for tool in runtime.kwargs["tools"])
     assert runtime.kwargs["schema"] is ReviewerResultDraft
+
+
+@pytest.mark.asyncio
+async def test_reviewer_agent_preserves_sanitized_bounded_error_message(
+    reviewer_snapshot: ReviewSnapshot,
+) -> None:
+    class FailureRuntime:
+        async def harness(self, prompt: str, **kwargs: Any):
+            raise RuntimeError(
+                "provider rejected Authorization: Bearer abc.def.token; "
+                "api_key=sk-secretcredential123456 " + ("detail " * 200)
+            )
+
+    class Factory:
+        def for_role(self, role: str):
+            assert role == "deep_review:reviewer"
+            return FailureRuntime()
+
+    outcome = await run_reviewer_agent(
+        Factory(),
+        snapshot=reviewer_snapshot,
+        semantic=SemanticBrief(narrative="lead"),
+        dimension=dimension(),
+        config=DeepReviewConfig(),
+    )
+
+    assert outcome.call.value is None
+    assert outcome.call.error is not None
+    assert outcome.call.error.startswith("RuntimeError:")
+    assert "abc.def.token" not in outcome.call.error
+    assert "sk-secretcredential123456" not in outcome.call.error
+    assert "[REDACTED]" in outcome.call.error
+    assert len(outcome.call.error) <= 500
+
+
+@pytest.mark.parametrize(
+    "persistence_error_type",
+    [AuditSessionPersistenceError, SQLAlchemyError],
+)
+@pytest.mark.asyncio
+async def test_reviewer_agent_propagates_wrapped_session_persistence_failure(
+    reviewer_snapshot: ReviewSnapshot, persistence_error_type: type[Exception],
+) -> None:
+    class PersistenceFailureRuntime:
+        async def harness(self, prompt: str, **kwargs: Any):
+            try:
+                raise persistence_error_type("database write failed")
+            except Exception as cause:
+                raise HarnessIncompleteError("Harness could not complete.") from cause
+
+    class Factory:
+        def for_role(self, role: str):
+            assert role == "deep_review:reviewer"
+            return PersistenceFailureRuntime()
+
+    with pytest.raises(HarnessIncompleteError, match="could not complete"):
+        await run_reviewer_agent(
+            Factory(),
+            snapshot=reviewer_snapshot,
+            semantic=SemanticBrief(narrative="lead"),
+            dimension=dimension(),
+            config=DeepReviewConfig(),
+        )

@@ -12,16 +12,19 @@ import pytest
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.schemas.output import PreparationReport
+from app.domains.deep_review.agents.reviewer import ReviewerAgentOutcome
 from app.domains.deep_review.schemas.pipeline import (
     Anatomy,
     ReviewDimension,
     ReviewFinding,
     ReviewPlan,
+    ReviewerResult,
     SemanticBrief,
 )
 from app.domains.deep_review.services import orchestrator as orchestrator_module
 from app.domains.deep_review.services.diff_engine import build_anatomy
 from app.domains.deep_review.services.input_builder import ReviewSnapshot, build_review_snapshot
+from app.domains.deep_review.services.runtime import AgentCallResult
 from app.domains.deep_review.services.orchestrator import (
     DeepReviewRunContext,
     PreparationError,
@@ -289,6 +292,40 @@ async def test_all_reviewer_failures_stop_stage_and_are_recorded(snapshot: Revie
         await orchestrator._run_reviewer_stage("run-review-test", context, plan, semantic)
     assert not any(kind == "candidate_aggregation_completed" for _, kind, _ in store.events)
     assert any(kind == "stage_failed" and payload["stage"] == "reviewer" for _, kind, payload in store.events)
+
+
+@pytest.mark.asyncio
+async def test_all_degraded_reviewer_results_complete_stage_with_diagnostics(
+    snapshot: ReviewSnapshot, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dimensions = [build_dimension("degraded-a", "file0.py"), build_dimension("degraded-b", "file1.py")]
+    orchestrator, store, _, context, plan, semantic = setup_orchestrator(
+        snapshot, dimensions=dimensions,
+    )
+
+    async def degraded_reviewer(*args: Any, **kwargs: Any) -> ReviewerAgentOutcome:
+        return ReviewerAgentOutcome(
+            call=AgentCallResult(value=ReviewerResult(summary="Model output was rejected by the mapper.")),
+            diagnostics=["all_findings_rejected"],
+            rejected_count=1,
+        )
+
+    monkeypatch.setattr(orchestrator_module, "run_reviewer_agent", degraded_reviewer)
+    reports, candidates, observations, counts = await orchestrator._run_reviewer_stage(
+        "run-review-test", context, plan, semantic,
+    )
+
+    assert [report.status for report in reports] == ["degraded", "degraded"]
+    assert candidates == []
+    assert [(item.dimension_name, item.error) for item in observations] == [
+        ("degraded-a", None),
+        ("degraded-b", None),
+    ]
+    assert counts["reviewer_dimensions_succeeded"] == 0
+    assert counts["reviewer_dimensions_failed"] == 0
+    assert counts["reviewer_dimensions_degraded"] == 2
+    assert any(kind == "stage_completed" and payload["stage"] == "reviewer" for _, kind, payload in store.events)
+    assert not any(kind == "stage_failed" and payload["stage"] == "reviewer" for _, kind, payload in store.events)
 
 
 @pytest.mark.asyncio
