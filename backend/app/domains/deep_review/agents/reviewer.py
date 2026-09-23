@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
@@ -27,7 +27,45 @@ from app.domains.deep_review.tools.catalog import build_review_tools
 from app.execution_plane.session.store import AuditSessionPersistenceError
 
 
-ShortTag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+ShortTag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+_TRUNCATION_MARKER = " …[truncated by CodeSage]"
+_REVIEW_TEXT_LIMITS = {
+    "title": 160,
+    "body": 4000,
+    "evidence": 3000,
+    "suggestion": 2000,
+}
+_REVIEW_SUMMARY_LIMIT = 2000
+
+
+def _truncate_text(value: object, limit: int) -> object:
+    """Bound model-authored prose without rejecting or removing its Finding."""
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    marker = _TRUNCATION_MARKER[:limit]
+    prefix_limit = limit - len(marker)
+    prefix = value[:prefix_limit]
+    # Prefer a nearby sentence/word boundary, but never discard a large tail of
+    # the allowed budget just to find punctuation.
+    boundaries = [prefix.rfind(token) for token in ("\n", ". ", "; ", "。", "；", " ")]
+    boundary = max(boundaries, default=-1)
+    if boundary >= int(prefix_limit * 0.9):
+        prefix = prefix[:boundary]
+    return prefix.rstrip() + marker
+
+
+def _truncate_fields(value: object, limits: dict[str, int]) -> object:
+    if not isinstance(value, dict):
+        return value
+    bounded = dict(value)
+    for field_name, limit in limits.items():
+        if field_name in bounded:
+            bounded[field_name] = _truncate_text(bounded[field_name], limit)
+    tags = bounded.get("tags")
+    if isinstance(tags, list):
+        bounded["tags"] = [_truncate_text(tag, 64) for tag in tags]
+    return bounded
 
 
 def _is_persistence_failure(exc: BaseException) -> bool:
@@ -70,7 +108,6 @@ class ReviewFindingDraft(BaseModel):
 
     file_path: str = Field(
         min_length=1,
-        max_length=512,
         description="Repository-relative changed file; it must be owned by this dimension.",
     )
     line_start: int | None = Field(default=None, ge=1, description="Start line in the fixed head snapshot.")
@@ -78,20 +115,33 @@ class ReviewFindingDraft(BaseModel):
     severity: Literal["critical", "high", "medium", "low"] = Field(
         description="Severity based on verified impact, not a fixed category mapping."
     )
-    title: str = Field(min_length=5, max_length=160, description="Specific, actionable issue title.")
+    title: str = Field(
+        min_length=5,
+        description="Short, specific, actionable issue title",
+    )
     body: str = Field(
         min_length=20,
-        max_length=4000,
-        description="Trigger condition, failure mechanism, and user or system consequence.",
+        description=(
+            "Concise trigger, failure mechanism, and concrete consequence"
+        ),
     )
     evidence: str = Field(
         default="",
-        max_length=3000,
-        description="Code facts supporting the claim; do not invent unread implementation details.",
+        description=(
+            "Minimal code facts supporting the claim; do not repeat the body or invent unread implementation details. "
+        ),
     )
-    suggestion: str = Field(default="", max_length=2000, description="Optional repair direction.")
+    suggestion: str = Field(
+        default="",
+        description="Optional, direct repair direction",
+    )
     confidence: float = Field(default=0.5, ge=0, le=1, description="Confidence that this Finding is correct.")
     tags: list[ShortTag] = Field(default_factory=list, max_length=8, description="A few retrieval tags.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def truncate_oversized_prose(cls, value: object) -> object:
+        return _truncate_fields(value, _REVIEW_TEXT_LIMITS)
 
 
 class ReviewerResultDraft(BaseModel):
@@ -104,9 +154,15 @@ class ReviewerResultDraft(BaseModel):
     )
     summary: str = Field(
         default="",
-        max_length=2000,
-        description="Concise investigation conclusion for this dimension; maximum 2,000 characters.",
+        description=(
+            "A short conclusion, normally 2-5 sentences"
+        ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def truncate_oversized_summary(cls, value: object) -> object:
+        return _truncate_fields(value, {"summary": _REVIEW_SUMMARY_LIMIT})
 
 
 @dataclass(slots=True)

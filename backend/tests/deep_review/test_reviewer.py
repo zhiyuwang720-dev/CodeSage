@@ -27,6 +27,7 @@ from app.domains.deep_review.services.reviewer_result_mapper import map_reviewer
 from app.domains.deep_review.services.prompt_loader import load_prompt
 from app.execution_plane.models.runtime_ai import HarnessIncompleteError
 from app.execution_plane.session.store import AuditSessionPersistenceError
+from app.tool_gateway.schema_finalize_review import SchemaFinalizeReviewTool
 
 
 def git(repo: Path, *args: str) -> str:
@@ -89,25 +90,61 @@ def finding_payload(**overrides: Any) -> dict[str, Any]:
     return result
 
 
-def test_reviewer_draft_schema_is_simple_bounded_and_forbids_business_fields() -> None:
+def test_reviewer_draft_schema_is_strict_and_defers_text_bounds_to_truncation() -> None:
     schema = ReviewerResultDraft.model_json_schema()
     finding_schema = schema["$defs"]["ReviewFindingDraft"]
     assert schema["additionalProperties"] is False
     assert finding_schema["additionalProperties"] is False
     for field_schema in schema["properties"].values():
         assert field_schema.get("description")
+    for field_name in ("summary",):
+        description = schema["properties"][field_name]["description"].lower()
+        assert "character" not in description and "truncat" not in description
     for field_schema in finding_schema["properties"].values():
         assert field_schema.get("description")
-    assert schema["properties"]["summary"]["maxLength"] == 2000
+    assert "maxLength" not in schema["properties"]["summary"]
+    assert all("maxLength" not in field_schema for field_schema in finding_schema["properties"].values())
+    assert "maxLength" not in finding_schema["properties"]["tags"]["items"]
+    for field_name in ("title", "body", "evidence", "suggestion"):
+        description = finding_schema["properties"][field_name]["description"].lower()
+        assert "character" not in description and "truncat" not in description
     ReviewerResultDraft.model_validate({"summary": "x" * 2000})
-    with pytest.raises(ValidationError):
-        ReviewerResultDraft.model_validate({"summary": "x" * 2001})
     assert "source" not in finding_schema["properties"]
     assert "dimension_name" not in finding_schema["properties"]
     with pytest.raises(ValidationError):
         ReviewerResultDraft.model_validate({"findings": [finding_payload()] * 33})
     with pytest.raises(ValidationError):
         ReviewerResultDraft.model_validate({"findings": [{**finding_payload(), "unexpected": 1}]})
+
+
+def test_finalize_review_truncates_oversized_text_without_dropping_findings() -> None:
+    payload = {
+        "summary": "s" * 2100,
+        "findings": [
+            finding_payload(
+                title="t" * 180,
+                body="b" * 4100,
+                evidence="e" * 3100,
+                suggestion="r" * 2100,
+                tags=["g" * 100],
+            ),
+            finding_payload(title="Second distinct issue"),
+        ],
+    }
+
+    accepted = SchemaFinalizeReviewTool(ReviewerResultDraft).validate_input(payload)
+
+    assert isinstance(accepted, ReviewerResultDraft)
+    assert len(accepted.findings) == 2
+    marker = " …[truncated by CodeSage]"
+    assert len(accepted.summary) == 2000 and accepted.summary.endswith(marker)
+    first = accepted.findings[0]
+    assert len(first.title) == 160 and first.title.endswith(marker)
+    assert len(first.body) == 4000 and first.body.endswith(marker)
+    assert len(first.evidence) == 3000 and first.evidence.endswith(marker)
+    assert len(first.suggestion) == 2000 and first.suggestion.endswith(marker)
+    assert len(first.tags[0]) == 64 and first.tags[0].endswith(marker)
+    assert accepted.findings[1].title == "Second distinct issue"
 
 
 @pytest.mark.parametrize(("count", "expected"), [(1, 8), (3, 8), (4, 12), (7, 12), (8, 16), (16, 16)])
@@ -138,7 +175,7 @@ def test_reviewer_prompt_explains_roles_trust_and_finalize_boundary(
     assert reviewer_snapshot.head_commit in prompt
     assert "invoke Read, Grep, Glob, PowerShell" in prompt
     assert "final two available turns" in prompt
-    assert "within 1,800 characters" in prompt
+    assert "summary" in prompt.lower()
     assert "`priority` runs from 1" in prompt
     assert "`fallback=true`" in prompt
     assert "`diff_available=false`" in prompt
@@ -148,11 +185,12 @@ def test_reviewer_prompt_explains_roles_trust_and_finalize_boundary(
     assert "not a conclusion to confirm" in system
     assert "Built-in post-worthiness decision" in system
     assert "actual impact" in system
-    assert "no longer than 1,800" in system
+    assert "`summary`" in system
     fallback_system = load_prompt("reviewer_fallback")
     assert "low-risk or deserve a superficial pass" in fallback_system
     assert "Built-in post-worthiness decision" in fallback_system
     assert "Review every owned target change" in fallback_system
+    assert "`summary`" in fallback_system
 
 
 def test_reviewer_user_template_uses_fixed_complete_json_sections(

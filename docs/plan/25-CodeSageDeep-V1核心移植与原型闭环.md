@@ -653,7 +653,6 @@ class ReviewFindingDraft(BaseModel):
 
     file_path: str = Field(
         min_length=1,
-        max_length=512,
         description="本次变更中的仓库相对路径，必须属于当前 dimension 的 target files。",
     )
     line_start: int | None = Field(default=None, ge=1, description="head 快照中的起始行。")
@@ -661,18 +660,16 @@ class ReviewFindingDraft(BaseModel):
     severity: Literal["critical", "high", "medium", "low"] = Field(
         description="按已验证的实际影响选择，不按问题类型固定映射。"
     )
-    title: str = Field(min_length=5, max_length=160, description="具体、可行动的问题标题。")
+    title: str = Field(min_length=5, description="具体、可行动的问题标题。")
     body: str = Field(
         min_length=20,
-        max_length=4000,
         description="说明触发条件、错误机制和用户/系统后果。",
     )
     evidence: str = Field(
         default="",
-        max_length=3000,
         description="支持主张的代码事实，不得捏造未读取的实现。",
     )
-    suggestion: str = Field(default="", max_length=2000, description="可选修复方向。")
+    suggestion: str = Field(default="", description="可选修复方向。")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Finding 正确性的置信度。")
     tags: list[str] = Field(default_factory=list, max_length=8, description="少量检索标签。")
 
@@ -685,10 +682,13 @@ class ReviewerResultDraft(BaseModel):
         max_length=32,
         description="零到多条值得作者修复的 Finding；没有数量配额。",
     )
-    summary: str = Field(default="", max_length=1000, description="本 dimension 的调查结论。")
+    summary: str = Field(
+        default="",
+        description="本 dimension 的调查结论。",
+    )
 ```
 
-Reviewer Harness 的动态 `FinalizeReview` Schema 是 `ReviewerResultDraft`。模型不填 dimension 名称或来源；`services/reviewer_result_mapper.py` 校验路径属于当前 dimension、行号存在于 head、`line_end >= line_start`，然后逐条构造 `ReviewFinding(dimension_name=..., source="reviewer")`。无效 Draft Finding 被丢弃并记录诊断，不使用不校验的 `model_copy(update=...)`。Draft 没有配额字段，零到多条 finding 都是合法输出。
+Reviewer Harness 的动态 `FinalizeReview` Schema 是 `ReviewerResultDraft`。模型不填 dimension 名称或来源；应用内部保存文本硬上限：title 160、body 4,000、evidence 3,000、suggestion 2,000、summary 2,000、tag 64 字符。这些上限只存在于业务校验代码，不写入模型可见的 JSON Schema 字段描述或 `maxLength`。Draft 的确定性前置校验对超长字段逐字段截断并附可见标记，避免一个长字段令整批 Findings 终结失败；截断保留 Finding 项，不按字符长度删除或省略 Finding。文件路径是身份/归属字段，不能通过截断改变路径；最终只接纳属于当前 dimension 的目标路径。结构错误仍由 Schema 校验拒绝。`services/reviewer_result_mapper.py` 校验路径属于当前 dimension、行号存在于 head、`line_end >= line_start`，然后逐条构造 `ReviewFinding(dimension_name=..., source="reviewer")`。无效 Draft Finding 被丢弃并记录诊断，不使用不校验的 `model_copy(update=...)`。Draft 没有 Finding 数量配额，零到多条 finding 都是合法输出。
 
 #### 业务 Review Finding（`schemas/pipeline.py`）
 
