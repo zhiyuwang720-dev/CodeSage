@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
-from .pipeline import ChangeCluster, DiffStats, ReviewFinding
+from .pipeline import ChangeCluster, DiffStats, ReviewFinding, ReviewPlan, SemanticBrief
 
 
 class ReviewMetrics(BaseModel):
@@ -30,13 +30,22 @@ class DeepReviewResult(BaseModel):
     metrics: ReviewMetrics
 
 
+class AgentObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stage: Literal["semantic", "planning"]
+    session_id: str | None = None
+    usage: dict[str, Any] | None = None
+    cost_usd: float | None = Field(default=None, ge=0)
+    error: str | None = Field(default=None, max_length=500)
+
+
 class PreparationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str = Field(min_length=1)
     mode: Literal["preparation"]
     pipeline_complete: Literal[False]
-    completed_stage: Literal["anatomy"]
+    completed_stage: Literal["anatomy", "planning"]
     base_commit: str = Field(min_length=7)
     head_commit: str = Field(min_length=7)
     merge_base: str = Field(min_length=7)
@@ -47,3 +56,6 @@ class PreparationReport(BaseModel):
     clusters: list[ChangeCluster] = Field(default_factory=list)
     related_paths: list[str] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+    semantic: SemanticBrief | None = None
+    plan: ReviewPlan | None = None
+    agent_observations: list[AgentObservation] = Field(default_factory=list)

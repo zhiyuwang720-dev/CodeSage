@@ -2,20 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Protocol
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.schemas.output import DeepReviewResult, PreparationReport
 from app.domains.deep_review.services.orchestrator import PreparationOrchestrator
+from app.domains.deep_review.services.runtime import DeepReviewRuntimeFactory
 from app.domains.deep_review.storage.protocol import DeepReviewStore, DeepReviewStoreError
 
 
-SUPPORTED_THROUGH_STAGES = {"anatomy"}
-
-
-class DeepReviewRuntimeFactory(Protocol):
-    def for_role(self, role: str) -> object: ...
+SUPPORTED_THROUGH_STAGES = {"anatomy", "planning"}
 
 
 class DeepReviewService:
@@ -36,12 +32,14 @@ class DeepReviewService:
         *,
         through: str | None = None,
     ) -> PreparationReport | DeepReviewResult:
-        requested_stage = through or SUPPORTED_THROUGH_STAGES.copy().pop()
+        requested_stage = through or "anatomy"
         if requested_stage not in SUPPORTED_THROUGH_STAGES:
             supported = ", ".join(sorted(SUPPORTED_THROUGH_STAGES))
             raise ValueError(
                 f"unsupported --through stage: {requested_stage!r}; supported stages: {supported}"
             )
+        if requested_stage == "planning" and self.runtime_factory is None:
+            raise ValueError("planning requires a deep review runtime factory")
 
         run_id = f"{uuid.uuid4().hex[:12]}"
         try:
@@ -53,9 +51,13 @@ class DeepReviewService:
         except DeepReviewStoreError:
             raise
 
-        orchestrator = PreparationOrchestrator(config=self.config, store=self.store)
+        orchestrator = PreparationOrchestrator(
+            config=self.config,
+            store=self.store,
+            runtime_factory=self.runtime_factory,
+        )
         try:
-            return await orchestrator.run_preparation(run_id, review_input)
+            return await orchestrator.run_preparation(run_id, review_input, through=requested_stage)
         except asyncio.CancelledError:
             self._append_terminal(run_id, "run_cancelled", {"stage": "preparation"})
             raise

@@ -7,6 +7,7 @@ from .input import FileChange
 
 class SemanticBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    source: Literal["model", "fallback"] = "model"
     narrative: str = ""
     stated_intent: list[str] = Field(default_factory=list)
     implemented_intent: list[str] = Field(default_factory=list)
@@ -49,6 +50,13 @@ class ChangeCluster(BaseModel):
     primary_language: str = ""
 
 
+class CrossReferenceHint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dimension_names: list[str] = Field(min_length=2)
+    relation: str
+    symbol_or_contract: str = ""
+
+
 class Anatomy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     files: list[FileChange] = Field(default_factory=list)
@@ -69,13 +77,18 @@ class ReviewDimension(BaseModel):
     priority: int = Field(default=1, ge=1, le=10)
     fallback: bool = False
     deferred: bool = False
+    source: Literal["model", "fallback", "merged", "split"] = "model"
 
 
 class ReviewPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     summary: str = ""
     dimensions: list[ReviewDimension] = Field(default_factory=list)
-    cross_reference_hints: list[str] = Field(default_factory=list)
+    cross_reference_hints: list[CrossReferenceHint] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    coverage_complete: bool = False
+    repair_actions: list[str] = Field(default_factory=list)
+    unresolved_risks: list[str] = Field(default_factory=list)
 
 
 class ReviewFinding(BaseModel):

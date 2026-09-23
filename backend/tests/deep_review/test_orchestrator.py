@@ -145,7 +145,7 @@ async def test_unsupported_through_stage_rejected_before_run(
     with pytest.raises(ValueError, match="unsupported --through stage"):
         await make_service(store).run(
             ReviewInput(repo_path=str(preparation_repo), base_ref=base, head_ref=head),
-            through="planning",
+            through="review",
         )
     assert store.events == []
 

@@ -25,3 +25,19 @@ class DeepReviewRuntime(Protocol):
 class DeepReviewRuntimeFactory(Protocol):
     def for_role(self, role: str) -> DeepReviewRuntime: ...
 
+
+class RuntimeBridgeDeepReviewRuntimeFactory:
+    def __init__(self, *, llm_service, session_factory=None):
+        self._llm_service = llm_service
+        self._session_factory = session_factory
+
+    def for_role(self, role: str) -> Any:
+        from app.execution_plane.runtime.bridge import RuntimeBridge
+
+        self._llm_service.get_config_for(role)
+        return RuntimeBridge(
+            llm_service=self._llm_service,
+            tools=[],
+            session_factory=self._session_factory,
+            agent_type=role,
+        )

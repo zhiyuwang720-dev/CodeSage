@@ -129,7 +129,7 @@ def test_cli_unsupported_through_returns_two(cli_repo: Path, tmp_path: Path) -> 
             "--repo", str(cli_repo),
             "--base", base,
             "--head", head,
-            "--through", "planning",
+            "--through", "reviewer",
             "--store-dir", str(tmp_path / "events"),
         ]
     )

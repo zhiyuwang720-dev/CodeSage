@@ -21,9 +21,9 @@ class FileReadDiffTool(RuntimeTool):
         self.input_model = FileReadDiffInput
 
     def validate_input(self, raw_input: dict) -> FileReadDiffInput:
-        parsed = super().validate_input(raw_input)
-        self.context.validate_path(parsed.path, require_change=True)
-        return parsed
+        # Path authorization is checked in execute so a mistaken model lookup
+        # becomes a recoverable tool result instead of aborting the Harness.
+        return super().validate_input(raw_input)
 
     def is_read_only(self, parsed_input: object = None) -> bool:
         return True

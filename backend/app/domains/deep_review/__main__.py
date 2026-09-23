@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", required=True, help="Path to a local Git worktree")
     parser.add_argument("--base", required=True, help="Base commit or ref")
     parser.add_argument("--head", required=True, help="Head commit or ref")
-    parser.add_argument("--through", choices=["anatomy"], default=None)
+    parser.add_argument("--through", choices=["anatomy", "planning"], default=None)
     parser.add_argument("--title", default="")
     parser.add_argument("--description", default="")
     parser.add_argument("--include", action="append", default=[], metavar="PATTERN")
@@ -49,8 +49,25 @@ async def _run(args: argparse.Namespace) -> int:
         title=args.title,
         description=args.description,
     )
-    service = DeepReviewService(config=config, store=JsonlDeepReviewStore(args.store_dir))
-    report = await service.run(review_input, through=args.through)
+    runtime_factory = None
+    requested_stage = args.through or "anatomy"
+    if requested_stage == "planning":
+        from app.domains.deep_review.services.runtime import (
+            RuntimeBridgeDeepReviewRuntimeFactory,
+        )
+        from app.execution_plane.models.service import LLMService
+
+        llm_service = LLMService()
+        # Validate both roles before the first paid Semantic request.
+        llm_service.get_config_for(config.semantic_role)
+        llm_service.get_config_for(config.planner_role)
+        runtime_factory = RuntimeBridgeDeepReviewRuntimeFactory(llm_service=llm_service)
+    service = DeepReviewService(
+        config=config,
+        store=JsonlDeepReviewStore(args.store_dir),
+        runtime_factory=runtime_factory,
+    )
+    report = await service.run(review_input, through=requested_stage)
     encoded = report.model_dump_json(indent=2)
     if args.output is None:
         sys.stdout.write(encoded + "\n")

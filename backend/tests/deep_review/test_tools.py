@@ -110,8 +110,10 @@ async def test_file_read_diff_cannot_read_excluded_change(tmp_path: Path) -> Non
     )
     tools = build_review_tools(repo_path=str(repo), head_commit=head, snapshot=snapshot, config=DeepReviewConfig())
     file_diff = tools[1]
-    with pytest.raises(Exception, match="filtered review context"):
-        file_diff.validate_input({"path": "excluded.py"})
+    rejected = await execute(file_diff, {"path": "excluded.py"})
+    assert rejected.is_error
+    assert rejected.output_payload["error"] == "invalid_path"
+    assert "filtered review context" in rejected.output_payload["message"]
 
 
 async def test_file_read_is_fixed_to_head(tools) -> None:
@@ -127,9 +129,12 @@ async def test_file_read_is_fixed_to_head(tools) -> None:
 
 
 async def test_tools_reject_outside_and_deleted_source(tools) -> None:
-    file_read, _diff, _find, search = tools[0]
+    file_read, file_diff, _find, search = tools[0]
     with pytest.raises(Exception, match="invalid repository path"):
         file_read.validate_input({"path": "../outside.py"})
+    invalid_diff = await execute(file_diff, {"path": "../outside.py"})
+    assert invalid_diff.is_error
+    assert invalid_diff.output_payload["error"] == "invalid_path"
     deleted = await execute(file_read, {"path": "deleted.py"})
     assert deleted.output_payload["error"] == "unavailable_deleted_file"
     with pytest.raises(Exception, match="invalid repository path"):
