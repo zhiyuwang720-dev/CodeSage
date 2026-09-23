@@ -493,6 +493,33 @@ def test_repair_25_files_defers_without_discarding_paths(
     assert plan.unresolved_risks
 
 
+@pytest.mark.parametrize(
+    ("file_count", "expected_group_sizes"),
+    [(13, [13]), (16, [16]), (17, [12, 5])],
+)
+def test_repair_only_splits_after_one_third_over_nominal_file_limit(
+    review_repo: tuple[Path, str, str],
+    file_count: int,
+    expected_group_sizes: list[int],
+) -> None:
+    snapshot = snapshot_for(review_repo)
+    paths = [f"file_{index:02d}.py" for index in range(file_count)]
+    snapshot = replace(
+        snapshot,
+        filter_result=FilterResult(decisions=[], review_paths=paths, context_paths=[]),
+    )
+
+    plan = repair_plan(
+        {"dimensions": [dimension("combined", paths)]},
+        snapshot,
+        DeepReviewConfig(max_files_per_work_item=12),
+    )
+
+    assert [len(item.target_files) for item in plan.dimensions] == expected_group_sizes
+    assert sorted(path for item in plan.dimensions for path in item.target_files) == paths
+    assert plan.coverage_complete is True
+
+
 def test_repair_empty_draft_fills_all_files(review_repo: tuple[Path, str, str]) -> None:
     snapshot = snapshot_for(review_repo)
     plan = repair_plan(

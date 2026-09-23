@@ -26,6 +26,12 @@ def _chunks(paths: list[str], size: int) -> list[list[str]]:
     return [paths[index : index + size] for index in range(0, len(paths), size)]
 
 
+def _max_unsplit_files(config: DeepReviewConfig) -> int:
+    """Allow up to one-third over the nominal cap before splitting a work item."""
+    nominal_limit = config.max_files_per_work_item
+    return nominal_limit + nominal_limit // 3
+
+
 def _unique_name(base: str, used: set[str]) -> str:
     name = base[:64]
     suffix = 2
@@ -119,8 +125,9 @@ def repair_plan(
         actions.append(f"added_fallback_dimension:{fallback_name}")
 
     dimensions: list[ReviewDimension] = []
+    max_unsplit_files = _max_unsplit_files(config)
     for dimension in model_dimensions:
-        if len(dimension.target_files) <= config.max_files_per_work_item:
+        if len(dimension.target_files) <= max_unsplit_files:
             dimensions.append(dimension)
             continue
         for index, paths in enumerate(_chunks(dimension.target_files, config.max_files_per_work_item), start=1):
@@ -210,8 +217,8 @@ def repair_plan(
     all_targets = [path for item in dimensions for path in item.target_files]
     if len(all_targets) != len(set(all_targets)) or set(all_targets) != allowed:
         raise ValueError("repaired plan must assign exactly one owner to each review file")
-    if any(len(item.target_files) > config.max_files_per_work_item for item in dimensions):
-        raise ValueError("repaired plan exceeds the dimension file limit")
+    if any(len(item.target_files) > max_unsplit_files for item in dimensions):
+        raise ValueError("repaired plan exceeds the unsplit dimension file limit")
     coverage_complete = not deferred
 
     return ReviewPlan(
