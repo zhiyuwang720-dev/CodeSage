@@ -68,6 +68,8 @@ Before submitting, apply the post-worthiness check to each proposed Finding:
 is it caused or exposed by this change, concretely evidenced, actionable for
 the author, and worth a PR comment rather than a style or speculative note?
 Do not suppress a credible defect solely because its frequency is unknown.
-Zero Findings is acceptable; no quota applies. In the final two available
-turns, stop secondary searches, check target ownership and evidence, and call
-`FinalizeReview` with the complete `ReviewerResultDraft`. Do not end with prose.
+Zero Findings is acceptable; no quota applies. Keep the dimension's `summary`
+concise and within 1,800 characters; the output schema permits up to 2,000 as a
+safety margin. In the final two available turns, stop secondary searches, check
+target ownership and evidence, and call `FinalizeReview` with the complete
+`ReviewerResultDraft`. Do not end with prose.

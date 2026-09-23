@@ -102,7 +102,11 @@ class ReviewerResultDraft(BaseModel):
         max_length=32,
         description="Zero or more actionable findings; there is no finding quota.",
     )
-    summary: str = Field(default="", max_length=1000, description="Investigation conclusion for this dimension.")
+    summary: str = Field(
+        default="",
+        max_length=2000,
+        description="Concise investigation conclusion for this dimension; maximum 2,000 characters.",
+    )
 
 
 @dataclass(slots=True)

@@ -98,6 +98,10 @@ def test_reviewer_draft_schema_is_simple_bounded_and_forbids_business_fields() -
         assert field_schema.get("description")
     for field_schema in finding_schema["properties"].values():
         assert field_schema.get("description")
+    assert schema["properties"]["summary"]["maxLength"] == 2000
+    ReviewerResultDraft.model_validate({"summary": "x" * 2000})
+    with pytest.raises(ValidationError):
+        ReviewerResultDraft.model_validate({"summary": "x" * 2001})
     assert "source" not in finding_schema["properties"]
     assert "dimension_name" not in finding_schema["properties"]
     with pytest.raises(ValidationError):
@@ -133,7 +137,8 @@ def test_reviewer_prompt_explains_roles_trust_and_finalize_boundary(
     assert "untrusted_target_diffs" in prompt
     assert reviewer_snapshot.head_commit in prompt
     assert "invoke Read, Grep, Glob, PowerShell" in prompt
-    assert "final two available\nturns" in prompt
+    assert "final two available turns" in prompt
+    assert "within 1,800 characters" in prompt
     assert "`priority` runs from 1" in prompt
     assert "`fallback=true`" in prompt
     assert "`diff_available=false`" in prompt
@@ -143,6 +148,7 @@ def test_reviewer_prompt_explains_roles_trust_and_finalize_boundary(
     assert "not a conclusion to confirm" in system
     assert "Built-in post-worthiness decision" in system
     assert "actual impact" in system
+    assert "no longer than 1,800" in system
     fallback_system = load_prompt("reviewer_fallback")
     assert "low-risk or deserve a superficial pass" in fallback_system
     assert "Built-in post-worthiness decision" in fallback_system
