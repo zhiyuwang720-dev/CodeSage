@@ -128,7 +128,7 @@ async def test_llm_service_harness_owner_issues_single_attempt(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_service_passes_tools_and_parallel_tool_calls(monkeypatch):
+async def test_llm_service_passes_forced_tool_choice(monkeypatch):
     captured: list = []
     _install_fake_sdk(monkeypatch, recorder=captured)
     service = _service()
@@ -145,13 +145,35 @@ async def test_llm_service_passes_tools_and_parallel_tool_calls(monkeypatch):
                 },
             }
         ],
-        parallel_tool_calls=True,
+        tool_choice={"type": "function", "function": {"name": "read_many_files"}},
+        parallel_tool_calls=False,
     )
 
     assert result["content"] == "recovered"
     assert captured[0]["tools"][0]["function"]["name"] == "read_many_files"
-    assert captured[0]["parallel_tool_calls"] is True
+    assert captured[0]["parallel_tool_calls"] is False
+    assert captured[0]["tool_choice"] == {
+        "type": "function", "function": {"name": "read_many_files"},
+    }
     assert captured[0]["num_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_llm_service_passes_provider_extra_body_only_for_that_request(monkeypatch):
+    captured: list = []
+    _install_fake_sdk(monkeypatch, recorder=captured)
+    service = _service()
+
+    await service.chat_completion(
+        messages=[{"role": "user", "content": "finalize"}],
+        tools=[{"type": "function", "function": {"name": "FinalizeReview", "parameters": {"type": "object"}}}],
+        tool_choice={"type": "function", "function": {"name": "FinalizeReview"}},
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+    await service.chat_completion(messages=[{"role": "user", "content": "investigate"}])
+
+    assert captured[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "extra_body" not in captured[1]
 
 
 def test_llm_service_uses_runtime_env_fallbacks_for_provider_config():

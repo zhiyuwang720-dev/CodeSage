@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ValidationError
 
@@ -30,7 +31,7 @@ from app.tool_gateway.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )
-from app.execution_plane.models.config import resolve_tool_message_format
+from app.execution_plane.models.config import PROVIDER_METADATA, resolve_tool_message_format
 from app.execution_plane.models.runtime_ai import (
     AIParseError,
     AIResult,
@@ -71,24 +72,125 @@ NATIVE_TOOL_CALLING_REMINDER = (
     "禁止只回复“我将继续/让我继续/下一步我会...”而不调用工具。这样的响应会被视为未完成。\n"
     "不要输出伪工具语法，例如 Tool Call:、Action:、JSON 形式的伪调用；只能使用模型提供方原生 tool_call。"
 )
+from app.execution_plane.runtime.errors import NonRetryableModelCallError
+HARNESS_TOOL_CALLING_REMINDER = (
+    "Tool-use protocol: the tool definitions in this request are authoritative. "
+    "Use only tools actually available in this call; do not infer tool names from prior sessions. "
+    "When more evidence is needed, make a native structured tool call instead of merely describing a plan. "
+    "When the task is complete, call FinalizeReview with the full payload required by its current schema. "
+    "If FinalizeReview rejects the payload, correct the reported fields and call it again. "
+    "Do not substitute prose or a simulated tool-call syntax for a real tool call."
+)
 DEEP_RUNTIME_SYSTEM_PROMPT = (
     "You are an autonomous deep review agent. Continue the requested task with the available tools. "
     "When the task is complete, call FinalizeReview with the complete structured result."
 )
 DEEP_RUNTIME_FINALIZER_PROMPT = (
-    "Submit the final result now by calling FinalizeReview. The complete result must match the "
-    "FinalizeReview JSON Schema exactly. Do not end with natural language unless the JSON is also "
-    "present in the assistant response."
+    "Submit the complete result by calling the available FinalizeReview tool. "
+    "Its input must match the current tool schema. If it is rejected, fix the reported "
+    "validation errors and call FinalizeReview again. Do not answer with prose or JSON text."
+)
+DEEP_RUNTIME_FINALIZER_SYSTEM_PROMPT = (
+    "You are in a finalization-only step. The only available action is the "
+    "FinalizeReview tool shown in this request. Submit the complete result using that tool now. "
+    "Do not continue investigation, request any other action, or answer in prose. "
+    "Use the prior conversation only as source material for the final payload."
 )
 DEEP_RUNTIME_TERMINAL_NUDGE = (
-    "审查尚未结构化终结：请调用 FinalizeReview 工具提交符合本次 schema 的完整结构化结果。"
+    "No schema-valid terminal result has been accepted. Call the available FinalizeReview "
+    "tool with a complete payload matching its current schema."
 )
 
 
 class RuntimeLLMModelClient:
-    def __init__(self, *, llm_service, agent_type: str = "review:security"):
+    def __init__(
+        self, *, llm_service, agent_type: str = "review:security",
+        tool_calling_reminder: str = NATIVE_TOOL_CALLING_REMINDER,
+        forced_tool_choice: dict[str, Any] | None = None,
+        forced_tool_choice_extra_body: dict[str, Any] | None = None,
+        max_forced_requests: int = 2,
+    ):
         self._llm_service = llm_service
         self._agent_type = agent_type
+        self._tool_calling_reminder = tool_calling_reminder
+        self._forced_tool_choice = forced_tool_choice
+        self._forced_tool_choice_extra_body = dict(forced_tool_choice_extra_body or {})
+        self._max_forced_requests = max_forced_requests
+        self._forced_requests = 0
+
+    def _request_tool_options(self, tool_definitions: list[dict[str, Any]]) -> dict[str, Any]:
+        if self._forced_tool_choice is None:
+            return {"parallel_tool_calls": True}
+        if self._forced_requests >= self._max_forced_requests:
+            raise NonRetryableModelCallError(
+                "Forced finalization request limit exceeded",
+                error_kind="finalization_request_budget_exhausted",
+            )
+        self._forced_requests += 1
+        target = self._forced_tool_choice["function"]["name"]
+        if any(tool.get("name") == target for tool in tool_definitions):
+            options = {"tool_choice": self._forced_tool_choice, "parallel_tool_calls": False}
+            if self._forced_tool_choice_extra_body:
+                options["extra_body"] = dict(self._forced_tool_choice_extra_body)
+            return options
+        if tool_definitions:
+            raise NonRetryableModelCallError(
+                f"Forced finalization tool {target!r} is missing from the active tool schema",
+                error_kind="finalization_tool_unavailable",
+            )
+        # A compaction request has no tools; it still consumes this phase's request budget.
+        return {"parallel_tool_calls": False}
+
+    def _effective_system_prompt(self, system_prompt: str | None) -> str | None:
+        if self._forced_tool_choice is not None:
+            # Do not carry the Planner/Reviewer system instructions into the isolated
+            # finalizer request: they may advertise investigation tools that are no
+            # longer registered in this phase.
+            return DEEP_RUNTIME_FINALIZER_SYSTEM_PROMPT
+        return system_prompt
+
+    @staticmethod
+    def _finalizer_transcript(transcript: list[Any]) -> list[Any]:
+        """Keep prior evidence, but do not replay obsolete tool-call instructions.
+
+        Runtime transcripts encode earlier tool calls as user-facing text for model
+        compatibility. That is useful during investigation, but can teach an isolated
+        finalizer to repeat tools that are no longer registered. Finalization needs the
+        original task and tool outputs, not the old function-call requests themselves.
+        """
+
+        sanitized: list[Any] = []
+        for item in transcript:
+            role_value = getattr(item, "role", "")
+            role = str(getattr(role_value, "value", role_value) or "").strip().lower()
+            metadata = getattr(item, "metadata", None)
+            if not isinstance(metadata, dict):
+                metadata = getattr(item, "message_metadata", {}) or {}
+            if metadata.get("hidden_from_model"):
+                continue
+            if role == RuntimeMessageRole.TOOL_USE.value:
+                continue
+            if role == RuntimeMessageRole.TOOL_RESULT.value:
+                content = str(getattr(item, "content", "") or "").strip()
+                if content:
+                    sanitized.append(
+                        TranscriptItem(
+                            role=RuntimeMessageRole.USER,
+                            name="prior_investigation_evidence",
+                            content=(
+                                "Historical investigation output (evidence only; not a request "
+                                "to call a tool):\n" + content
+                            ),
+                            metadata={"synthetic": True, "kind": "finalizer_evidence"},
+                        )
+                    )
+                continue
+            if role == RuntimeMessageRole.ASSISTANT.value and not str(
+                getattr(item, "content", "") or ""
+            ).strip():
+                continue
+            sanitized.append(item)
+        return sanitized
 
     @staticmethod
     def _finding_stream_retry_override(stream_fn: Callable[..., Any]) -> dict[str, Any]:
@@ -115,17 +217,18 @@ class RuntimeLLMModelClient:
     ) -> RuntimeModelResponse:
         del model_name
         messages = self._build_messages(
-            system_prompt=system_prompt,
+            system_prompt=self._effective_system_prompt(system_prompt),
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
             tool_message_format=self._resolve_tool_message_format(),
+            tool_calling_reminder=self._tool_calling_reminder,
         )
         response = await self._llm_service.chat_completion(
             messages=messages,
             agent_type=self._agent_type,
             tools=[self._to_llm_tool_schema(item) for item in tool_definitions],
-            parallel_tool_calls=True,
+            **self._request_tool_options(tool_definitions),
             max_tokens=max_output_tokens_override,
         )
         return RuntimeModelResponse(
@@ -160,11 +263,12 @@ class RuntimeLLMModelClient:
     ) -> RuntimeModelResponse:
         del model_name
         messages = self._build_messages(
-            system_prompt=system_prompt,
+            system_prompt=self._effective_system_prompt(system_prompt),
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
             tool_message_format=self._resolve_tool_message_format(),
+            tool_calling_reminder=self._tool_calling_reminder,
         )
 
         final_event: dict[str, Any] | None = None
@@ -172,7 +276,7 @@ class RuntimeLLMModelClient:
             messages=messages,
             agent_type=self._agent_type,
             tools=[self._to_llm_tool_schema(item) for item in tool_definitions],
-            parallel_tool_calls=True,
+            **self._request_tool_options(tool_definitions),
             max_tokens=max_output_tokens_override,
             **self._finding_stream_retry_override(self._llm_service.chat_completion_stream),
         ):
@@ -269,11 +373,12 @@ class RuntimeLLMModelClient:
             }
             return
         messages = self._build_messages(
-            system_prompt=system_prompt,
+            system_prompt=self._effective_system_prompt(system_prompt),
             recon_payload=recon_payload,
             transcript=transcript,
             tool_definitions=tool_definitions,
             tool_message_format=self._resolve_tool_message_format(),
+            tool_calling_reminder=self._tool_calling_reminder,
         )
         stream_fn = getattr(self._llm_service, "chat_completion_stream", None)
         if callable(stream_fn):
@@ -282,7 +387,7 @@ class RuntimeLLMModelClient:
                 messages=messages,
                 agent_type=self._agent_type,
                 tools=[self._to_llm_tool_schema(item) for item in tool_definitions],
-                parallel_tool_calls=True,
+                **self._request_tool_options(tool_definitions),
                 max_tokens=max_output_tokens_override,
                 **self._finding_stream_retry_override(stream_fn),
             ):
@@ -316,21 +421,24 @@ class RuntimeLLMModelClient:
             "tool_calls": [],
         }
 
-    @staticmethod
     def _build_messages(
+        self,
         *,
         system_prompt: str | None,
         recon_payload: dict[str, Any],
         transcript: list[Any],
         tool_definitions: list[dict[str, Any]] | None = None,
         tool_message_format: ToolMessageFormat | str = ToolMessageFormat.OPENAI_TOOLS,
+        tool_calling_reminder: str = NATIVE_TOOL_CALLING_REMINDER,
     ) -> list[dict[str, Any]]:
+        if self._forced_tool_choice is not None:
+            transcript = self._finalizer_transcript(transcript)
         effective_system_prompt = (system_prompt or "").strip()
-        if tool_definitions:
+        if tool_definitions and tool_calling_reminder:
             effective_system_prompt = (
-                f"{effective_system_prompt}\n\n{NATIVE_TOOL_CALLING_REMINDER}".strip()
+                f"{effective_system_prompt}\n\n{tool_calling_reminder}".strip()
                 if effective_system_prompt
-                else NATIVE_TOOL_CALLING_REMINDER
+                else tool_calling_reminder
             )
         return build_runtime_model_messages(
             system_prompt=effective_system_prompt,
@@ -424,8 +532,10 @@ class RuntimeLLMModelClient:
             return {
                 "type": "error",
                 "error": str(payload.get("error") or "").strip() or None,
+                "error_class": str(payload.get("error_class") or "").strip() or None,
                 "user_message": str(payload.get("user_message") or "").strip() or None,
                 "error_type": str(payload.get("error_type") or "").strip() or None,
+                "status_code": payload.get("status_code"),
                 "partial": bool(payload.get("partial")),
                 "usage": dict(payload["usage"]) if payload.get("usage") is not None else None,
                 "configured_model": payload.get("configured_model"),
@@ -671,20 +781,28 @@ class RuntimeBridge:
         raw_text = str(response.get("content") or "")
         usage = response.get("usage")
         cost_usd = response.get("response_cost_usd")
+        normalized_usage = dict(usage) if isinstance(usage, dict) else None
+        normalized_cost = cost_usd if isinstance(cost_usd, (int, float)) else None
         if schema is None:
             return AIResult(
                 parsed=None,
                 raw_text=raw_text,
-                usage=dict(usage) if isinstance(usage, dict) else None,
-                cost_usd=cost_usd if isinstance(cost_usd, (int, float)) else None,
+                usage=normalized_usage,
+                cost_usd=normalized_cost,
             )
 
         try:
             parsed_data = AgentJsonParser.parse_any(raw_text, default=None)
         except Exception as exc:
-            raise AIParseError(f"Unable to parse AI response as JSON: {exc}", raw_text=raw_text) from exc
-        if parsed_data is None:
-            raise AIParseError("AI response did not contain JSON", raw_text=raw_text)
+            raise AIParseError(
+                f"Unable to parse AI response as JSON: {exc}", raw_text=raw_text,
+                usage=normalized_usage, cost_usd=normalized_cost,
+            ) from exc
+        if not isinstance(parsed_data, dict):
+            raise AIParseError(
+                "AI response did not contain a JSON object", raw_text=raw_text,
+                usage=normalized_usage, cost_usd=normalized_cost,
+            )
 
         try:
             parsed = schema.model_validate(parsed_data)
@@ -693,12 +811,14 @@ class RuntimeBridge:
                 "AI response failed schema validation",
                 raw_text=raw_text,
                 validation_errors=exc.errors(include_url=False),
+                usage=normalized_usage,
+                cost_usd=normalized_cost,
             ) from exc
         return AIResult(
             parsed=parsed,
             raw_text=raw_text,
-            usage=dict(usage) if isinstance(usage, dict) else None,
-            cost_usd=cost_usd if isinstance(cost_usd, (int, float)) else None,
+            usage=normalized_usage,
+            cost_usd=normalized_cost,
         )
 
     async def harness(
@@ -725,10 +845,13 @@ class RuntimeBridge:
                 continue
             normal_tools.append(tool)
         deep_registry = ToolRegistry([*normal_tools, finalizer_tool])
+        forced_finalizer_choice = self._deep_finalizer_tool_choice()
+        forced_finalizer_extra_body = self._deep_finalizer_extra_body()
 
         recon_payload: dict[str, Any] = {}
         if cwd:
             recon_payload["deep_runtime_cwd"] = cwd
+        created_session_ids: list[str] = []
         try:
             result = await self.run(
                 project_id=project_id or "deep-runtime",
@@ -741,31 +864,79 @@ class RuntimeBridge:
                 event_sink=event_sink,
                 finalizer_prompts=[DEEP_RUNTIME_FINALIZER_PROMPT],
                 finalizer_tools=[finalizer_tool],
+                forced_finalizer_tool_choice=forced_finalizer_choice,
+                forced_finalizer_extra_body=forced_finalizer_extra_body,
                 terminal_action_nudge_message=DEEP_RUNTIME_TERMINAL_NUDGE,
+                on_session_created=created_session_ids.append,
                 _tool_registry=deep_registry,
                 _payload_extractor=self._schema_payload_extractor(schema),
             )
-        except ValueError as exc:
-            raise HarnessIncompleteError(str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            session_id = created_session_ids[-1] if created_session_ids else None
+            usage, cost_usd = self._harness_metering(session_id)
+            raise HarnessIncompleteError(
+                str(exc), session_id=session_id, usage=usage, cost_usd=cost_usd,
+            ) from exc
 
         session_id = str(result["session_id"])
         final_payload = result.get("final_payload")
         try:
             parsed = schema.model_validate(final_payload)
         except (TypeError, ValidationError) as exc:
-            raise HarnessIncompleteError(f"Harness ended without a schema-valid payload: {exc}") from exc
+            usage, cost_usd = self._harness_metering(session_id)
+            raise HarnessIncompleteError(
+                f"Harness ended without a schema-valid payload: {exc}",
+                session_id=session_id, usage=usage, cost_usd=cost_usd,
+            ) from exc
 
+        usage, cost_usd = self._harness_metering(session_id)
+        return HarnessResult(
+            parsed=parsed,
+            session_id=session_id,
+            result=result,
+            usage=usage,
+            cost_usd=cost_usd,
+        )
+
+    def _deep_finalizer_tool_choice(self) -> dict[str, Any]:
+        get_config = getattr(self._llm_service, "get_config_for", None)
+        if callable(get_config):
+            config = get_config(self._agent_type)
+            capabilities = PROVIDER_METADATA.get(config.provider, {}).get("tool_capability", {})
+            if "forced" not in capabilities.get("tool_choice", []):
+                raise HarnessIncompleteError(
+                    "Configured model provider does not support forced FinalizeReview tool choice"
+                )
+        return {"type": "function", "function": {"name": "FinalizeReview"}}
+
+    def _deep_finalizer_extra_body(self) -> dict[str, Any] | None:
+        """Disable DeepSeek thinking only for the forced FinalizeReview requests."""
+
+        get_config = getattr(self._llm_service, "get_config_for", None)
+        if not callable(get_config):
+            return None
+        config = get_config(self._agent_type)
+        provider = str(
+            getattr(getattr(config, "provider", None), "value", None)
+            or getattr(config, "provider", "")
+        ).strip().lower()
+        host = urlsplit(str(getattr(config, "base_url", None) or "")).hostname or ""
+        is_deepseek = provider == "deepseek" or host.lower() == "api.deepseek.com" or host.lower().endswith(".deepseek.com")
+        if not is_deepseek:
+            return None
+        return {"thinking": {"type": "disabled"}}
+
+    def _harness_metering(self, session_id: str | None) -> tuple[dict[str, Any] | None, float | None]:
+        if session_id is None:
+            return None, None
         query_state = self._session_store.load_query_loop_state(session_id)
         provider_tokens = int(getattr(query_state, "provider_tokens_used", 0) or 0)
         input_tokens = int(getattr(query_state, "provider_input_tokens_used", 0) or 0)
         output_tokens = int(getattr(query_state, "provider_output_tokens_used", 0) or 0)
         raw_cost = getattr(query_state, "provider_cost_usd", None)
         cost_usd = float(raw_cost) if isinstance(raw_cost, (int, float)) else None
-        return HarnessResult(
-            parsed=parsed,
-            session_id=session_id,
-            result=result,
-            usage={
+        return (
+            {
                 "total_tokens": provider_tokens,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -773,7 +944,7 @@ class RuntimeBridge:
                 "usage_complete": input_tokens > 0 and output_tokens > 0,
                 "cost_available": cost_usd is not None,
             },
-            cost_usd=cost_usd,
+            cost_usd,
         )
 
     def _schema_payload_extractor(self, schema: type[BaseModel]):
@@ -792,23 +963,6 @@ class RuntimeBridge:
                 except ValidationError:
                     continue
 
-            for message in reversed(getattr(snapshot, "messages", []) or []):
-                if getattr(message, "role", "") != "assistant":
-                    continue
-                text = str(getattr(message, "content", "") or "")
-                candidates: list[Any] = [AgentJsonParser.parse_any(text, default=None)]
-                match = re.search(r"(\{.*\})", text, re.DOTALL)
-                if match:
-                    candidates.append(AgentJsonParser.parse_any(match.group(1), default=None))
-                for candidate in candidates:
-                    if not isinstance(candidate, dict):
-                        continue
-                    try:
-                        return schema.model_validate(candidate).model_dump(
-                            mode="json", exclude_none=True
-                        )
-                    except ValidationError:
-                        continue
             return None
 
         return extract
@@ -827,15 +981,23 @@ class RuntimeBridge:
         event_sink: Callable[[dict[str, Any]], Any] | None = None,
         finalizer_prompts: list[str] | None = None,
         finalizer_tools: list[Any] | None = None,
+        forced_finalizer_tool_choice: dict[str, Any] | None = None,
+        forced_finalizer_extra_body: dict[str, Any] | None = None,
         terminal_action_nudge_message: str | None = None,
         on_session_created: Callable[[str], Any] | None = None,
         runtime_metadata: dict[str, Any] | None = None,
         _tool_registry: ToolRegistry | None = None,
         _payload_extractor: Callable[[Any], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
-        model_client = RuntimeLLMModelClient(llm_service=self._llm_service, agent_type=self._agent_type)
         tool_registry = _tool_registry or self._build_tool_registry(tool_allowlist=tool_allowlist)
         bare_runtime = _tool_registry is not None
+        model_client = RuntimeLLMModelClient(
+            llm_service=self._llm_service,
+            agent_type=self._agent_type,
+            tool_calling_reminder=(
+                HARNESS_TOOL_CALLING_REMINDER if bare_runtime else NATIVE_TOOL_CALLING_REMINDER
+            ),
+        )
         tool_orchestrator = ToolGateway(
             session_store=self._session_store,
             tool_registry=tool_registry,
@@ -873,7 +1035,7 @@ class RuntimeBridge:
         if runtime_metadata is not None:
             adapter_run_kwargs["runtime_metadata"] = runtime_metadata
         result = await adapter.run(**adapter_run_kwargs)
-        snapshot, final_payload = await self._ensure_payload(
+        ensure_kwargs = dict(
             session_id=result["session_id"],
             model_name=model_name,
             max_turns=max_turns,
@@ -884,6 +1046,11 @@ class RuntimeBridge:
             fallback_payload_builder=None if bare_runtime else self._default_fallback_payload,
             finalizer_tools=finalizer_tools,
         )
+        if forced_finalizer_tool_choice is not None:
+            ensure_kwargs["forced_finalizer_tool_choice"] = forced_finalizer_tool_choice
+        if forced_finalizer_extra_body is not None:
+            ensure_kwargs["forced_finalizer_extra_body"] = forced_finalizer_extra_body
+        snapshot, final_payload = await self._ensure_payload(**ensure_kwargs)
         return {
             **result,
             "final_payload": final_payload,
@@ -1189,6 +1356,8 @@ class RuntimeBridge:
         finalizer_prompts: list[str],
         fallback_payload_builder: Callable[[Any], Any] | None = None,
         finalizer_tools: list[Any] | None = None,
+        forced_finalizer_tool_choice: dict[str, Any] | None = None,
+        forced_finalizer_extra_body: dict[str, Any] | None = None,
         terminal_action_nudge_message: str | None = None,
     ) -> tuple[Any, Any]:
         snapshot = self._session_store.load_session_snapshot(session_id)
@@ -1210,6 +1379,16 @@ class RuntimeBridge:
             raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
         finalizer_registry = ToolRegistry(finalizer_tools or [FinalizeReviewTool()])
+        finalizer_model_client = model_client
+        if forced_finalizer_tool_choice is not None:
+            finalizer_model_client = RuntimeLLMModelClient(
+                llm_service=self._llm_service,
+                agent_type=self._agent_type,
+                tool_calling_reminder=HARNESS_TOOL_CALLING_REMINDER,
+                forced_tool_choice=forced_finalizer_tool_choice,
+                forced_tool_choice_extra_body=forced_finalizer_extra_body,
+                max_forced_requests=2,
+            )
         finalizer_orchestrator = ToolGateway(
             session_store=self._session_store,
             tool_registry=finalizer_registry,
@@ -1227,16 +1406,20 @@ class RuntimeBridge:
             )
             runner = RuntimeRunner(
                 session_store=self._session_store,
-                model_client=model_client,
+                model_client=finalizer_model_client,
                 tool_registry=finalizer_registry,
                 tool_orchestrator=finalizer_orchestrator,
-                max_turns=2 if max_turns is None else max(1, min(2, max_turns)),
+                max_turns=2 if forced_finalizer_tool_choice is not None else (
+                    2 if max_turns is None else max(1, min(2, max_turns))
+                ),
                 require_terminal_action=True,
                 terminal_action_nudge_limit=1,
                 terminal_action_nudge_message=terminal_action_nudge_message,
             )
-            await runner.run_once(session_id=session_id, model_name=model_name)
+            finalizer_result = await runner.run_once(session_id=session_id, model_name=model_name)
             snapshot = self._session_store.load_session_snapshot(session_id)
+            if isinstance(finalizer_result.final_payload, dict):
+                return snapshot, finalizer_result.final_payload
             payload = payload_extractor(snapshot)
             if payload is not None:
                 return snapshot, payload

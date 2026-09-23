@@ -9,9 +9,14 @@ from pydantic import BaseModel
 
 
 class AIParseError(ValueError):
-    def __init__(self, message: str, *, raw_text: str):
+    def __init__(
+        self, message: str, *, raw_text: str,
+        usage: dict[str, Any] | None = None, cost_usd: float | None = None,
+    ):
         super().__init__(message)
         self.raw_text = raw_text
+        self.usage = usage
+        self.cost_usd = cost_usd
 
 
 class AISchemaValidationError(ValueError):
@@ -21,14 +26,25 @@ class AISchemaValidationError(ValueError):
         *,
         raw_text: str,
         validation_errors: list[dict[str, Any]],
+        usage: dict[str, Any] | None = None,
+        cost_usd: float | None = None,
     ):
         super().__init__(message)
         self.raw_text = raw_text
         self.validation_errors = validation_errors
+        self.usage = usage
+        self.cost_usd = cost_usd
 
 
 class HarnessIncompleteError(RuntimeError):
-    pass
+    def __init__(
+        self, message: str, *, session_id: str | None = None,
+        usage: dict[str, Any] | None = None, cost_usd: float | None = None,
+    ):
+        super().__init__(message)
+        self.session_id = session_id
+        self.usage = usage
+        self.cost_usd = cost_usd
 
 
 @dataclass

@@ -1152,6 +1152,8 @@ def test_runtime_model_client_build_messages_uses_native_openai_tool_history():
         ],
     )
 
+    assert "Read/Grep/Glob/Skill/PowerShell" in messages[0]["content"]
+    assert '"findings": [...]' in messages[0]["content"]
     assert messages[2]["role"] == "assistant"
     assert messages[2]["tool_calls"][0]["id"] == "tool-use-1"
     assert messages[3] == {

@@ -372,6 +372,10 @@ class SDKModelClient:
                 kwargs["parallel_tool_calls"] = bool(request.parallel_tool_calls)
         if request.tool_choice is not None:
             kwargs["tool_choice"] = request.tool_choice
+        if request.extra_body:
+            # Provider-specific request options (e.g. DeepSeek's thinking toggle)
+            # are kept request-scoped and passed as OpenAI SDK extra body fields.
+            kwargs["extra_body"] = dict(request.extra_body)
 
         if config.api_key:
             kwargs["api_key"] = config.api_key
@@ -820,6 +824,7 @@ class SDKModelClient:
             "error": str(error),
             "error_class": error.__class__.__name__,
             "error_type": describe_error_kind(error),
+            "status_code": getattr(error, "status_code", None),
             "user_message": user_message_for_error(error, max_attempts=max_attempts, attempts_used=attempts_used),
             "accumulated": state.content,
             "partial": partial,

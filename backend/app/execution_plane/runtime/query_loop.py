@@ -42,6 +42,7 @@ from app.execution_plane.runtime.query_context import (
     apply_context_collapse_if_needed,
 )
 from app.execution_plane.runtime.query_degradation import handle_recoverable_response
+from app.execution_plane.runtime.errors import NonRetryableModelCallError
 from app.execution_plane.runtime.query_messages import normalize_messages_for_model
 from app.contracts.query_state import QueryLoopState
 from app.execution_plane.session.store import AuditSessionPersistenceError
@@ -1453,7 +1454,26 @@ class QueryLoop:
                     error_event["accumulated"] = assistant_content
                 if assistant_reasoning_content and not error_event.get("reasoning_content"):
                     error_event["reasoning_content"] = assistant_reasoning_content
-                raise RuntimeError(self._format_stream_error_for_exception(error_event))
+                error_kind = str(error_event.get("error_type") or "").strip().lower()
+                error_class = str(error_event.get("error_class") or "").strip().lower()
+                status_code = error_event.get("status_code")
+                try:
+                    status_code = int(status_code) if status_code is not None else None
+                except (TypeError, ValueError):
+                    status_code = None
+                message = self._format_stream_error_for_exception(error_event)
+                if (
+                    error_kind in {"invalid_request", "authentication", "configuration", "quota_exceeded"}
+                    or error_class in {"modelbadrequesterror", "modelauthenticationerror", "modelconfigurationerror"}
+                    or status_code == 400
+                    or (status_code is not None and 400 <= status_code < 500 and status_code not in {408, 429})
+                ):
+                    raise NonRetryableModelCallError(
+                        message,
+                        error_kind=error_kind or "invalid_request",
+                        status_code=status_code,
+                    )
+                raise RuntimeError(message)
         if stream_done is None:
             raise RuntimeError("Model stream ended before a complete done event")
         model_response = self._normalize_model_response(
@@ -1641,6 +1661,25 @@ class QueryLoop:
     @staticmethod
     def _classify_model_stream_error(exc: Exception) -> str:
         message = f"{exc.__class__.__name__}: {exc}".lower()
+        typed_kind = str(
+            getattr(exc, "error_kind", None) or getattr(exc, "kind", None) or ""
+        ).strip().lower()
+        if typed_kind == "rate_limit" and (
+            any(term in message for term in ("insufficient_quota", "quota exceeded", "billing", "余额", "配额"))
+            or re.search(r"\b(?:tpd|tpm|rpm)\b", message)
+        ):
+            return "quota_exhausted"
+        if typed_kind:
+            return typed_kind
+        status_code = getattr(exc, "status_code", None)
+        try:
+            status_code = int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            status_code = None
+        if status_code == 400 or (
+            status_code is not None and 400 <= status_code < 500 and status_code not in {408, 429}
+        ):
+            return "invalid_request"
         if any(
             term in message
             for term in (
@@ -1669,7 +1708,12 @@ class QueryLoop:
     def _is_retryable_model_stream_error(cls, exc: Exception) -> bool:
         return cls._classify_model_stream_error(exc) not in {
             "quota_exhausted",
+            "quota_exceeded",
             "provider_auth_error",
+            "authentication",
+            "configuration",
+            "invalid_request",
+            "finalization_request_budget_exhausted",
             "prompt_too_long",
         }
 

@@ -19,6 +19,8 @@ from app.contracts.models import (
     TranscriptItem,
 )
 from app.execution_plane.runtime.query_loop import QueryLoop
+from app.execution_plane.runtime.errors import NonRetryableModelCallError
+from app.execution_plane.models.errors import ModelBadRequestError
 from app.tool_gateway.search import ToolSearchRuntimeTool
 from app.contracts.query_state import QueryLoopState
 from app.execution_plane.runtime.runner import RuntimeRunner
@@ -2064,4 +2066,61 @@ def test_query_loop_treats_provider_tpd_rate_limit_as_non_retryable_quota_exhaus
     assert result.stop_reason is RuntimeStopReason.QUOTA_EXHAUSTED
     assert len(client.calls) == 1
     assert snapshot.checkpoints[-1].state_payload["error_kind"] == "quota_exhausted"
-    assert snapshot.checkpoints[-1].state_payload["error_kind"] == "quota_exhausted"
+
+
+def test_query_loop_does_not_retry_invalid_request_stream_error():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="finalize"))
+    client = StreamingFakeModelClient(
+        stream_events=[
+            {
+                "type": "error",
+                "error_type": "invalid_request",
+                "error_class": "ModelBadRequestError",
+                "status_code": 400,
+                "error": "Thinking mode does not support this tool_choice",
+                "user_message": "Model request parameters are not accepted",
+            },
+        ]
+    )
+    loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="deepseek-flash"))
+    snapshot = store.load_session_snapshot(session_id)
+    attempts = [item.state_payload for item in snapshot.checkpoints if item.state_payload.get("kind") == "model_stream_attempt"]
+
+    assert result.stop_reason is RuntimeStopReason.MODEL_ERROR
+    assert len(client.calls) == 1
+    assert len(attempts) == 1
+    assert attempts[0]["status"] == "tombstone"
+    assert attempts[0]["error_kind"] == "invalid_request"
+
+
+def test_query_loop_does_not_retry_direct_bad_request_exception():
+    store = build_store()
+    session_id = store.create_session(project_id="project-1", system_prompt="system")
+    store.append_message(session_id, TranscriptItem(role=RuntimeMessageRole.USER, content="finalize"))
+
+    class BadRequestClient(FakeModelClient):
+        async def complete(self, **kwargs):
+            self.calls.append(kwargs)
+            raise ModelBadRequestError("HTTP 400 invalid tool_choice", status_code=400)
+
+    client = BadRequestClient()
+    loop = QueryLoop(session_store=store, model_client=client, tool_registry=ToolRegistry(), tool_orchestrator=None)
+
+    result = asyncio.run(loop.run_turn(session_id=session_id, model_name="deepseek-flash"))
+
+    assert result.stop_reason is RuntimeStopReason.MODEL_ERROR
+    assert len(client.calls) == 1
+    assert QueryLoop._is_retryable_model_stream_error(ModelBadRequestError("HTTP 400", status_code=400)) is False
+
+
+def test_local_finalization_request_budget_error_is_non_retryable():
+    error = NonRetryableModelCallError(
+        "Forced finalization request limit exceeded",
+        error_kind="finalization_request_budget_exhausted",
+    )
+
+    assert QueryLoop._is_retryable_model_stream_error(error) is False

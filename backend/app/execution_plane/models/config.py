@@ -132,6 +132,7 @@ class LLMRequest:
     top_p: Optional[float] = None
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Any] = None
+    extra_body: Optional[Dict[str, Any]] = None
     parallel_tool_calls: Optional[bool] = None
     stream: bool = False
     perspective: Optional[str] = None

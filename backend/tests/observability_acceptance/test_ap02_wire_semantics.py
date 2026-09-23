@@ -90,6 +90,41 @@ async def test_ap02_openai_compatible_non_stream_keeps_configured_model_and_endp
 
 
 @pytest.mark.asyncio
+async def test_ap02_openai_compatible_extra_body_reaches_provider_request(model_harness) -> None:
+    model_harness.server.set_default(
+        CHAT_PATH, PlannedResponse(payload=openai_completion(content="ok", model="fixture-model"))
+    )
+    service = model_harness.service(
+        provider="openai",
+        model="deepseek-flash",
+        protocol="openai_chat",
+        base_url=model_harness.server.base_url,
+    )
+
+    await service.chat_completion(
+        messages=[{"role": "user", "content": "submit structured result"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "FinalizeReview",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "FinalizeReview"}},
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+
+    records = model_harness.server.requests(CHAT_PATH)
+    assert len(records) == 1
+    assert records[0].body["tool_choice"] == {
+        "type": "function", "function": {"name": "FinalizeReview"},
+    }
+    assert records[0].body["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.asyncio
 async def test_ap02_openai_compatible_stream_matches_non_stream_semantics(model_harness) -> None:
     model_harness.server.set_default(
         CHAT_PATH,
