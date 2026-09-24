@@ -17,6 +17,7 @@ from app.domains.deep_review.schemas.pipeline import (
     Anatomy,
     ReviewDimension,
     ReviewFinding,
+    ReviewInvestigation,
     ReviewPlan,
     ReviewerResult,
     SemanticBrief,
@@ -194,7 +195,11 @@ class FakeFactory:
 def build_dimension(name: str, path: str, *, deferred: bool = False) -> ReviewDimension:
     return ReviewDimension(
         name=name,
-        review_prompt="Trace the changed value and report only a verified behavior defect.",
+        investigations=[ReviewInvestigation(
+            source_dimension=name,
+            review_prompt="Trace the changed value and report only a verified behavior defect.",
+            priority=1,
+        )],
         target_files=[path],
         deferred=deferred,
     )

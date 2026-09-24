@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.domains.deep_review.schemas.pipeline import ReviewDimension, ReviewFinding, SemanticBrief
+from app.domains.deep_review.schemas.pipeline import (
+    Anatomy, EvidencePackage, ReviewDimension, ReviewFinding, ReviewPlan, SemanticBrief,
+)
+from app.domains.deep_review.schemas.output import ReviewerDimensionReport
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
 from app.domains.deep_review.services.prompt_loader import render_prompt
 
@@ -60,9 +63,16 @@ def build_reviewer_prompt(
     dimension: ReviewDimension,
     semantic: SemanticBrief,
 ) -> str:
+    if len(dimension.investigations) == 1:
+        investigation_prompt = dimension.investigations[0].review_prompt
+    else:
+        investigation_prompt = "Investigations for this dimension (in priority order):\n" + "\n".join(
+            f"{index}. [{item.source_dimension}] {item.review_prompt}"
+            for index, item in enumerate(dimension.investigations, start=1)
+        )
     dimension_payload = {
         "name": dimension.name,
-        "review_prompt": dimension.review_prompt,
+        "review_prompt": investigation_prompt,
         "priority": dimension.priority,
         "fallback": dimension.fallback,
     }
@@ -104,3 +114,83 @@ def format_candidate_summaries(findings: list[ReviewFinding]) -> str:
             }
         )
     return _stable_json(rows)
+
+
+def format_cross_inputs(
+    *,
+    snapshot: ReviewSnapshot,
+    anatomy: Anatomy,
+    semantic: SemanticBrief,
+    plan: ReviewPlan,
+    reviewers: list[ReviewerDimensionReport],
+    candidates: list[ReviewFinding],
+    evidence: dict[int, EvidencePackage],
+    max_turns: int,
+) -> dict[str, str]:
+    """One stable JSON block per trust boundary; preserve every candidate index."""
+    review_paths = sorted(snapshot.review_paths)
+    context_paths = sorted(snapshot.context_paths)
+    active_targets = {
+        path for item in reviewers if item.status in {"succeeded", "degraded"}
+        for path in item.target_files
+    }
+    constraints = {
+        "base_commit": snapshot.base_commit,
+        "head_commit": snapshot.head_commit,
+        "review_paths": review_paths,
+        "context_paths": context_paths,
+        "snapshot_rule": "read fixed head only; new finding primary path must be in review_paths",
+        "max_turns": max_turns,
+    }
+    internal_hints = [
+        {"dimension_name": dimension.name, "review_prompt": investigation.review_prompt}
+        for dimension in plan.dimensions if not dimension.deferred
+        for investigation in dimension.investigations
+        if investigation.source_dimension == "cross_reference_hint"
+    ]
+    relations = {
+        "cross_reference_hints": [item.model_dump(mode="json") for item in plan.cross_reference_hints],
+        "internalized_hints_already_assigned_to_reviewer": internal_hints,
+        "dimension_name_map": plan.dimension_name_map,
+        "anatomy_related_paths": anatomy.related_paths,
+        "plan_unresolved_risks": plan.unresolved_risks,
+    }
+    coverage = {
+        "dimensions": [
+            {
+                "name": item.dimension_name,
+                "status": item.status,
+                "target_files": item.target_files,
+                "context_files": item.context_files,
+                "finding_count": item.finding_count,
+            }
+            for item in reviewers
+        ],
+        "paths_without_successful_reviewer": sorted(set(review_paths) - active_targets),
+        "coverage_complete": plan.coverage_complete
+        and all(item.status == "succeeded" for item in reviewers),
+    }
+    summaries = [
+        {"index": index, **finding.model_dump(mode="json")}
+        for index, finding in enumerate(candidates)
+    ]
+    packages = []
+    for index in range(len(candidates)):
+        package = evidence.get(index, EvidencePackage(finding_index=index))
+        packages.append({
+            "index": index,
+            "evidence_empty": not any((
+                package.primary_code, package.diff_hunk, package.caller_snippets,
+                package.cross_ref_snippets, package.related_code,
+            )),
+            "truncated": package.truncated,
+            "package": package.model_dump(mode="json"),
+        })
+    return {
+        "run_constraints_json": _stable_json(constraints),
+        "semantic_json": _stable_json(semantic.model_dump(mode="json")),
+        "plan_relations_json": _stable_json(relations),
+        "reviewer_coverage_json": _stable_json(coverage),
+        "candidate_summaries_json": _stable_json(summaries),
+        "evidence_packages_json": _stable_json(packages),
+    }

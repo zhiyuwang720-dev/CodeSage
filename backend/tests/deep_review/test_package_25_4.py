@@ -22,10 +22,12 @@ from app.domains.deep_review.agents.semantic import (
 )
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
+from app.domains.deep_review.schemas.pipeline import SemanticBrief
 from app.domains.deep_review.services.diff_engine import build_anatomy
 from app.domains.deep_review.services.directory_filter import FilterResult
 from app.domains.deep_review.services.input_builder import build_review_snapshot
 from app.domains.deep_review.services.plan_repair import repair_plan
+from app.domains.deep_review.services.output_formatter import build_reviewer_prompt
 from app.domains.deep_review.services.prompt_loader import load_prompt, render_prompt
 from app.domains.deep_review.services import plan_repair as plan_repair_module
 from app.domains.deep_review.services.runtime import RuntimeBridgeDeepReviewRuntimeFactory
@@ -175,7 +177,8 @@ def test_planner_prompt_defines_investigation_not_finding_quota() -> None:
     for phrase in (
         "assigns review work", "coverage boundaries", "not a list of predicted defects",
         "Semantic Brief is a set of leads", "max_planner_dimensions",
-        "complete ownership takes priority", "failure consequence",
+        "complete coverage takes priority", "failure consequence",
+        "branch-reachability question", "feasible trace",
         "FinalizeReview", "ReviewPlanDraft",
         "summary` within 2000 characters", "relation` within",
     ):
@@ -418,7 +421,7 @@ async def test_cancelled_semantic_does_not_fallback(review_repo: tuple[Path, str
     assert not any(kind == "semantic_fallback" for _, kind, _ in store.events)
 
 
-def test_repair_first_owner_fallback_and_ambiguous_hints(
+def test_repair_preserves_partial_overlap_and_drops_ambiguous_hints(
     review_repo: tuple[Path, str, str],
 ) -> None:
     snapshot = snapshot_for(review_repo)
@@ -434,26 +437,26 @@ def test_repair_first_owner_fallback_and_ambiguous_hints(
         }],
     }
     plan = repair_plan(draft, snapshot, DeepReviewConfig())
-    assert plan.coverage_complete is True
-    assert [path for group in plan.dimensions for path in group.target_files].count("b.py") == 1
+    assert plan.coverage_complete is False  # the duplicated hint cannot be mapped safely
+    assert [path for group in plan.dimensions for path in group.target_files].count("b.py") == 2
     assert len({group.name for group in plan.dimensions}) == len(plan.dimensions)
     assert plan.cross_reference_hints == []
     assert any("removed_invalid_target" in item for item in plan.repair_actions)
 
 
-def test_repair_merges_earlier_pair_then_defers_without_losing_owner(
+def test_repair_defers_whole_dimension_instead_of_merging_unrelated_work(
     review_repo: tuple[Path, str, str],
 ) -> None:
     snapshot = snapshot_for(review_repo)
     draft = {"dimensions": [
         dimension("a", ["a.py"]), dimension("b", ["b.py"]), dimension("c", ["c.py"]),
     ]}
-    merged = repair_plan(
+    capped = repair_plan(
         draft, snapshot, DeepReviewConfig(max_final_dimensions=2, max_files_per_work_item=2),
     )
-    assert len([item for item in merged.dimensions if not item.deferred]) == 2
-    assert merged.coverage_complete is True
-    assert any(item.source == "merged" for item in merged.dimensions)
+    assert len([item for item in capped.dimensions if not item.deferred]) == 2
+    assert capped.coverage_complete is False
+    assert all(item.source != "merged" for item in capped.dimensions)
     deferred = repair_plan(
         draft, snapshot, DeepReviewConfig(max_final_dimensions=2, max_files_per_work_item=1),
     )
@@ -546,28 +549,93 @@ def test_repair_remaps_hint_after_merge_but_drops_ambiguous_split(
 ) -> None:
     snapshot = snapshot_for(review_repo)
     draft = {"dimensions": [
-        dimension("a", ["a.py"]), dimension("b", ["b.py"]), dimension("c", ["c.py"]),
+        dimension("a", ["a.py", "b.py"], ["unchanged.py"]),
+        dimension("b", ["a.py"], ["b.py", "unchanged.py"]),
+        dimension("c", ["c.py"]),
     ], "cross_reference_hints": [{
-        "dimension_names": ["a", "c"],
+        "dimension_names": ["b", "c"],
         "relation": "Compare producer and consumer behavior",
         "symbol_or_contract": "VALUE",
     }]}
     plan = repair_plan(
         draft, snapshot,
         DeepReviewConfig(max_final_dimensions=2, max_files_per_work_item=2),
+        legal_context_paths={"a.py", "b.py", "c.py", "unchanged.py"},
     )
     assert len(plan.cross_reference_hints) == 1
     assert set(plan.cross_reference_hints[0].dimension_names) == {
         item.name for item in plan.dimensions
     }
+    assert plan.dimension_name_map["b"] == ["a"]
+    assert [item.source_dimension for item in plan.dimensions[0].investigations] == ["a", "b"]
+    assert plan.dimensions[0].context_files == ["unchanged.py"]
 
     split = repair_plan({"dimensions": [
         dimension("a", ["a.py", "b.py"]), dimension("c", ["c.py"]),
-    ], "cross_reference_hints": draft["cross_reference_hints"]}, snapshot,
+    ], "cross_reference_hints": [{
+        "dimension_names": ["a", "c"],
+        "relation": "Compare producer and consumer behavior",
+    }]}, snapshot,
         DeepReviewConfig(max_files_per_work_item=1),
     )
     assert split.cross_reference_hints == []
     assert "dropped_invalid_cross_reference_hint" in split.repair_actions
+
+
+def test_repair_keeps_coherent_overlaps_and_remaps_investigations_and_hints(
+    review_repo: tuple[Path, str, str],
+) -> None:
+    snapshot = replace(
+        snapshot_for(review_repo),
+        filter_result=FilterResult(
+            decisions=[], review_paths=["a.py", "b.py", "c.py", "d.py"], context_paths=[],
+        ),
+    )
+    specs = [
+        ("quorum", ["a.py"], 1),
+        ("grace", ["a.py"], 3),
+        ("caller", ["a.py", "b.py"], 2),
+        ("namespace", ["a.py", "c.py"], 4),
+        ("default", ["a.py", "b.py"], 6),
+        ("docs", ["a.py", "b.py", "c.py", "d.py"], 5),
+        ("tests", ["a.py", "b.py"], 7),
+    ]
+    dimensions = []
+    for name, paths, priority in specs:
+        item = dimension(name, paths)
+        item["priority"] = priority
+        item["review_prompt"] = (
+            "Check negative and NaN grace periods through mul_f64."
+            if name == "grace" else f"Investigate {name} behavior."
+        )
+        dimensions.append(item)
+    draft = {
+        "dimensions": dimensions,
+        "cross_reference_hints": [
+            {"dimension_names": ["grace", "caller"], "relation": "compare grace and caller"},
+            {"dimension_names": ["quorum", "grace"], "relation": "check their shared contract"},
+        ],
+    }
+    plan = repair_plan(draft, snapshot, DeepReviewConfig())
+    assert [item.name for item in plan.dimensions] == ["quorum", "caller", "namespace", "docs"]
+    assert plan.dimension_name_map["grace"] == ["quorum"]
+    assert plan.dimension_name_map["default"] == ["caller"]
+    assert plan.dimension_name_map["tests"] == ["caller"]
+    assert [item.source_dimension for item in plan.dimensions[0].investigations] == [
+        "quorum", "grace", "cross_reference_hint",
+    ]
+    assert [item.source_dimension for item in plan.dimensions[1].investigations] == [
+        "caller", "default", "tests",
+    ]
+    assert plan.cross_reference_hints[0].dimension_names == ["quorum", "caller"]
+    reviewer_prompt = build_reviewer_prompt(
+        snapshot=snapshot,
+        dimension=plan.dimensions[0],
+        semantic=SemanticBrief(narrative="initial lead"),
+    )
+    assert "negative and NaN grace periods through mul_f64" in reviewer_prompt
+    assert plan.coverage_complete
+    assert [path for group in plan.dimensions for path in group.target_files].count("a.py") == 4
 
 
 def test_schema_and_repair_do_not_import_agent_modules() -> None:

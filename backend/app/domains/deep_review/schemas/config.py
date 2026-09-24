@@ -12,7 +12,6 @@ class DeepReviewConfig(BaseModel):
     max_final_dimensions: int = Field(default=9, ge=1)
     max_files_per_work_item: int = Field(default=12, ge=1)
     max_turns_planner: int = Field(default=12, ge=1)
-    max_turns_cross_analysis: int = Field(default=12, ge=1)
     max_final_findings: int | None = Field(default=None, ge=1)
     max_diff_bytes: int = Field(default=2_000_000, ge=1)
     max_file_bytes: int = Field(default=1_000_000, ge=1)
@@ -64,3 +63,13 @@ class DeepReviewConfig(BaseModel):
         raise ValueError(
             f"reviewer dimension has {target_file_count} target files; maximum is 16"
         )
+
+    @staticmethod
+    def cross_turn_limit(candidate_count: int) -> int:
+        if candidate_count < 0:
+            raise ValueError("candidate_count cannot be negative")
+        if candidate_count <= 10:
+            return 12
+        if candidate_count <= 30:
+            return 24
+        return 36

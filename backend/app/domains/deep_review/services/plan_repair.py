@@ -6,6 +6,7 @@ from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.pipeline import (
     CrossReferenceHint,
     ReviewDimension,
+    ReviewInvestigation,
     ReviewPlan,
 )
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
@@ -56,11 +57,10 @@ def repair_plan(
     context_candidates = set(legal_context_paths if legal_context_paths is not None else snapshot.allowed_paths)
     secret_filter = DirectoryFilter(config)
     actions: list[str] = []
-    model_dimensions: list[ReviewDimension] = []
+    model_dimensions: list[tuple[int, ReviewDimension]] = []
     lineage: dict[str, set[str]] = {}
-    owner: dict[str, str] = {}
     used_names: set[str] = set()
-    name_counts = Counter(str(item.get("name") or "") for item in plan_draft.get("dimensions") or [])
+    name_counts = Counter(str(item.get("name") or "").strip() for item in plan_draft.get("dimensions") or [])
 
     for original_index, item in enumerate(plan_draft.get("dimensions") or []):
         requested_name = str(item.get("name") or "").strip()
@@ -71,10 +71,9 @@ def repair_plan(
             if path not in allowed:
                 actions.append(f"removed_invalid_target:{base_name}:{path}")
                 continue
-            if path in owner:
-                actions.append(f"removed_duplicate_target:{base_name}:{path}")
+            if path in targets:
+                actions.append(f"removed_repeated_target:{base_name}:{path}")
                 continue
-            owner[path] = base_name
             targets.append(path)
         if not targets:
             actions.append(f"dropped_empty_dimension:{base_name}")
@@ -93,27 +92,58 @@ def repair_plan(
             }
         )
         model_dimensions.append(
-            ReviewDimension(
+            (original_index, ReviewDimension(
                 name=name,
-                review_prompt=str(item.get("review_prompt") or "").strip(),
+                investigations=[ReviewInvestigation(
+                    source_dimension=name,
+                    review_prompt=str(item.get("review_prompt") or "").strip(),
+                    priority=int(item.get("priority") or 5),
+                    rationale=str(item.get("rationale") or ""),
+                )],
                 target_files=targets,
                 context_files=contexts,
                 priority=int(item.get("priority") or 5),
                 source="model",
-            )
+            ))
         )
         lineage[name] = {base_name}
 
-    missing = [path for path in review_paths if path not in owner]
+    # A later investigation is absorbed only when its entire target set is already
+    # covered by one retained dimension. Partial overlaps remain coherent work items.
+    retained: list[ReviewDimension] = []
+    for _, dimension in sorted(model_dimensions, key=lambda pair: (pair[1].priority, pair[0])):
+        target_set = set(dimension.target_files)
+        hosts = [
+            host for host in retained if target_set.issubset(host.target_files)
+        ]
+        if not hosts:
+            retained.append(dimension)
+            continue
+        host = hosts[0]  # retained is already ordered by priority, then Draft position
+        host.investigations.extend(dimension.investigations)
+        host.context_files = sorted(
+            (set(host.context_files) | set(dimension.context_files) | target_set)
+            - set(host.target_files)
+        )
+        host.source = "merged"
+        lineage[host.name].update(lineage[dimension.name])
+        actions.append(f"merged_contained_dimension:{dimension.name}->{host.name}")
+
+    covered = {path for dimension in retained for path in dimension.target_files}
+    missing = [path for path in review_paths if path not in covered]
     if missing:
         fallback_name = _unique_name("fallback", used_names)
-        model_dimensions.append(
+        retained.append(
             ReviewDimension(
                 name=fallback_name,
-                review_prompt=(
+                investigations=[ReviewInvestigation(
+                    source_dimension=fallback_name,
+                    review_prompt=(
                     "Review each target diff for correctness, security, architecture and quality. "
                     "Trace direct callers and contracts, then report only defects caused by this PR."
-                ),
+                    ),
+                    priority=10,
+                )],
                 target_files=missing,
                 context_files=[],
                 priority=10,
@@ -126,7 +156,7 @@ def repair_plan(
 
     dimensions: list[ReviewDimension] = []
     max_unsplit_files = _max_unsplit_files(config)
-    for dimension in model_dimensions:
+    for dimension in retained:
         if len(dimension.target_files) <= max_unsplit_files:
             dimensions.append(dimension)
             continue
@@ -135,7 +165,7 @@ def repair_plan(
             dimensions.append(
                 ReviewDimension(
                     name=name,
-                    review_prompt=dimension.review_prompt,
+                    investigations=[item.model_copy(deep=True) for item in dimension.investigations],
                     target_files=paths,
                     context_files=list(dimension.context_files),
                     priority=dimension.priority,
@@ -151,80 +181,71 @@ def repair_plan(
     max_final = config.max_final_dimensions
     while len(active) > max_final:
         active.sort(key=lambda item: _name_key(item, path_indexes))
-        merged = False
-        for index in range(len(active) - 2, -1, -1):
-            left, right = active[index], active[index + 1]
-            combined_targets = left.target_files + right.target_files
-            if len(combined_targets) > config.max_files_per_work_item:
-                continue
-            name = _unique_name(f"merged_{left.name}_{right.name}", used_names)
-            merged_dimension = ReviewDimension(
-                name=name,
-                review_prompt=(
-                    f"{left.review_prompt}\n\nAdditionally: {right.review_prompt}"
-                )[:2000],
-                target_files=sorted(combined_targets, key=path_indexes.__getitem__),
-                context_files=sorted(
-                    (set(left.context_files) | set(right.context_files)) - set(combined_targets)
-                ),
-                priority=min(left.priority, right.priority),
-                fallback=left.fallback or right.fallback,
-                source="merged",
-            )
-            active[index : index + 2] = [merged_dimension]
-            lineage[name] = lineage[left.name] | lineage[right.name]
-            actions.append(f"merged_dimensions:{left.name}+{right.name}->{name}")
-            merged = True
-            break
-        if not merged:
-            postponed = active.pop()
-            deferred.append(ReviewDimension(**{**postponed.model_dump(), "deferred": True}))
-            actions.append(f"deferred_dimension:{postponed.name}")
+        postponed = active.pop()
+        deferred.append(postponed.model_copy(update={"deferred": True}))
+        actions.append(f"deferred_dimension:{postponed.name}")
 
     dimensions = sorted(active, key=lambda item: _name_key(item, path_indexes)) + list(
         reversed(deferred)
     )
-    final_by_original: dict[str, set[str]] = {}
+    final_by_original: dict[str, list[str]] = {}
     for dimension in dimensions:
         for original in lineage[dimension.name]:
-            final_by_original.setdefault(original, set()).add(dimension.name)
+            mapped = final_by_original.setdefault(original, [])
+            if dimension.name not in mapped:
+                mapped.append(dimension.name)
     hints: list[CrossReferenceHint] = []
+    unresolved_risks: list[str] = []
+    hint_keys: set[tuple[tuple[str, ...], str, str]] = set()
     for hint in plan_draft.get("cross_reference_hints") or []:
         names = list(hint.get("dimension_names") or [])
         if len(set(names)) < 2 or any(
-            name_counts[name] != 1 or len(final_by_original.get(name, set())) != 1
+            name_counts[name] != 1 or len(final_by_original.get(name, [])) != 1
             for name in names
         ):
             actions.append("dropped_invalid_cross_reference_hint")
+            unresolved_risks.append(f"Cross-reference hint could not be mapped: {names}")
             continue
-        mapped_names = list(dict.fromkeys(next(iter(final_by_original[name])) for name in names))
-        if len(mapped_names) < 2:
-            actions.append("dropped_invalid_cross_reference_hint")
+        mapped_names = list(dict.fromkeys(final_by_original[name][0] for name in names))
+        if any(next(dim for dim in dimensions if dim.name == name).deferred for name in mapped_names):
+            actions.append("dropped_deferred_cross_reference_hint")
+            unresolved_risks.append(f"Cross-reference hint deferred: {names}")
             continue
-        hints.append(
-            CrossReferenceHint(
-                dimension_names=mapped_names,
-                relation=str(hint.get("relation") or ""),
-                symbol_or_contract=str(hint.get("symbol_or_contract") or ""),
-            )
-        )
+        relation = str(hint.get("relation") or "")
+        symbol = str(hint.get("symbol_or_contract") or "")
+        if len(mapped_names) == 1:
+            host = next(dim for dim in dimensions if dim.name == mapped_names[0])
+            host.investigations.append(ReviewInvestigation(
+                source_dimension="cross_reference_hint",
+                review_prompt=f"Check the cross-reference relation: {relation}; symbol or contract: {symbol}",
+                priority=10,
+            ))
+            actions.append(f"folded_internal_cross_reference_hint:{host.name}")
+            continue
+        key = (tuple(mapped_names), relation, symbol)
+        if key not in hint_keys:
+            hints.append(CrossReferenceHint(
+                dimension_names=mapped_names, relation=relation, symbol_or_contract=symbol,
+            ))
+            hint_keys.add(key)
 
-    unresolved_risks: list[str] = []
     for dimension in deferred:
         unresolved_risks.append(
             f"Deferred review dimension {dimension.name}: {', '.join(dimension.target_files)}"
         )
-    all_targets = [path for item in dimensions for path in item.target_files]
-    if len(all_targets) != len(set(all_targets)) or set(all_targets) != allowed:
-        raise ValueError("repaired plan must assign exactly one owner to each review file")
+    all_targets = {path for item in dimensions for path in item.target_files}
+    if all_targets != allowed:
+        raise ValueError("repaired plan must cover every review file")
     if any(len(item.target_files) > max_unsplit_files for item in dimensions):
         raise ValueError("repaired plan exceeds the unsplit dimension file limit")
-    coverage_complete = not deferred
+    active_targets = {path for item in active for path in item.target_files}
+    coverage_complete = not deferred and active_targets == allowed and not unresolved_risks
 
     return ReviewPlan(
         summary=str(plan_draft.get("summary") or ""),
         dimensions=dimensions,
         cross_reference_hints=hints,
+        dimension_name_map=final_by_original,
         assumptions=[str(item) for item in (plan_draft.get("assumptions") or [])],
         coverage_complete=coverage_complete,
         repair_actions=actions,

@@ -17,7 +17,7 @@ from app.domains.deep_review.agents.reviewer import (
 )
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
-from app.domains.deep_review.schemas.pipeline import ReviewDimension, ReviewFinding, SemanticBrief
+from app.domains.deep_review.schemas.pipeline import ReviewDimension, ReviewFinding, ReviewInvestigation, SemanticBrief
 from app.domains.deep_review.services.input_builder import ReviewSnapshot, build_review_snapshot
 from app.domains.deep_review.services.output_formatter import (
     build_reviewer_prompt,
@@ -66,7 +66,7 @@ def reviewer_snapshot(tmp_path: Path) -> ReviewSnapshot:
 def dimension(*, fallback: bool = False, prompt: str = "Trace the changed value and its callers.") -> ReviewDimension:
     return ReviewDimension(
         name="value-flow",
-        review_prompt=prompt,
+        investigations=[ReviewInvestigation(source_dimension="value-flow", review_prompt=prompt, priority=1)],
         target_files=["src/a.py"],
         context_files=["src/context.py"],
         fallback=fallback,
@@ -211,6 +211,25 @@ def test_reviewer_user_template_uses_fixed_complete_json_sections(
     diffs = json.loads(diffs_json)
     assert [item["path"] for item in diffs] == ["src/a.py"]
     assert diffs[0]["diff_available"] is True
+
+
+def test_reviewer_renders_merged_investigations_in_one_prompt(
+    reviewer_snapshot: ReviewSnapshot,
+) -> None:
+    merged = dimension().model_copy(deep=True)
+    merged.investigations.append(ReviewInvestigation(
+        source_dimension="grace-period",
+        review_prompt="Check negative and NaN grace periods through the actual branch guards.",
+        priority=3,
+    ))
+    prompt = build_reviewer_prompt(
+        snapshot=reviewer_snapshot,
+        dimension=merged,
+        semantic=SemanticBrief(narrative="initial lead"),
+    )
+    payload = json.loads(prompt.split("<dimension_json>\n", 1)[1].split("\n</dimension_json>", 1)[0])
+    assert "1. [value-flow] Trace" in payload["review_prompt"]
+    assert "2. [grace-period] Check negative and NaN" in payload["review_prompt"]
 
 
 def test_reviewer_includes_all_target_paths_when_diff_budget_truncates(

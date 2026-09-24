@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
+from app.domains.deep_review.schemas.output import PreparationReport
 from app.domains.deep_review.services.service import DeepReviewService
 from app.domains.deep_review.storage.jsonl_repository import JsonlDeepReviewStore
 from app.domains.deep_review.storage.protocol import DeepReviewStoreError
@@ -25,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", required=True, help="Path to a local Git worktree")
     parser.add_argument("--base", required=True, help="Base commit or ref")
     parser.add_argument("--head", required=True, help="Head commit or ref")
-    parser.add_argument("--through", choices=["anatomy", "planning", "review"], default=None)
+    parser.add_argument("--through", choices=["anatomy", "planning", "review", "cross", "final"], default=None)
     parser.add_argument("--title", default="")
     parser.add_argument("--description", default="")
     parser.add_argument("--include", action="append", default=[], metavar="PATTERN")
@@ -46,6 +47,7 @@ def _create_temporary_sqlite_runtime(
     database_path: Path,
     *,
     include_reviewer: bool = False,
+    include_cross: bool = False,
 ):
     # TEMPORARY SQLITE SESSION STORE BEGIN
     # Deep Review prototype only: RuntimeBridge still stores Harness sessions via AuditSessionStore.
@@ -70,6 +72,8 @@ def _create_temporary_sqlite_runtime(
         llm_service.get_config_for(config.planner_role)
         if include_reviewer:
             llm_service.get_config_for(config.reviewer_role)
+        if include_cross:
+            llm_service.get_config_for(config.cross_analysis_role)
         runtime_factory = RuntimeBridgeDeepReviewRuntimeFactory(
             llm_service=llm_service,
             session_factory=session_factory,
@@ -101,11 +105,12 @@ async def _run(args: argparse.Namespace) -> int:
         args.output.parent if args.output is not None else Path(args.store_dir)
     ).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    if requested_stage in {"planning", "review"}:
+    if requested_stage in {"planning", "review", "cross", "final"}:
         runtime_factory, session_engine = _create_temporary_sqlite_runtime(
             config,
             artifact_dir / "sessions.sqlite3",
-            include_reviewer=requested_stage == "review",
+            include_reviewer=requested_stage in {"review", "cross", "final"},
+            include_cross=requested_stage in {"cross", "final"},
         )
     service = DeepReviewService(
         config=config,
@@ -124,28 +129,41 @@ async def _run(args: argparse.Namespace) -> int:
         summary = {
             "status": "completed",
             "run_id": report.run_id,
-            "mode": report.mode,
-            "completed_stage": report.completed_stage,
-            "pipeline_complete": report.pipeline_complete,
-            "base_commit": report.base_commit,
-            "head_commit": report.head_commit,
-            "review_files": len(report.review_paths),
-            "context_files": len(report.context_paths),
-            "dimension_count": len(report.plan.dimensions) if report.plan is not None else 0,
-            "reviewer_dimensions_started": report.reviewer_dimensions_started,
-            "reviewer_dimensions_succeeded": report.reviewer_dimensions_succeeded,
-            "reviewer_dimensions_failed": report.reviewer_dimensions_failed,
-            "reviewer_dimensions_deferred": report.reviewer_dimensions_deferred,
-            "reviewer_dimensions_degraded": report.reviewer_dimensions_degraded,
-            "candidate_count": report.candidate_count,
-            "semantic_source": report.semantic.source if report.semantic is not None else None,
-            "observations": [item.model_dump(mode="json") for item in report.agent_observations],
             "report_path": str(args.output.resolve()) if args.output is not None else None,
             "sessions_database": (
                 str(artifact_dir / "sessions.sqlite3") if session_engine is not None else None
             ),
             "event_store": str(Path(args.store_dir).resolve()),
         }
+        if isinstance(report, PreparationReport):
+            summary.update({
+                "mode": report.mode,
+                "completed_stage": report.completed_stage,
+                "pipeline_complete": report.pipeline_complete,
+                "base_commit": report.base_commit,
+                "head_commit": report.head_commit,
+                "review_files": len(report.review_paths),
+                "context_files": len(report.context_paths),
+                "dimension_count": len(report.plan.dimensions) if report.plan is not None else 0,
+                "reviewer_dimensions_started": report.reviewer_dimensions_started,
+                "reviewer_dimensions_succeeded": report.reviewer_dimensions_succeeded,
+                "reviewer_dimensions_failed": report.reviewer_dimensions_failed,
+                "reviewer_dimensions_deferred": report.reviewer_dimensions_deferred,
+                "reviewer_dimensions_degraded": report.reviewer_dimensions_degraded,
+                "candidate_count": report.candidate_count,
+                "cross_status": report.cross_status,
+                "semantic_source": report.semantic.source if report.semantic is not None else None,
+                "observations": [item.model_dump(mode="json") for item in report.agent_observations],
+            })
+        else:
+            summary.update({
+                "mode": "final", "completed_stage": "final", "pipeline_complete": True,
+                "status": report.status, "finding_count": len(report.findings),
+                "candidate_count": report.candidate_count,
+                "cross_status": report.cross_status,
+                "content_hash": report.content_hash,
+                "metrics": report.metrics.model_dump(mode="json"),
+            })
         (artifact_dir / "summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

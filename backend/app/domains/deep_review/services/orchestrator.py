@@ -11,22 +11,30 @@ from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.schemas.output import (
     AgentObservation,
+    DeepReviewResult,
     PreparationReport,
+    ReviewMetrics,
     ReviewerDimensionReport,
 )
 from app.domains.deep_review.schemas.pipeline import (
     Anatomy,
+    CrossAnalysisResult,
+    EvidencePackage,
     ReviewDimension,
     ReviewFinding,
     ReviewPlan,
     SemanticBrief,
 )
+from app.domains.deep_review.agents.cross_analysis import run_cross_agent
 from app.domains.deep_review.agents.planner import run_planner_agent
 from app.domains.deep_review.agents.reviewer import ReviewerAgentOutcome, run_reviewer_agent
 from app.domains.deep_review.agents.semantic import run_semantic_agent
 from app.domains.deep_review.services.blast_radius import BlastRadiusError, compute_blast_radius
 from app.domains.deep_review.services.diff_engine import build_anatomy
+from app.domains.deep_review.services.evidence import build_evidence_packages
 from app.domains.deep_review.services.input_builder import ReviewSnapshot, build_review_snapshot
+from app.domains.deep_review.services.cross_repair import keep_all_result
+from app.domains.deep_review.services.merge_gate import merge_findings, stable_business_hash
 from app.domains.deep_review.services.runtime import AgentCallResult, DeepReviewRuntimeFactory
 from app.domains.deep_review.storage.protocol import DeepReviewStore, DeepReviewStoreError
 from app.domains.deep_review.tools.catalog import build_review_tools
@@ -82,7 +90,8 @@ class PreparationOrchestrator:
         review_input: ReviewInput,
         *,
         through: str,
-    ) -> PreparationReport:
+    ) -> PreparationReport | DeepReviewResult:
+        run_started = time.monotonic()
         context = await self._run_input_stage(run_id, review_input)
         await self._run_blast_radius_stage(run_id, context)
         anatomy = await self._run_anatomy_stage(run_id, context)
@@ -93,16 +102,40 @@ class PreparationOrchestrator:
         reviewer_reports: list[ReviewerDimensionReport] = []
         candidates = []
         reviewer_counts: dict[str, int] = {}
-        if through in {"planning", "review"}:
+        if through in {"planning", "review", "cross", "final"}:
             semantic, semantic_observation = await self._run_semantic_stage(run_id, context)
             plan, plan_observation = await self._run_planning_stage(run_id, context, semantic)
             observations = [semantic_observation, plan_observation]
-        if through == "review":
+        if through in {"review", "cross", "final"}:
             assert semantic is not None and plan is not None and context.anatomy is not None
             reviewer_reports, candidates, reviewer_observations, reviewer_counts = (
                 await self._run_reviewer_stage(run_id, context, plan, semantic)
             )
             observations.extend(reviewer_observations)
+
+        cross_result: CrossAnalysisResult | None = None
+        cross_status: Literal["completed", "partial", "skipped"] | None = None
+        cross_diagnostics: list[str] = []
+        evidence: dict[int, EvidencePackage] = {}
+        if through in {"cross", "final"}:
+            assert semantic is not None and plan is not None
+            evidence, evidence_diagnostics = await self._run_evidence_stage(run_id, context, candidates)
+            context.diagnostics.extend(evidence_diagnostics)
+            cross_result, cross_status, cross_diagnostics, cross_observation = (
+                await self._run_cross_stage(
+                    run_id, context, semantic, plan, reviewer_reports, candidates, evidence,
+                )
+            )
+            if cross_observation is not None:
+                observations.append(cross_observation)
+        if through == "final":
+            assert plan is not None and cross_result is not None and cross_status is not None
+            return self._run_final_stage(
+                run_id=run_id, context=context, plan=plan, reviewers=reviewer_reports,
+                candidates=candidates, evidence=evidence, cross=cross_result,
+                cross_status=cross_status, cross_diagnostics=cross_diagnostics,
+                observations=observations, run_started=run_started,
+            )
 
         decisions = context.snapshot.filter_result.decisions
         report = PreparationReport(
@@ -125,6 +158,9 @@ class PreparationOrchestrator:
             reviewers=reviewer_reports,
             candidates=candidates,
             candidate_count=len(candidates),
+            cross=cross_result,
+            cross_status=cross_status,
+            cross_diagnostics=cross_diagnostics,
             **reviewer_counts,
             agent_observations=observations,
         )
@@ -290,6 +326,181 @@ class PreparationOrchestrator:
             raise
         except Exception as exc:
             self._stage_failed(run_id, "reviewer", exc, started)
+            raise
+
+    async def _run_evidence_stage(
+        self, run_id: str, context: DeepReviewRunContext, candidates: list[ReviewFinding],
+    ) -> tuple[dict[int, EvidencePackage], list[str]]:
+        self._stage_started(run_id, "evidence")
+        started = time.monotonic()
+        try:
+            packages = await build_evidence_packages(
+                candidates, context.snapshot, context.blast_radius, self.config,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._stage_failed(run_id, "evidence", exc, started)
+            raise
+        empty = [
+            index for index in range(len(candidates))
+            if index not in packages or not any((
+                packages[index].primary_code, packages[index].diff_hunk,
+                packages[index].caller_snippets, packages[index].cross_ref_snippets,
+                packages[index].related_code,
+            ))
+        ]
+        diagnostics = [f"evidence_empty:{index}" for index in empty]
+        truncated = [index for index, package in packages.items() if package.truncated]
+        self.store.append(run_id, "evidence_completed", {
+            "candidate_count": len(candidates), "evidence_count": len(packages),
+            "empty_indices": empty, "truncated_indices": truncated,
+        })
+        self._stage_completed(
+            run_id, "evidence", started, candidate_count=len(candidates),
+            evidence_empty=len(empty), evidence_truncated=len(truncated),
+        )
+        return packages, diagnostics
+
+    async def _run_cross_stage(
+        self,
+        run_id: str,
+        context: DeepReviewRunContext,
+        semantic: SemanticBrief,
+        plan: ReviewPlan,
+        reviewers: list[ReviewerDimensionReport],
+        candidates: list[ReviewFinding],
+        evidence: dict[int, EvidencePackage],
+    ) -> tuple[CrossAnalysisResult, Literal["completed", "partial", "skipped"], list[str], AgentObservation | None]:
+        self._stage_started(run_id, "cross")
+        started = time.monotonic()
+        if not candidates and not plan.cross_reference_hints:
+            result = CrossAnalysisResult(summary="No candidates or outstanding cross-dimension hints.")
+            self.store.append(run_id, "cross_skipped", {"reason": "no_candidates_or_hints"})
+            self._stage_completed(run_id, "cross", started, status="skipped")
+            return result, "skipped", [], None
+        assert context.anatomy is not None and self.runtime_factory is not None
+        try:
+            async with asyncio.timeout(self.config.max_duration_seconds):
+                outcome = await run_cross_agent(
+                    self.runtime_factory,
+                    snapshot=context.snapshot,
+                    anatomy=context.anatomy,
+                    semantic=semantic,
+                    plan=plan,
+                    reviewers=reviewers,
+                    candidates=candidates,
+                    evidence=evidence,
+                    config=self.config,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Transcript persistence failures are not a trustworthy completed run.
+            from app.domains.deep_review.agents.reviewer import _is_persistence_failure
+
+            if _is_persistence_failure(exc):
+                self._stage_failed(run_id, "cross", exc, started)
+                raise
+            fallback_reason = f"cross_failed:{type(exc).__name__}"
+            result = keep_all_result(candidates, fallback_reason)
+            diagnostics = [fallback_reason]
+            self.store.append(run_id, "cross_failed", {
+                "error": fallback_reason, "candidate_count": len(candidates),
+            })
+            self._stage_completed(run_id, "cross", started, status="partial")
+            return result, "partial", diagnostics, None
+
+        call = outcome.call
+        observation = _agent_observation("cross", call)
+        self._log_agent_observation(observation)
+        if call.value is None:
+            reason = call.error or "cross_harness_incomplete"
+            result = keep_all_result(candidates, reason)
+            diagnostics = [f"cross_failed:{reason}"]
+            self._append_agent_event(
+                run_id, "cross_failed", observation,
+                candidate_count=len(candidates), diagnostics=diagnostics,
+            )
+            self._stage_completed(run_id, "cross", started, status="partial")
+            return result, "partial", diagnostics, observation
+
+        status: Literal["completed", "partial"] = "partial" if outcome.partial else "completed"
+        self._append_agent_event(
+            run_id, "cross_completed", observation,
+            status=status, candidate_count=len(candidates),
+            result=call.value.model_dump(mode="json"), diagnostics=outcome.diagnostics,
+        )
+        self._stage_completed(
+            run_id, "cross", started, status=status,
+            kept=sum(item.result == "keep" for item in call.value.decisions),
+            dropped=sum(item.result == "drop" for item in call.value.decisions),
+            new_findings=len(call.value.new_findings),
+        )
+        return call.value, status, outcome.diagnostics, observation
+
+    def _run_final_stage(
+        self, *, run_id: str, context: DeepReviewRunContext,
+        plan: ReviewPlan, reviewers: list[ReviewerDimensionReport],
+        candidates: list[ReviewFinding], evidence: dict[int, EvidencePackage],
+        cross: CrossAnalysisResult, cross_status: Literal["completed", "partial", "skipped"],
+        cross_diagnostics: list[str], observations: list[AgentObservation],
+        run_started: float,
+    ) -> DeepReviewResult:
+        self._stage_started(run_id, "final")
+        started = time.monotonic()
+        try:
+            merged = merge_findings(candidates, cross, evidence, context.snapshot, self.config)
+            coverage_gaps = [
+                f"Reviewer dimension {item.dimension_name}: {item.status}"
+                for item in reviewers if item.status != "succeeded"
+            ]
+            risks = list(dict.fromkeys(
+                [*plan.unresolved_risks, *cross.unresolved_risks, *coverage_gaps]
+            ))
+            partial = (
+                cross_status == "partial" or not plan.coverage_complete
+                or bool(coverage_gaps) or bool(cross_diagnostics)
+            )
+            status: Literal["completed", "partial"] = "partial" if partial else "completed"
+            diagnostics = [*context.diagnostics, *cross_diagnostics, *merged.diagnostics]
+            metrics = _review_metrics(
+                context=context, plan=plan, observations=observations,
+                elapsed_ms=max(0, int((time.monotonic() - run_started) * 1000)),
+            )
+            result = DeepReviewResult(
+                run_id=run_id, status=status, findings=merged.findings,
+                summary=cross.summary, unresolved_risks=risks,
+                metrics=metrics, candidate_count=len(candidates),
+                cross_status=cross_status, diagnostics=diagnostics,
+                content_hash=stable_business_hash(merged.findings, cross.summary, risks, status),
+            )
+            self.store.append(run_id, "final_result", {
+                "status": status, "candidate_count": len(candidates),
+                "finding_count": len(result.findings),
+                "dropped_by_cross": merged.dropped_by_cross,
+                "exact_duplicates": merged.exact_duplicates,
+                "filtered": merged.filtered,
+                "content_hash": result.content_hash,
+                "findings": [item.model_dump(mode="json") for item in result.findings],
+                "scores": [
+                    {"score": item.score, "evidence_completeness": item.evidence_completeness,
+                     "diff_proximity": item.diff_proximity}
+                    for item in merged.scores
+                ],
+            })
+            self._stage_completed(
+                run_id, "final", started, status=status,
+                candidate_count=len(candidates), finding_count=len(result.findings),
+            )
+            self.store.append(run_id, "run_completed", {
+                "status": status, "content_hash": result.content_hash,
+            })
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._stage_failed(run_id, "final", exc, started)
             raise
 
     async def _execute_reviewers(
@@ -577,7 +788,7 @@ class PreparationOrchestrator:
 
 
 def _agent_observation(
-    stage: Literal["semantic", "planning", "reviewer"],
+    stage: Literal["semantic", "planning", "reviewer", "cross"],
     call: AgentCallResult,
     dimension_name: str | None = None,
 ) -> AgentObservation:
@@ -588,6 +799,39 @@ def _agent_observation(
         usage=call.usage,
         cost_usd=call.cost_usd,
         error=call.error,
+    )
+
+
+def _review_metrics(
+    *, context: DeepReviewRunContext, plan: ReviewPlan,
+    observations: list[AgentObservation], elapsed_ms: int,
+) -> ReviewMetrics:
+    def token(item: AgentObservation, name: str, alternate: str | None = None) -> int | None:
+        usage = item.usage or {}
+        value = usage.get(name)
+        if value is None and alternate is not None:
+            value = usage.get(alternate)
+        return value if isinstance(value, int) and value >= 0 else None
+
+    totals = [token(item, "total_tokens") for item in observations]
+    inputs = [token(item, "input_tokens", "prompt_tokens") for item in observations]
+    outputs = [token(item, "output_tokens", "completion_tokens") for item in observations]
+    costs = [item.cost_usd for item in observations]
+    return ReviewMetrics(
+        reviewed_files=len(context.snapshot.review_paths),
+        excluded_files=sum(
+            item.action.value == "exclude"
+            for item in context.snapshot.filter_result.decisions
+        ),
+        dimensions=len(plan.dimensions),
+        model_calls=len(observations),
+        total_tokens=sum(value for value in totals if value is not None),
+        input_tokens=sum(inputs) if inputs and all(value is not None for value in inputs) else None,
+        output_tokens=sum(outputs) if outputs and all(value is not None for value in outputs) else None,
+        cost_usd=sum(costs) if costs and all(value is not None for value in costs) else None,
+        usage_complete=bool(totals) and all(value is not None for value in totals),
+        cost_available=bool(costs) and all(value is not None for value in costs),
+        duration_ms=elapsed_ms,
     )
 
 

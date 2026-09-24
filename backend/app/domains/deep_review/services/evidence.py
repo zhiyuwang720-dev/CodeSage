@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import re
+import subprocess
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.pipeline import DiffHunk, EvidencePackage, ReviewFinding
 from app.domains.deep_review.services.diff_engine import parse_hunks
 from app.domains.deep_review.services.directory_filter import DirectoryFilter, FilterError, normalize_path
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
-from app.domains.deep_review.services.git_runner import BoundedGitResult, run_git_output_bounded
+from app.domains.deep_review.services.git_runner import BoundedGitResult
 
 
 class EvidenceError(RuntimeError):
     pass
 
 
-EVIDENCE_CONCURRENCY = 8
+# Git for Windows can stall when eight evidence subprocesses start at once.
+# Cross may still inspect missing context with its four bounded read tools.
+EVIDENCE_CONCURRENCY = 4
 
 async def _run_git(
     repo_path: str,
@@ -24,18 +27,44 @@ async def _run_git(
     timeout: int,
     max_bytes: int,
 ) -> BoundedGitResult:
-    try:
-        return await run_git_output_bounded(
-            repo_path,
-            args,
-            max_bytes=max_bytes,
-            timeout_seconds=timeout,
+    # Git for Windows may leave asyncio pipe readers waiting after a large
+    # grep is cancelled. A bounded synchronous subprocess in a worker thread
+    # gives this deterministic stage a reliable timeout and reaps the child.
+    def run() -> BoundedGitResult:
+        try:
+            result = subprocess.run(
+                ["git", "-C", repo_path, *args], capture_output=True,
+                timeout=timeout, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise EvidenceError(str(exc)) from exc
+        stdout = result.stdout[:max_bytes]
+        stderr = result.stderr[:max_bytes]
+        return BoundedGitResult(
+            result.returncode,
+            stdout.decode("utf-8", "replace"),
+            stderr.decode("utf-8", "replace"),
+            len(result.stdout) > max_bytes or len(result.stderr) > max_bytes,
         )
-    except (OSError, TimeoutError, asyncio.TimeoutError) as exc:
-        raise EvidenceError(str(exc)) from exc
+
+    return await asyncio.to_thread(run)
 
 
 async def _read_head(snapshot: ReviewSnapshot, path: str, config: DeepReviewConfig) -> str:
+    # The size preflight keeps subprocess.run from buffering an oversized blob.
+    size = await _run_git(
+        snapshot.input.repo_path,
+        ["cat-file", "-s", f"{snapshot.head_commit}:{path}"],
+        timeout=config.tool_timeout_seconds,
+        max_bytes=64,
+    )
+    if size.returncode != 0 or size.truncated:
+        return ""
+    try:
+        if int(size.stdout.strip()) > config.max_file_bytes:
+            return ""
+    except ValueError:
+        return ""
     result = await _run_git(
         snapshot.input.repo_path,
         ["show", f"{snapshot.head_commit}:{path}"],
@@ -78,10 +107,26 @@ def _matching_hunk(hunks: list[DiffHunk], line: int | None) -> str:
 
 def _identifiers(finding: ReviewFinding) -> list[str]:
     text = "\n".join((finding.title, finding.body, finding.evidence))
-    candidates = re.findall(r"`([A-Za-z_][A-Za-z0-9_]{2,})`", text)
-    candidates.extend(re.findall(r"\b([a-z_][a-z0-9_]{2,})\s*\(", text))
-    common = {"the", "and", "for", "with", "return", "value", "error", "true", "false", "none"}
-    return list(dict.fromkeys(item for item in candidates if item.lower() not in common))[:6]
+    quoted = re.findall(r"`([A-Za-z_][A-Za-z0-9_]{2,})`", text)
+    called = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\(", text)
+    candidates = [*quoted, *called]
+    # These generic tokens made git grep scan very large repositories and did
+    # not identify a meaningful caller. The Cross Harness can search a concrete
+    # symbol itself when a candidate has no useful identifier here.
+    common = {
+        "the", "and", "for", "with", "return", "value", "error", "true", "false",
+        "none", "nil", "len", "int", "str", "bool", "break", "continue", "range",
+        "batch", "tensor", "position", "positions", "output", "outputs", "sequence",
+        "sequences", "result", "data", "index", "line", "code", "check",
+        "seqs", "func", "bytes", "hold", "window", "models", "append",
+        "forward", "input", "inputs", "cache", "slice", "slices", "source",
+        "call", "calls", "make", "type", "field", "file", "files", "empty",
+        "length", "size", "count", "guard", "unsafe", "current", "other",
+    }
+    return list(dict.fromkeys(
+        item for item in candidates
+        if len(item) >= 6 and item.casefold() not in common
+    ))[:6]
 
 
 async def _search_head(
@@ -91,14 +136,14 @@ async def _search_head(
     *,
     path_prefix: str | None = None,
 ) -> list[tuple[str, int, str]]:
-    args = ["grep", "-n", "-I", "-F", "-e", query, snapshot.head_commit]
+    args = ["grep", "-n", "-I", "-F", "-m", "2", "-e", query, snapshot.head_commit]
     if path_prefix:
         args.extend(["--", path_prefix])
     result = await _run_git(
         snapshot.input.repo_path,
         args,
         timeout=config.tool_timeout_seconds,
-        max_bytes=config.max_tool_output_bytes,
+        max_bytes=min(config.max_tool_output_bytes, 16_000),
     )
     output = result.stdout
     results: list[tuple[str, int, str]] = []
@@ -123,7 +168,7 @@ async def _caller_snippets(
     snippets: list[str] = []
     secret_filter = DirectoryFilter(config)
     per_snippet = max(250, config.max_evidence_bytes_per_finding // 8)
-    for identifier in _identifiers(finding):
+    for identifier in _identifiers(finding)[:3]:
         for raw_path, number, _text in await _search_head(snapshot, identifier, config):
             try:
                 path = normalize_path(raw_path)
@@ -140,7 +185,7 @@ async def _caller_snippets(
             body = "\n".join(f"{index + 1}|{lines[index]}" for index in range(start, end))
             snippets.append(f"{path}:{number}\n{_clip_bytes(body, per_snippet)}")
             break
-        if len(snippets) >= 5:
+        if len(snippets) >= 2:
             break
     return snippets
 
@@ -189,10 +234,11 @@ def _fit_evidence_budget(
     finding_index: int,
     max_bytes: int,
 ) -> EvidencePackage:
-    value = package.model_copy()
+    value = package.model_copy(deep=True)
     for _attempt in range(32):
         if len(value.model_dump_json().encode("utf-8")) <= max_bytes:
             return value
+        value.truncated = True
         if value.caller_snippets:
             value.caller_snippets.pop()
             continue
@@ -217,7 +263,7 @@ def _fit_evidence_budget(
             )
             continue
         break
-    return EvidencePackage(finding_index=finding_index)
+    return EvidencePackage(finding_index=finding_index, truncated=True)
 
 
 async def build_evidence_packages(
@@ -244,17 +290,18 @@ async def build_evidence_packages(
         except Exception:
             return EvidencePackage(finding_index=index)
 
+        matched_hunk = _matching_hunk(hunks_by_path.get(path, []), finding.line_start)
+        primary = _primary_code(content, finding.line_start, config)
+        hunk_limit = config.max_evidence_bytes_per_finding // 4
         package = EvidencePackage(
             finding_index=index,
-            primary_code=_primary_code(content, finding.line_start, config),
+            primary_code=primary,
             caller_snippets=callers,
             cross_ref_snippets=[],
-            diff_hunk=_clip_bytes(
-                _matching_hunk(hunks_by_path.get(path, []), finding.line_start),
-                config.max_evidence_bytes_per_finding // 4,
-            ),
-            import_context=_import_context(content)[:1000],
+            diff_hunk=_clip_bytes(matched_hunk, hunk_limit),
+            import_context=_clip_bytes(_import_context(content), 1000),
             related_code=related,
+            truncated=len(matched_hunk.encode("utf-8")) > hunk_limit,
         )
         return _fit_evidence_budget(
             package,

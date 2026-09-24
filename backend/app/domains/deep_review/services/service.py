@@ -11,7 +11,7 @@ from app.domains.deep_review.services.runtime import DeepReviewRuntimeFactory
 from app.domains.deep_review.storage.protocol import DeepReviewStore, DeepReviewStoreError
 
 
-SUPPORTED_THROUGH_STAGES = {"anatomy", "planning", "review"}
+SUPPORTED_THROUGH_STAGES = {"anatomy", "planning", "review", "cross", "final"}
 
 
 class DeepReviewService:
@@ -39,7 +39,7 @@ class DeepReviewService:
             raise ValueError(
                 f"unsupported --through stage: {requested_stage!r}; supported stages: {supported}"
             )
-        if requested_stage in {"planning", "review"} and self.runtime_factory is None:
+        if requested_stage in {"planning", "review", "cross", "final"} and self.runtime_factory is None:
             raise ValueError(f"{requested_stage} requires a deep review runtime factory")
 
         run_id = f"{uuid.uuid4().hex[:12]}"
@@ -47,7 +47,7 @@ class DeepReviewService:
             self.store.append(
                 run_id,
                 "run_started",
-                {"mode": "preparation", "through": requested_stage},
+                {"mode": "final" if requested_stage == "final" else "preparation", "through": requested_stage},
             )
         except DeepReviewStoreError:
             raise

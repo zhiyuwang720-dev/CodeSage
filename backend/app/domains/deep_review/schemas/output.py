@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
-from .pipeline import ChangeCluster, DiffStats, ReviewFinding, ReviewPlan, SemanticBrief
+from .pipeline import ChangeCluster, CrossAnalysisResult, DiffStats, ReviewFinding, ReviewPlan, SemanticBrief
 
 
 class ReviewMetrics(BaseModel):
@@ -28,11 +28,15 @@ class DeepReviewResult(BaseModel):
     summary: str = ""
     unresolved_risks: list[str] = Field(default_factory=list)
     metrics: ReviewMetrics
+    content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    candidate_count: int = Field(default=0, ge=0)
+    cross_status: Literal["completed", "partial", "skipped"] = "skipped"
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class AgentObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stage: Literal["semantic", "planning", "reviewer"]
+    stage: Literal["semantic", "planning", "reviewer", "cross"]
     dimension_name: str | None = None
     session_id: str | None = None
     usage: dict[str, Any] | None = None
@@ -59,7 +63,7 @@ class PreparationReport(BaseModel):
     run_id: str = Field(min_length=1)
     mode: Literal["preparation"]
     pipeline_complete: Literal[False]
-    completed_stage: Literal["anatomy", "planning", "review"]
+    completed_stage: Literal["anatomy", "planning", "review", "cross"]
     base_commit: str = Field(min_length=7)
     head_commit: str = Field(min_length=7)
     merge_base: str = Field(min_length=7)
@@ -75,6 +79,9 @@ class PreparationReport(BaseModel):
     reviewers: list[ReviewerDimensionReport] = Field(default_factory=list)
     candidates: list[ReviewFinding] = Field(default_factory=list)
     candidate_count: int = Field(default=0, ge=0)
+    cross: CrossAnalysisResult | None = None
+    cross_status: Literal["completed", "partial", "skipped"] | None = None
+    cross_diagnostics: list[str] = Field(default_factory=list)
     reviewer_dimensions_started: int = Field(default=0, ge=0)
     reviewer_dimensions_succeeded: int = Field(default=0, ge=0)
     reviewer_dimensions_failed: int = Field(default=0, ge=0)

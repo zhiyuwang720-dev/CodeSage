@@ -68,10 +68,18 @@ class Anatomy(BaseModel):
     summary: str = ""
 
 
+class ReviewInvestigation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_dimension: str
+    review_prompt: str
+    priority: int = Field(ge=1, le=10)
+    rationale: str = ""
+
+
 class ReviewDimension(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
-    review_prompt: str
+    investigations: list[ReviewInvestigation] = Field(min_length=1)
     target_files: list[str] = Field(default_factory=list)
     context_files: list[str] = Field(default_factory=list)
     priority: int = Field(default=1, ge=1, le=10)
@@ -85,6 +93,7 @@ class ReviewPlan(BaseModel):
     summary: str = ""
     dimensions: list[ReviewDimension] = Field(default_factory=list)
     cross_reference_hints: list[CrossReferenceHint] = Field(default_factory=list)
+    dimension_name_map: dict[str, list[str]] = Field(default_factory=dict)
     assumptions: list[str] = Field(default_factory=list)
     coverage_complete: bool = False
     repair_actions: list[str] = Field(default_factory=list)
@@ -138,3 +147,4 @@ class EvidencePackage(BaseModel):
     diff_hunk: str = ""
     import_context: str = ""
     related_code: str = ""
+    truncated: bool = False

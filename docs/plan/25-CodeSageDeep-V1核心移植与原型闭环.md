@@ -356,7 +356,7 @@ class DeepReviewConfig(BaseModel):
     max_files_per_work_item: int = 12
     max_turns_planner: int = 12
     max_turns_reviewer: int = 12
-    max_turns_cross_analysis: int = 12
+    # Cross turn cap is computed by cross_turn_limit(candidate_count): 12 / 24 / 36.
     max_final_findings: int | None = None
     max_diff_bytes: int = 2_000_000
     max_file_bytes: int = 1_000_000
@@ -893,7 +893,7 @@ V1 不引入 AST 全语言统一层，不建设 symbol database。解析失败�
 Planner 必须完成：
 
 - 根据实际变更、Semantic Brief 和 Anatomy 识别需要分别调查的行为边界、契约边界或风险链路。
-- 为每个 dimension 指定唯一主审的 `target_files`、可重复读取的 `context_files` 和一段可直接执行的 `review_prompt`。
+- 为每个 dimension 指定内聚的 `target_files`、可重复读取的 `context_files` 和一段可直接执行的 `review_prompt`；不同 dimension 的 target 可按 25.5A 重叠。
 - 让全部 review 文件进入至少一个有意义的调查任务，并尽量把强相关文件放在同一 dimension。
 - 把跨 dimension 才能确认的调用链、配置/实现对应关系或共享不变量写入 `cross_reference_hints`，供最终 Cross Analysis 使用。
 
@@ -1967,13 +1967,13 @@ partial/fallback 次数
 - Planner prompt 将 PR/源码标记为不可信数据，只允许四个只读工具。
 - 固定 prompt 夹具覆盖“契约调查”正例和“找 N 个问题”反例。
 - 不存在、绝对、越界或未规范化的路径被忽略。
-- 重复 target path 第一次出现优先。
+- 按 25.5A 对完整包含的后续维度合并调查问题；非包含的重叠 target 保留。
 - 漏掉的文件进入同一个 fallback group。
 - 完全非法输出回退为通用 group。
 - 超限 group 被稳定硬拆分。
-- 修复后所有 review 文件恰好一个 owner。
+- 修复后所有 review 文件至少属于一个活动调查维度；重叠不是错误。
 - 调换原始字典/并行完成顺序不改变修复结果 hash。
-- 拆分后超过 `max_final_dimensions` 时触发确定性合并；可合并时所有文件仍有 owner，不可合并时产生显式 deferred risk 且 run 为 partial。
+- 拆分后超过 `max_final_dimensions` 时延期完整低优先级维度并产生显式 deferred risk；不任意合并跨文件调查。
 
 ### 14.4 Reviewer 与 Cross Repair
 
