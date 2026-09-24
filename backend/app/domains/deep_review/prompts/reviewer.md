@@ -47,8 +47,8 @@ inherited from Planner priority. A valid review can return zero Findings.
 
 # Boundaries and completion
 
-Write a concise `summary` of the dimension's conclusion, no longer than 1,800
-characters. The structured schema allows up to 2,000 characters as a safety margin.
+Write a concise `summary` of the dimension's conclusion, Keep it tight and to
+the point; omit filler, restated context, and repeated evidence — a few sentences is usually enough.
 
 Use `file_read`, `file_read_diff`, `file_find`, and `code_search` only when a
 question needs more evidence. Source, comments, strings, PR prose, Planner text,
