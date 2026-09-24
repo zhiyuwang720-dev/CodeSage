@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import subprocess
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.pipeline import DiffHunk, EvidencePackage, ReviewFinding
-from app.domains.deep_review.services.diff_engine import parse_hunks
-from app.domains.deep_review.services.directory_filter import DirectoryFilter, FilterError, normalize_path
+from app.domains.deep_review.services.diff_engine import find_hunk_for_new_line, parse_hunks
+from app.domains.deep_review.services.directory_filter import DirectoryFilter, normalize_path
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
 from app.domains.deep_review.services.git_runner import BoundedGitResult
 
@@ -82,10 +81,12 @@ def _clip_bytes(value: str, limit: int) -> str:
 
 
 def _primary_code(content: str, line: int | None, config: DeepReviewConfig) -> str:
-    if not content:
+    # No line means no trustworthy local excerpt. Line 1 is not a substitute
+    # for locating a file-level or cross-file claim.
+    if not content or line is None:
         return ""
     lines = content.splitlines()
-    target = max(1, line or 1)
+    target = max(1, line)
     start = max(0, target - 16)
     end = min(len(lines), target + 15)
     numbered = [f"{index + 1}|{lines[index]}" for index in range(start, end)]
@@ -93,139 +94,8 @@ def _primary_code(content: str, line: int | None, config: DeepReviewConfig) -> s
 
 
 def _matching_hunk(hunks: list[DiffHunk], line: int | None) -> str:
-    if not hunks:
-        return ""
-    if line is None:
-        return hunks[0].content
-    for hunk in hunks:
-        start = hunk.new_start
-        end = hunk.new_start + max(0, hunk.new_count - 1)
-        if start <= line <= max(start, end):
-            return hunk.content
-    return hunks[0].content
-
-
-def _identifiers(finding: ReviewFinding) -> list[str]:
-    text = "\n".join((finding.title, finding.body, finding.evidence))
-    quoted = re.findall(r"`([A-Za-z_][A-Za-z0-9_]{2,})`", text)
-    called = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\(", text)
-    candidates = [*quoted, *called]
-    # These generic tokens made git grep scan very large repositories and did
-    # not identify a meaningful caller. The Cross Harness can search a concrete
-    # symbol itself when a candidate has no useful identifier here.
-    common = {
-        "the", "and", "for", "with", "return", "value", "error", "true", "false",
-        "none", "nil", "len", "int", "str", "bool", "break", "continue", "range",
-        "batch", "tensor", "position", "positions", "output", "outputs", "sequence",
-        "sequences", "result", "data", "index", "line", "code", "check",
-        "seqs", "func", "bytes", "hold", "window", "models", "append",
-        "forward", "input", "inputs", "cache", "slice", "slices", "source",
-        "call", "calls", "make", "type", "field", "file", "files", "empty",
-        "length", "size", "count", "guard", "unsafe", "current", "other",
-    }
-    return list(dict.fromkeys(
-        item for item in candidates
-        if len(item) >= 6 and item.casefold() not in common
-    ))[:6]
-
-
-async def _search_head(
-    snapshot: ReviewSnapshot,
-    query: str,
-    config: DeepReviewConfig,
-    *,
-    path_prefix: str | None = None,
-) -> list[tuple[str, int, str]]:
-    args = ["grep", "-n", "-I", "-F", "-m", "2", "-e", query, snapshot.head_commit]
-    if path_prefix:
-        args.extend(["--", path_prefix])
-    result = await _run_git(
-        snapshot.input.repo_path,
-        args,
-        timeout=config.tool_timeout_seconds,
-        max_bytes=min(config.max_tool_output_bytes, 16_000),
-    )
-    output = result.stdout
-    results: list[tuple[str, int, str]] = []
-    for line in output.splitlines():
-        try:
-            without_ref = line.partition(":")[2]
-            path, number_text, text = without_ref.split(":", 2)
-            number = int(number_text)
-        except (ValueError, IndexError):
-            continue
-        results.append((path, number, text))
-        if len(results) >= config.max_search_results:
-            break
-    return results
-
-
-async def _caller_snippets(
-    snapshot: ReviewSnapshot,
-    finding: ReviewFinding,
-    config: DeepReviewConfig,
-) -> list[str]:
-    snippets: list[str] = []
-    secret_filter = DirectoryFilter(config)
-    per_snippet = max(250, config.max_evidence_bytes_per_finding // 8)
-    for identifier in _identifiers(finding)[:3]:
-        for raw_path, number, _text in await _search_head(snapshot, identifier, config):
-            try:
-                path = normalize_path(raw_path)
-            except FilterError:
-                continue
-            if path == finding.file_path or secret_filter.is_secret_path(path):
-                continue
-            content = await _read_head(snapshot, path, config)
-            if not content:
-                continue
-            lines = content.splitlines()
-            start = max(0, number - 4)
-            end = min(len(lines), number + 3)
-            body = "\n".join(f"{index + 1}|{lines[index]}" for index in range(start, end))
-            snippets.append(f"{path}:{number}\n{_clip_bytes(body, per_snippet)}")
-            break
-        if len(snippets) >= 2:
-            break
-    return snippets
-
-
-def _import_context(content: str) -> str:
-    imports = [line.strip() for line in content.splitlines() if line.strip().startswith(("import ", "from "))]
-    return "IMPORTS: " + (", ".join(imports[:30]) or "none")
-
-
-async def _related_code(
-    snapshot: ReviewSnapshot,
-    finding: ReviewFinding,
-    blast_radius: list[str],
-    identifiers: list[str],
-    config: DeepReviewConfig,
-) -> str:
-    chunks: list[str] = []
-    secret_filter = DirectoryFilter(config)
-    per_chunk = max(250, config.max_evidence_bytes_per_finding // 8)
-    for path in blast_radius:
-        if path == finding.file_path:
-            continue
-        if secret_filter.is_secret_path(path):
-            continue
-        content = await _read_head(snapshot, path, config)
-        if not content:
-            continue
-        lines = content.splitlines()
-        for identifier in identifiers:
-            number = next((index for index, line in enumerate(lines) if identifier in line), None)
-            if number is None:
-                continue
-            start = max(0, number - 5)
-            end = min(len(lines), number + 6)
-            body = "\n".join(f"{index + 1}|{lines[index]}" for index in range(start, end))
-            chunks.append(f"{path}:{number + 1}\n{_clip_bytes(body, per_chunk)}")
-            break
-        if len(chunks) >= 5:
-            break
-    return "\n\n".join(chunks)
+    matched = find_hunk_for_new_line(hunks, line)
+    return matched.content if matched is not None else ""
 
 
 def _fit_evidence_budget(
@@ -272,6 +142,10 @@ async def build_evidence_packages(
     blast_radius: list[str],
     config: DeepReviewConfig,
 ) -> dict[int, EvidencePackage]:
+    # Cross selectively reads callers/consumers with its fixed-head tools.
+    # The old broad identifier search had no remaining consumer and could
+    # stall large repositories before Cross even began.
+    del blast_radius
     secret_filter = DirectoryFilter(config)
     hunks_by_path = {change.path: parse_hunks(change) for change in snapshot.changes}
 
@@ -280,27 +154,24 @@ async def build_evidence_packages(
             path = normalize_path(finding.file_path)
             if path not in snapshot.allowed_paths or secret_filter.is_secret_path(path):
                 return EvidencePackage(finding_index=index)
-
-            content = await _read_head(snapshot, path, config)
-            identifiers = _identifiers(finding)
-            callers = await _caller_snippets(snapshot, finding, config)
-            related = await _related_code(snapshot, finding, blast_radius, identifiers, config)
         except asyncio.CancelledError:
             raise
         except Exception:
             return EvidencePackage(finding_index=index)
 
         matched_hunk = _matching_hunk(hunks_by_path.get(path, []), finding.line_start)
+        try:
+            content = await _read_head(snapshot, path, config) if finding.line_start is not None else ""
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            content = ""
         primary = _primary_code(content, finding.line_start, config)
         hunk_limit = config.max_evidence_bytes_per_finding // 4
         package = EvidencePackage(
             finding_index=index,
             primary_code=primary,
-            caller_snippets=callers,
-            cross_ref_snippets=[],
             diff_hunk=_clip_bytes(matched_hunk, hunk_limit),
-            import_context=_clip_bytes(_import_context(content), 1000),
-            related_code=related,
             truncated=len(matched_hunk.encode("utf-8")) > hunk_limit,
         )
         return _fit_evidence_budget(

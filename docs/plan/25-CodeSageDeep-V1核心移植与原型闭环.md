@@ -1115,22 +1115,21 @@ Cross Harness 接收以下有界输入：
 ```text
 <trusted_run_constraints>
 - fixed base/head commit
-- normalized review/context paths
+- normalized review paths
 - candidate index range
 </trusted_run_constraints>
 
 <untrusted_review_context>
-- SemanticBrief summary
-- ReviewPlan.cross_reference_hints
-- compact Anatomy relations
-- numbered summaries for every Candidate
-- EvidencePackage keyed by candidate index
+- repaired ReviewPlan.cross_reference_hints only
+- failed/degraded/deferred Reviewer coverage gaps
+- every Candidate's indexed original claim (title, body, Reviewer evidence)
+- accurately matched diff hunks deduplicated by path and content
 </untrusted_review_context>
 ```
 
-Candidate 摘要由 6.8 的确定性格式化器产生，并保留原始 `finding_index`、位置、claim、reviewer evidence 和 dimension。Evidence Package 只包含有界的真实代码片段；不传完整 Reviewer transcript，减少上下文体积以及对原 Reviewer 推理过程的锚定。
+Candidate 台账由 6.8 的确定性格式化器产生，并保留原始 `finding_index`、位置、完整 claim、reviewer evidence 和 dimension，不靠截断前缀生成新摘要。EvidencePackage 仍在本地按 index 提取、用于诊断与评分，但只有严格命中 reported head 行的 hunk 进入 Cross 首轮输入；无行号或行号未命中时标注原因和按需读取建议，绝不退回首个 hunk。不传完整 SemanticBrief、Plan 血缘、EvidencePackage 或 Reviewer transcript，避免重复上下文和锚定。
 
-Candidate 必须被当作**未经验证的假设**，Evidence 也只是已经提取的局部代码而不是完整事实。Cross Agent 应优先使用输入证据，再针对会改变裁决的缺口调用工具。
+Candidate 必须被当作**未经验证的假设**，匹配 hunk 也只是变更定位材料而不是完整事实。Cross Agent 应先读候选主张和匹配 hunk，再针对会改变裁决的缺口调用工具。用户提示词默认以 48 KB 为发送前容量上限；超限明确失败并保留全部 Candidate，不静默截断主张。
 
 即使 Reviewer 返回零 Candidate，仍执行这一次 Cross Harness，但只允许沿 `cross_reference_hints` 和 Anatomy 中已经明确的跨文件关系做验证；它不得退化成第二次无边界 Reviewer。若既无 Candidate 也无可验证的跨文件提示，允许立即返回空 decisions、空 new findings 和简短 summary。
 
@@ -1460,7 +1459,7 @@ class DeepReviewRunContext:
 | Reviewer | 一个 repaired dimension、SemanticBrief、相关 target diff、context paths | 每个 dimension 构造独立输入；工具仍绑定同一 snapshot | `ReviewerResultDraft → mapper → ReviewerResult` |
 | Candidate | 全部业务 ReviewerResult | 按稳定键 gather/sort/编号；不调用模型 | `list[ReviewFinding]` + index map |
 | Evidence | Candidate、snapshot、blast radius | 确定性有界提取；失败只降级对应 Candidate | `dict[int, EvidencePackage]` |
-| Cross | 编号 Candidate 摘要、Evidence、SemanticBrief、Plan hints、Anatomy 关系 | 单次 Harness；不传 Reviewer transcript 或 Agent Draft | `CrossAnalysisResultDraft → cross_repair → CrossAnalysisResult` |
+| Cross | 全部编号 Candidate 主张、准确匹配且去重的 hunk、剩余 Plan hints、Reviewer 覆盖缺口 | 单次 Harness；不传 SemanticBrief、完整 EvidencePackage、Reviewer transcript 或 Agent Draft | `CrossAnalysisResultDraft → cross_repair → CrossAnalysisResult` |
 | Finalize | Candidate、Cross decisions/new findings、Evidence | score、dedup、merge、polish；零模型调用 | `DeepReviewResult` |
 
 每个输入 builder 必须是独立、可单测的确定性函数。前一阶段的 Draft 永远不能直接成为后一阶段输入；只有业务模型或可信 snapshot 可以跨阶段。
@@ -2071,7 +2070,7 @@ Plan25 完成必须同时满足：
 
 ### 16.4 单次 Cross 输入过大
 
-控制：输入编号摘要和有界 Evidence，不输入完整 Reviewer transcript。若仍超限，先确定性截断 caller/cross-ref 片段；V1 不自动拆成多次 Cross 调用。
+控制：所有 Candidate 的完整主张只输入一次，hunk 只有准确匹配后去重输入；caller/cross-ref 等代码按需通过工具读取，不输入完整 SemanticBrief、EvidencePackage 或 Reviewer transcript。默认 48 KB 用户提示词上限；若仍超限，明确标记 Cross 容量失败并保留 Candidate，V1 不静默截断主张或自动拆成多次 Cross 调用。
 
 ### 16.5 Prompt injection
 

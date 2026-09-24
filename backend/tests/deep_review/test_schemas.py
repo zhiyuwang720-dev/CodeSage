@@ -18,7 +18,7 @@ def test_default_config_uses_plan_v3_1_limits() -> None:
     config = DeepReviewConfig()
     assert config.max_planner_dimensions == 8
     assert config.max_final_dimensions == 9
-    assert config.max_cross_context_bytes is None
+    assert config.max_cross_context_bytes == 48_000
     assert config.max_candidate_count is None
 
 

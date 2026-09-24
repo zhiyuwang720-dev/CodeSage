@@ -22,7 +22,7 @@ class DeepReviewConfig(BaseModel):
     max_import_scan_bytes: int = Field(default=32_000_000, ge=1)
     max_search_results: int = Field(default=100, ge=1)
     tool_timeout_seconds: int = Field(default=10, ge=1)
-    max_cross_context_bytes: int | None = Field(default=None, ge=1)
+    max_cross_context_bytes: int | None = Field(default=48_000, ge=1)
     max_candidate_count: int | None = Field(default=None, ge=1)
     cluster_directory_depth: int = Field(default=1, ge=1)
     max_cluster_files: int = Field(default=24, ge=1)

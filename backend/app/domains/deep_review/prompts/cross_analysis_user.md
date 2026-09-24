@@ -1,55 +1,77 @@
 # Cross Analysis input for this run
 
-Follow the operating procedure in the system message. The blocks below have different authority; do not treat a hypothesis or a Reviewer's prose as verified code. The indices in the Candidate and Evidence blocks refer to the same fixed, zero-based list.
+Follow the investigation procedure in the system message. This input contains
+every Reviewer's claim once, plus only diff hunks that can be matched to a
+reported head-file line. A missing hunk is a navigation gap, not a verdict.
 
-## Fixed snapshot and scope (authoritative boundary)
+## Fixed snapshot and publishing scope
 
-The base/head commits and `review_paths` determine the audit scope. Read the fixed head only. New findings must point to a review path. `max_turns` is the complete investigation and termination budget.
+`base_commit` and `head_commit` fix the comparison. `review_paths` is the
+complete set of permissible primary Finding paths; other non-secret head
+files may still be read as supporting context. `max_turns` includes the final
+`FinalizeReview` call.
 
 <run_constraints_json>
 {{run_constraints_json}}
 </run_constraints_json>
 
-## Semantic interpretation (low-confidence lead)
+## Outstanding cross-dimension leads
 
-This is the earlier agent's interpretation of intent and change. Use it to form questions, then verify with code. Its `source` and `confidence` describe provenance, not truth.
+These are repaired Plan hints, already mapped to final dimension names. They
+are hypotheses to check against code, not evidence and not extra Findings.
+No SemanticBrief, Plan narrative, or reviewer transcript is repeated here.
 
-<semantic_json>
-{{semantic_json}}
-</semantic_json>
+<cross_hints_json>
+{{cross_hints_json}}
+</cross_hints_json>
 
-## Repaired Plan relations (unverified leads)
+## Incomplete Reviewer coverage
 
-These hints use the **final** dimension names after Plan Repair. A name map explains provenance; it does not create another issue. `internalized_hints_already_assigned_to_reviewer` were handed to a Reviewer. Anatomy related paths provide navigation, not risk evidence. Unresolved Plan risks remain coverage limits.
+Only failed, degraded, or deferred dimensions are listed. A path without a
+successful Reviewer has not been proved clean. Do not silently perform a new
+coverage loop or turn a coverage gap into a defect.
 
-<plan_relations_json>
-{{plan_relations_json}}
-</plan_relations_json>
+<coverage_gaps_json>
+{{coverage_gaps_json}}
+</coverage_gaps_json>
 
-## Reviewer execution coverage (operational record)
+## All Candidate claims
 
-`succeeded` includes a valid zero-finding result. `failed`, `deferred` or `degraded` leaves uncertainty. Do not turn a coverage gap into a negative finding, and do not claim you reran that dimension.
+The `index` is the fixed zero-based Candidate index for this call. `title`,
+`body`, and `evidence` are the Reviewer's *unverified claim*, not source-code
+facts. Every index needs a keep/drop decision, even when it lacks a line or
+matched excerpt. `severity` is the claim's starting severity, not your verdict.
 
-<reviewer_coverage_json>
-{{reviewer_coverage_json}}
-</reviewer_coverage_json>
+`hunk_status=matched_hunk` means a supplied hunk covers the reported head
+line, not that the defect is real or that the line itself changed. For
+`no_line`, `outside_changed_hunks`, `deleted_file`, `no_text_diff`,
+`binary_diff`, or `excerpt_unavailable`, follow `location_explanation` and
+use the appropriate read/search tool before deciding. In particular, never
+infer that a file-level claim is false because no hunk was preselected.
 
-## All Reviewer candidates (claims to adjudicate)
+<candidate_claims_json>
+{{candidate_claims_json}}
+</candidate_claims_json>
 
-Each object has a stable `index`, source dimension, changed-file location, claimed severity, title, body, Reviewer-authored evidence and suggested fix. These are assertions, not findings. Inspect every index; do not sample by severity, path or priority.
+## Accurately matched, deduplicated diff hunks
 
-<candidate_summaries_json>
-{{candidate_summaries_json}}
-</candidate_summaries_json>
+Each hunk is real patch text for its path and is shared by the listed
+`candidate_indices`; this avoids sending the same patch for multiple claims.
+It is a locator, not a verified failure path. If `excerpt_truncated=true`,
+read the file's patch before drawing a conclusion that depends on omitted text.
+Candidates absent from this block have no automatically matched hunk.
 
-## Programmatically extracted evidence (locator, not verdict)
+<matched_hunks_json>
+{{matched_hunks_json}}
+</matched_hunks_json>
 
-Each `package` has the matching index and may contain code, diff, callers and related snippets. `evidence_empty` means no useful excerpt was obtained; `truncated` means some excerpt was clipped. Read missing decisive context with the tools before making a confident conclusion. Do not equate the Reviewer's `evidence` field with this block.
+## Selective repository reading and terminal action
 
-<evidence_packages_json>
-{{evidence_packages_json}}
-</evidence_packages_json>
-
-## Tool choice and terminal action
-
-Use `file_read` for a bounded head-file passage, `file_read_diff` for another changed file's patch, `file_find` to locate an uncertain path, and `code_search` for a specific caller, guard or contract. All four are read-only and bounded. Choose a tool only when its answer can change a decision or establish a compound chain. The remaining two turns belong to decision reconciliation and `FinalizeReview`; finalize even if some residual risks remain.
+Use `file_read` for bounded fixed-head lines, `file_read_diff` for a changed
+file's patch (`start_line` pages through *diff-text* lines, not head-file lines),
+`code_search` for a specific symbol, caller, guard, or contract,
+and `file_find` when a path is uncertain. A deleted file has no head content:
+use its diff. Read only when the answer can change a Candidate decision or
+establish an independent cross-file mechanism. The last two turns belong to
+decision reconciliation and `FinalizeReview`; finalize with explicit residual
+uncertainty rather than exhausting the budget on secondary searches.

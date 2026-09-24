@@ -20,6 +20,7 @@ from app.domains.deep_review.schemas.pipeline import (
 )
 from app.domains.deep_review.services import orchestrator as orchestrator_module
 from app.domains.deep_review.services.cross_repair import repair_cross_result
+from app.domains.deep_review.services.diff_engine import parse_hunks
 from app.domains.deep_review.services.evidence import _fit_evidence_budget
 from app.domains.deep_review.services.input_builder import build_review_snapshot
 from app.domains.deep_review.services.merge_gate import merge_findings, stable_business_hash
@@ -153,21 +154,82 @@ def test_cross_input_includes_all_indices_and_repaired_relation_semantics(snapsh
             target_files=["a.py", "b.py"],
         )], candidates=candidates, evidence=evidence, max_turns=36,
     )
-    assert len(json.loads(values["candidate_summaries_json"])) == 257
-    packages = json.loads(values["evidence_packages_json"])
-    assert [item["index"] for item in packages] == list(range(257))
-    assert packages[1]["evidence_empty"] and packages[1]["truncated"]
-    relation = json.loads(values["plan_relations_json"])
-    assert relation["dimension_name_map"] == {"old-name": ["shared-target"]}
-    coverage = json.loads(values["reviewer_coverage_json"])
+    claims = json.loads(values["candidate_claims_json"])
+    assert [item["index"] for item in claims] == list(range(257))
+    assert claims[1]["hunk_status"] == "excerpt_unavailable"
+    assert claims[1]["body"] == candidates[1].body
+    assert json.loads(values["matched_hunks_json"]) == []
+    relation = json.loads(values["cross_hints_json"])
+    assert relation[0]["dimension_names"] == ["first", "second"]
+    coverage = json.loads(values["coverage_gaps_json"])
     assert coverage["paths_without_successful_reviewer"] == ["a.py", "b.py"]
+    assert coverage["incomplete_dimensions"][0]["status"] == "failed"
     prompt = render_prompt("cross_analysis_user", **values)
     system = load_prompt("cross_analysis")
     for word in ("benign explanation", "compound", "duplicate", "FinalizeReview"):
         assert word in system or word in prompt
-    assert "Reviewer-authored evidence" in prompt
+    assert "unverified claim" in prompt
     assert "Read/Grep/Glob/PowerShell" not in system + prompt
-    assert "transcript" not in values["candidate_summaries_json"].lower()
+    assert "transcript" not in values["candidate_claims_json"].lower()
+    assert "semantic_json" not in values
+    assert "old-name" not in prompt
+
+
+def test_cross_input_deduplicates_matched_hunks_without_hiding_claims(snapshot) -> None:
+    first = finding(title="First claim")
+    second = finding(title="Second independent claim")
+    hunk = parse_hunks(next(change for change in snapshot.changes if change.path == "a.py"))[0].content
+    huge_unused = "DO_NOT_SEND_PRIMARY_CODE" * 1000
+    values = format_cross_inputs(
+        snapshot=snapshot, anatomy=Anatomy(), semantic=SemanticBrief(narrative="DO_NOT_SEND_SEMANTIC"),
+        plan=plan(), reviewers=[], candidates=[first, second],
+        evidence={
+            0: EvidencePackage(finding_index=0, diff_hunk=hunk, primary_code=huge_unused,
+                               caller_snippets=["DO_NOT_SEND_CALLERS"]),
+            1: EvidencePackage(finding_index=1, diff_hunk=hunk),
+        }, max_turns=12,
+    )
+    claims = json.loads(values["candidate_claims_json"])
+    assert [claim["title"] for claim in claims] == ["First claim", "Second independent claim"]
+    assert [claim["hunk_status"] for claim in claims] == ["matched_hunk", "matched_hunk"]
+    hunks = json.loads(values["matched_hunks_json"])
+    assert len(hunks) == 1
+    assert hunks[0]["candidate_indices"] == [0, 1]
+    rendered = render_prompt("cross_analysis_user", **values)
+    assert "DO_NOT_SEND_PRIMARY_CODE" not in rendered
+    assert "DO_NOT_SEND_CALLERS" not in rendered
+    assert "DO_NOT_SEND_SEMANTIC" not in rendered
+
+
+def test_cross_input_explains_unmatched_and_file_level_claims(snapshot) -> None:
+    file_level = finding(title="Whole-file contract").model_copy(update={"line_start": None, "line_end": None})
+    outside_hunk = finding(title="Guard elsewhere").model_copy(update={"line_start": 99, "line_end": 99})
+    values = format_cross_inputs(
+        snapshot=snapshot, anatomy=Anatomy(), semantic=SemanticBrief(),
+        plan=plan(), reviewers=[], candidates=[file_level, outside_hunk],
+        evidence={0: EvidencePackage(finding_index=0, diff_hunk="WRONG_FIRST_HUNK"),
+                  1: EvidencePackage(finding_index=1, diff_hunk="WRONG_FIRST_HUNK")},
+        max_turns=12,
+    )
+    claims = json.loads(values["candidate_claims_json"])
+    assert claims[0]["hunk_status"] == "no_line"
+    assert "file_read_diff" in claims[0]["location_explanation"]
+    assert claims[1]["hunk_status"] == "outside_changed_hunks"
+    assert "file_read" in claims[1]["location_explanation"]
+    assert json.loads(values["matched_hunks_json"]) == []
+    assert "WRONG_FIRST_HUNK" not in render_prompt("cross_analysis_user", **values)
+
+
+def test_cross_input_rejects_a_stale_excerpt_even_when_line_matches(snapshot) -> None:
+    values = format_cross_inputs(
+        snapshot=snapshot, anatomy=Anatomy(), semantic=SemanticBrief(),
+        plan=plan(), reviewers=[], candidates=[finding()],
+        evidence={0: EvidencePackage(finding_index=0, diff_hunk="UNRELATED PATCH")},
+        max_turns=12,
+    )
+    assert json.loads(values["candidate_claims_json"])[0]["hunk_status"] == "excerpt_unavailable"
+    assert json.loads(values["matched_hunks_json"]) == []
+    assert "UNRELATED PATCH" not in render_prompt("cross_analysis_user", **values)
 
 
 @pytest.mark.asyncio
@@ -208,6 +270,13 @@ async def test_cross_agent_one_harness_and_capacity_fallback(snapshot) -> None:
     )
     assert over_capacity.call.value is None
     assert "cross_context_capacity_exceeded" in over_capacity.call.error
+    assert factory.runtime.calls == 1
+    long_claims = [finding(title=f"Problem {index}").model_copy(update={"body": "x" * 4000}) for index in range(20)]
+    default_capacity = await run_cross_agent(
+        factory, config=DeepReviewConfig(), **{**kwargs, "candidates": long_claims},
+    )
+    assert default_capacity.call.value is None
+    assert "cross_context_capacity_exceeded" in default_capacity.call.error
     assert factory.runtime.calls == 1
 
 

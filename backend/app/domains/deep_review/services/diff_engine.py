@@ -50,6 +50,16 @@ def parse_hunks(change: FileChange) -> list[DiffHunk]:
     return hunks
 
 
+def find_hunk_for_new_line(hunks: list[DiffHunk], line: int | None) -> DiffHunk | None:
+    """Return only a hunk covering an actual head line; never guess for file-level claims."""
+    if line is None:
+        return None
+    for hunk in hunks:
+        if hunk.new_count > 0 and hunk.new_start <= line < hunk.new_start + hunk.new_count:
+            return hunk
+    return None
+
+
 def detect_language(path: str) -> str:
     return _LANGUAGES.get(PurePosixPath(path).suffix.lower(), "")
 

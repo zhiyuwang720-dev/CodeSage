@@ -17,7 +17,7 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-async def test_evidence_extracts_primary_diff_and_caller(tmp_path: Path) -> None:
+async def test_evidence_extracts_primary_and_matching_diff_without_broad_caller_search(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "--initial-branch=main")
@@ -47,7 +47,38 @@ async def test_evidence_extracts_primary_diff_and_caller(tmp_path: Path) -> None
     package = packages[0]
     assert "return 2" in package.primary_code
     assert "+    return 2" in package.diff_hunk
-    assert any("caller.py" in snippet for snippet in package.caller_snippets)
+    assert package.caller_snippets == []
+
+
+async def test_evidence_does_not_guess_first_hunk_for_file_level_or_unmodified_line(tmp_path: Path) -> None:
+    repo = tmp_path / "unmatched-repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+    lines = [f"value_{index} = {index}" for index in range(1, 41)]
+    (repo / "changed.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    lines[0] = "value_1 = 99"
+    (repo / "changed.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "head")
+    snapshot = build_review_snapshot(
+        ReviewInput(repo_path=str(repo), base_ref=base, head_ref=git(repo, "rev-parse", "HEAD")),
+        DeepReviewConfig(),
+    )
+    findings = [
+        ReviewFinding(file_path="changed.py", severity="high", title="File-level contract", body="Check all call sites"),
+        ReviewFinding(file_path="changed.py", line_start=30, severity="high", title="Unmodified guard", body="Check the guard"),
+        ReviewFinding(file_path="changed.py", line_start=1, severity="high", title="Modified value", body="Check value"),
+    ]
+    packages = await build_evidence_packages(findings, snapshot, [], DeepReviewConfig())
+    assert packages[0].diff_hunk == packages[0].primary_code == ""
+    assert packages[1].diff_hunk == ""
+    assert "30|value_30" in packages[1].primary_code
+    assert "+value_1 = 99" in packages[2].diff_hunk
 
 
 async def test_evidence_denies_excluded_path(tmp_path: Path) -> None:
@@ -191,4 +222,5 @@ async def test_one_evidence_failure_degrades_only_that_candidate(
     packages = await build_evidence_packages(findings, snapshot, [], DeepReviewConfig())
 
     assert packages[0].primary_code == ""
+    assert "+value = 11" in packages[0].diff_hunk
     assert "value = 22" in packages[1].primary_code

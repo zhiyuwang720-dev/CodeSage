@@ -6,6 +6,8 @@ from typing import Any
 from app.domains.deep_review.schemas.pipeline import (
     Anatomy, EvidencePackage, ReviewDimension, ReviewFinding, ReviewPlan, SemanticBrief,
 )
+from app.domains.deep_review.schemas.input import ChangeType
+from app.domains.deep_review.services.diff_engine import find_hunk_for_new_line, parse_hunks
 from app.domains.deep_review.schemas.output import ReviewerDimensionReport
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
 from app.domains.deep_review.services.prompt_loader import render_prompt
@@ -127,70 +129,93 @@ def format_cross_inputs(
     evidence: dict[int, EvidencePackage],
     max_turns: int,
 ) -> dict[str, str]:
-    """One stable JSON block per trust boundary; preserve every candidate index."""
+    """Send every claim once, with only accurately matched and deduplicated diff hunks."""
+    # Semantic already informed Planner and Reviewers; Cross receives claims and
+    # source evidence, not that fallible interpretation.
+    del semantic
     review_paths = sorted(snapshot.review_paths)
-    context_paths = sorted(snapshot.context_paths)
-    active_targets = {
-        path for item in reviewers if item.status in {"succeeded", "degraded"}
-        for path in item.target_files
-    }
     constraints = {
         "base_commit": snapshot.base_commit,
         "head_commit": snapshot.head_commit,
         "review_paths": review_paths,
-        "context_paths": context_paths,
-        "snapshot_rule": "read fixed head only; new finding primary path must be in review_paths",
         "max_turns": max_turns,
     }
-    internal_hints = [
-        {"dimension_name": dimension.name, "review_prompt": investigation.review_prompt}
-        for dimension in plan.dimensions if not dimension.deferred
-        for investigation in dimension.investigations
-        if investigation.source_dimension == "cross_reference_hint"
-    ]
-    relations = {
-        "cross_reference_hints": [item.model_dump(mode="json") for item in plan.cross_reference_hints],
-        "internalized_hints_already_assigned_to_reviewer": internal_hints,
-        "dimension_name_map": plan.dimension_name_map,
-        "anatomy_related_paths": anatomy.related_paths,
-        "plan_unresolved_risks": plan.unresolved_risks,
+    successful_paths = {
+        path for item in reviewers if item.status == "succeeded"
+        for path in item.target_files
     }
-    coverage = {
-        "dimensions": [
-            {
-                "name": item.dimension_name,
-                "status": item.status,
-                "target_files": item.target_files,
-                "context_files": item.context_files,
-                "finding_count": item.finding_count,
-            }
-            for item in reviewers
+    gaps = {
+        "incomplete_dimensions": [
+            {"name": item.dimension_name, "status": item.status, "target_files": item.target_files}
+            for item in reviewers if item.status != "succeeded"
         ],
-        "paths_without_successful_reviewer": sorted(set(review_paths) - active_targets),
-        "coverage_complete": plan.coverage_complete
-        and all(item.status == "succeeded" for item in reviewers),
+        "paths_without_successful_reviewer": sorted(set(review_paths) - successful_paths),
     }
-    summaries = [
-        {"index": index, **finding.model_dump(mode="json")}
-        for index, finding in enumerate(candidates)
-    ]
-    packages = []
-    for index in range(len(candidates)):
+    changes = {change.path: change for change in snapshot.changes}
+    hunks_by_path = {
+        path: anatomy.hunks.get(path) or parse_hunks(change)
+        for path, change in changes.items()
+    }
+    claims: list[dict[str, Any]] = []
+    matched_hunks: dict[tuple[str, str], dict[str, Any]] = {}
+    for index, finding in enumerate(candidates):
+        change = changes.get(finding.file_path)
         package = evidence.get(index, EvidencePackage(finding_index=index))
-        packages.append({
+        matched = find_hunk_for_new_line(
+            hunks_by_path.get(finding.file_path, []), finding.line_start,
+        )
+        if finding.file_path not in snapshot.review_paths:
+            status = "outside_review_scope"
+            explanation = "Candidate path is outside review_paths; do not publish it as a Finding."
+        elif change is None or not change.diff:
+            status = "no_text_diff"
+            explanation = "No text patch was captured; do not infer that the claim is false."
+        elif change.change_type is ChangeType.BINARY:
+            status = "binary_diff"
+            explanation = "Binary content cannot be verified from a text hunk."
+        elif change.change_type is ChangeType.DELETED:
+            status = "deleted_file"
+            explanation = "No head-file content exists; inspect this path with file_read_diff, not file_read."
+        elif finding.line_start is None:
+            status = "no_line"
+            explanation = "File-level or cross-file claim: locate the relevant change with file_read_diff and code_search; no hunk was guessed."
+        elif matched is None:
+            status = "outside_changed_hunks"
+            explanation = "Reported head line is outside changed hunks; compare file_read_diff with file_read near the line."
+        elif not package.diff_hunk or not matched.content.startswith(package.diff_hunk):
+            status = "excerpt_unavailable"
+            explanation = "A covering hunk exists but no matching bounded excerpt was retained; use file_read_diff."
+        else:
+            status = "matched_hunk"
+            explanation = None
+            key = (finding.file_path, package.diff_hunk)
+            entry = matched_hunks.setdefault(key, {
+                "path": finding.file_path,
+                "candidate_indices": [],
+                "hunk_header": matched.header,
+                "diff_hunk": package.diff_hunk,
+                "excerpt_truncated": len(package.diff_hunk.encode("utf-8")) < len(matched.content.encode("utf-8")),
+            })
+            entry["candidate_indices"].append(index)
+        claim = {
             "index": index,
-            "evidence_empty": not any((
-                package.primary_code, package.diff_hunk, package.caller_snippets,
-                package.cross_ref_snippets, package.related_code,
-            )),
-            "truncated": package.truncated,
-            "package": package.model_dump(mode="json"),
-        })
+            "dimension_name": finding.dimension_name,
+            "file_path": finding.file_path,
+            "line_start": finding.line_start,
+            "line_end": finding.line_end,
+            "severity": finding.severity,
+            "title": finding.title,
+            "body": finding.body,
+            "evidence": finding.evidence,
+            "hunk_status": status,
+        }
+        if explanation is not None:
+            claim["location_explanation"] = explanation
+        claims.append(claim)
     return {
         "run_constraints_json": _stable_json(constraints),
-        "semantic_json": _stable_json(semantic.model_dump(mode="json")),
-        "plan_relations_json": _stable_json(relations),
-        "reviewer_coverage_json": _stable_json(coverage),
-        "candidate_summaries_json": _stable_json(summaries),
-        "evidence_packages_json": _stable_json(packages),
+        "cross_hints_json": _stable_json([item.model_dump(mode="json") for item in plan.cross_reference_hints]),
+        "coverage_gaps_json": _stable_json(gaps),
+        "candidate_claims_json": _stable_json(claims),
+        "matched_hunks_json": _stable_json(list(matched_hunks.values())),
     }

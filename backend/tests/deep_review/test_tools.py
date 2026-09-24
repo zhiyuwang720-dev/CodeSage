@@ -1,5 +1,6 @@
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,50 @@ async def test_file_read_and_diff(tools) -> None:
     deleted = await execute(file_read, {"path": "deleted.py"})
     assert deleted.output_payload["error"] == "unavailable_deleted_file"
     assert "deleted.py" in snapshot.allowed_paths
+
+
+async def test_file_read_diff_pages_the_in_memory_patch_without_losing_lines(tools) -> None:
+    _read, file_diff, _find, _search = tools[0]
+    snapshot = tools[1]
+    next_line = 1
+    collected = ""
+    for _ in range(30):
+        response = await execute(file_diff, {"path": "a.py", "start_line": next_line})
+        assert not response.is_error
+        payload = response.output_payload
+        assert payload["start_line"] == next_line
+        collected += payload["patch"]
+        next_line = payload["next_start_line"]
+        if next_line is None:
+            assert payload["truncated"] is False
+            break
+        assert payload["truncated"] is True
+    else:
+        pytest.fail("diff pagination did not terminate")
+    assert collected == snapshot.diff_by_path["a.py"]
+    out_of_range = await execute(file_diff, {"path": "a.py", "start_line": 999})
+    assert out_of_range.output_payload["error"] == "invalid_line_range"
+    deleted_lines = ""
+    deleted_next = 1
+    for _ in range(30):
+        deleted = await execute(file_diff, {"path": "deleted.py", "start_line": deleted_next})
+        assert not deleted.is_error
+        deleted_lines += deleted.output_payload["patch"]
+        deleted_next = deleted.output_payload["next_start_line"]
+        if deleted_next is None:
+            break
+    assert "-old()" in deleted_lines
+
+
+async def test_file_read_diff_rejects_an_unpageable_single_line(tools) -> None:
+    snapshot = tools[1]
+    large = replace(snapshot, diff_by_path={**snapshot.diff_by_path, "a.py": "+" + "x" * 1000 + "\n"})
+    file_diff = build_review_tools(
+        repo_path=large.input.repo_path, head_commit=large.head_commit, snapshot=large,
+        config=DeepReviewConfig(max_tool_output_bytes=512),
+    )[1]
+    response = await execute(file_diff, {"path": "a.py"})
+    assert response.output_payload["error"] == "diff_line_too_large"
 
 
 async def test_find_and_search(tools) -> None:
