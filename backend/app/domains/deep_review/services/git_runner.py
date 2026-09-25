@@ -33,11 +33,13 @@ async def run_git_output_bounded(
             if not chunk:
                 break
             used += len(chunk)
-            if used <= max_bytes + 1:
+            if used <= max_bytes:
                 chunks.append(chunk)
-            if used > max_bytes:
+            else:
+                # Keep draining the pipe after the retention limit. Stopping
+                # here can block Git when it writes a large tree, while the
+                # other pipe reader waits for process exit.
                 truncated = True
-                break
         return b"".join(chunks), truncated
 
     try:
@@ -60,6 +62,13 @@ async def run_git_output_bounded(
         process.kill()
         await process.wait()
         raise TimeoutError("git output timeout") from None
+    except BaseException:
+        # In particular, cancellation must not leave a Git child holding its
+        # stdout/stderr pipes open while the CLI is exiting.
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
 
 
 class BoundedGitBinaryResult(NamedTuple):
@@ -94,11 +103,12 @@ async def run_git_binary_bounded(
             if not chunk:
                 break
             used += len(chunk)
-            if used <= max_bytes + 1:
+            if used <= max_bytes:
                 chunks.append(chunk)
-            if used > max_bytes:
+            else:
+                # Drain oversized output without retaining it to prevent a
+                # full OS pipe from deadlocking the child process.
                 truncated = True
-                break
         return b"".join(chunks), truncated
 
     async def write_input() -> None:

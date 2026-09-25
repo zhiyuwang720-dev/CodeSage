@@ -58,7 +58,7 @@ def map_reviewer_result(
 
         line_count = head_line_counts.get(path) if path else None
         if reason is None and line_count is None:
-            reason = "head_file_unavailable_or_non_regular"
+            reason = "head_line_count_unavailable"
         elif reason is None and start is not None and (start < 1 or end is None or end > line_count):
             reason = "line_outside_head_file"
 

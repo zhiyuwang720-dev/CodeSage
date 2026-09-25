@@ -98,6 +98,27 @@ async def test_file_limit_degrades_blast_radius(tmp_path: Path) -> None:
         )
 
 
+async def test_non_python_changes_skip_python_import_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def unexpected_scan(*_args, **_kwargs):
+        raise AssertionError("Python import graph should not be built for a Go-only diff")
+
+    monkeypatch.setattr(
+        "app.domains.deep_review.services.blast_radius.build_import_graph",
+        unexpected_scan,
+    )
+    diagnostics: list[str] = []
+    related = await compute_blast_radius(
+        ["cmd/server/main.go", "internal/config/config.ts"],
+        "unused",
+        "unused",
+        DeepReviewConfig(),
+        diagnostics=diagnostics,
+    )
+
+    assert related == []
+    assert diagnostics == ["blast_radius_skipped_no_changed_python_files"]
+
+
 async def test_total_blob_limit_degrades_blast_radius(tmp_path: Path) -> None:
     repo = tmp_path / "byte-limit-repo"
     repo.mkdir()

@@ -18,6 +18,7 @@ from app.domains.deep_review.schemas.pipeline import (
     SemanticBrief,
 )
 from app.domains.deep_review.services.directory_filter import FilterError, normalize_path
+from app.domains.deep_review.services.git_runner import run_git_binary_bounded
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
 from app.domains.deep_review.services.output_formatter import build_reviewer_prompt
 from app.domains.deep_review.services.prompt_loader import load_prompt
@@ -180,9 +181,9 @@ async def _head_line_count(
     snapshot: ReviewSnapshot,
     path: str,
     timeout: int,
-    max_file_bytes: int,
+    max_head_line_count_bytes: int,
 ) -> int | None:
-    def read() -> int | None:
+    def find_oid() -> str | None:
         try:
             tree = subprocess.run(
                 [
@@ -216,30 +217,25 @@ async def _head_line_count(
                 or matching[0][1] != b"blob"
             ):
                 return None
-            content = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    snapshot.input.repo_path,
-                    "cat-file",
-                    "blob",
-                    matching[0][2].decode("ascii"),
-                ],
-                capture_output=True,
-                timeout=timeout,
-                check=False,
-            )
-            if (
-                content.returncode != 0
-                or len(content.stdout) > max_file_bytes
-                or b"\x00" in content.stdout
-            ):
-                return None
-            return len(content.stdout.decode("utf-8", "replace").splitlines())
+            return matching[0][2].decode("ascii")
         except (OSError, subprocess.TimeoutExpired):
             return None
 
-    return await asyncio.to_thread(read)
+    oid = await asyncio.to_thread(find_oid)
+    if oid is None:
+        return None
+    try:
+        content = await run_git_binary_bounded(
+            snapshot.input.repo_path,
+            ["cat-file", "blob", oid],
+            max_bytes=max_head_line_count_bytes,
+            timeout_seconds=timeout,
+        )
+    except (OSError, TimeoutError):
+        return None
+    if content.returncode != 0 or content.stdout_truncated or b"\x00" in content.stdout:
+        return None
+    return len(content.stdout.decode("utf-8", "replace").splitlines())
 
 
 async def _head_line_counts(
@@ -253,7 +249,7 @@ async def _head_line_counts(
                 snapshot,
                 path,
                 config.tool_timeout_seconds,
-                config.max_file_bytes,
+                config.max_head_line_count_bytes,
             )
             for path in paths
         )

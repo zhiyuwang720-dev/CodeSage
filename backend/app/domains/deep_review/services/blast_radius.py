@@ -267,6 +267,13 @@ async def compute_blast_radius(
     import_graph: dict[str, list[str]] | None = None,
     diagnostics: list[str] | None = None,
 ) -> list[str]:
+    # This graph currently models Python imports only. Building it for a Go, C,
+    # or other non-Python-only change cannot produce a valid edge and can scan a
+    # large unrelated Python tree in a monorepo.
+    if not any(path.lower().endswith(".py") for path in changed_paths):
+        if diagnostics is not None:
+            diagnostics.append("blast_radius_skipped_no_changed_python_files")
+        return []
     if import_graph is not None:
         graph = import_graph
     else:

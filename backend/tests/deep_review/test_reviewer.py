@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.domains.deep_review.agents.reviewer import (
     ReviewFindingDraft,
     ReviewerResultDraft,
+    _head_line_counts,
     run_reviewer_agent,
 )
 from app.domains.deep_review.schemas.config import DeepReviewConfig
@@ -300,6 +301,48 @@ def test_mapper_accepts_file_finding_and_sets_business_ownership(
     assert mapping.result.findings[0].line_start is None
     assert mapping.result.findings[0].dimension_name == "value-flow"
     assert mapping.result.findings[0].source == "reviewer"
+
+
+@pytest.mark.asyncio
+async def test_head_line_count_accepts_regular_file_larger_than_tool_read_limit(
+    reviewer_snapshot: ReviewSnapshot,
+) -> None:
+    repo = Path(reviewer_snapshot.input.repo_path)
+    content = "value = 3\n" + ("#" + "x" * 130 + "\n") * 10_000
+    assert len(content.encode("utf-8")) > DeepReviewConfig().max_file_bytes
+    (repo / "src" / "a.py").write_text(content, encoding="utf-8")
+    git(repo, "add", "src/a.py")
+    git(repo, "commit", "-m", "large regular source file")
+    snapshot = build_review_snapshot(
+        ReviewInput(
+            repo_path=str(repo),
+            base_ref=reviewer_snapshot.base_commit,
+            head_ref=git(repo, "rev-parse", "HEAD"),
+        ),
+        DeepReviewConfig(),
+    )
+    counts = await _head_line_counts(snapshot, ["src/a.py"], DeepReviewConfig())
+    assert counts == {"src/a.py": 10_001}
+    mapping = map_reviewer_result(
+        {"findings": [finding_payload(line_start=9_999, line_end=10_000)]},
+        dimension=dimension(),
+        snapshot=snapshot,
+        head_line_counts=counts,
+    )
+    assert mapping.rejected_count == 0
+    assert len(mapping.result.findings) == 1
+
+
+def test_mapper_reports_unavailable_line_count_without_claiming_file_type(
+    reviewer_snapshot: ReviewSnapshot,
+) -> None:
+    mapping = map_reviewer_result(
+        {"findings": [finding_payload()]},
+        dimension=dimension(),
+        snapshot=reviewer_snapshot,
+        head_line_counts={},
+    )
+    assert mapping.diagnostics[0] == "finding[0] rejected: head_line_count_unavailable"
 
 
 @pytest.mark.parametrize(

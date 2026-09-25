@@ -100,7 +100,10 @@ def repair_cross_result(
         if start is not None and end is None:
             end = start
         line_count = head_line_counts.get(path)
-        if line_count is None or (start is not None and (end < start or end > line_count)):
+        if line_count is None:
+            diagnostics.append(f"cross_new_finding_head_line_count_unavailable:{position}")
+            continue
+        if start is not None and (end < start or end > line_count):
             diagnostics.append(f"cross_new_finding_invalid_head_line:{position}")
             continue
         try:
