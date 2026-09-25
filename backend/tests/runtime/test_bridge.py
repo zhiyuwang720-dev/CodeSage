@@ -1126,7 +1126,8 @@ def test_runtime_model_client_tool_use_history_is_mapped_as_user_context_note():
 
 
 def test_runtime_model_client_build_messages_uses_native_openai_tool_history():
-    messages = RuntimeLLMModelClient._build_messages(
+    client = RuntimeLLMModelClient(llm_service=None)
+    messages = client._build_messages(
         system_prompt="system",
         recon_payload={},
         tool_definitions=[{"name": "Read"}],

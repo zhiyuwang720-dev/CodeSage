@@ -31,7 +31,7 @@ from app.tool_gateway.codec import (
     ToolMessageFormat,
     build_runtime_model_messages,
 )
-from app.execution_plane.models.config import PROVIDER_METADATA, resolve_tool_message_format
+from app.execution_plane.models.config import resolve_tool_message_format
 from app.execution_plane.models.runtime_ai import (
     AIParseError,
     AIResult,
@@ -108,6 +108,7 @@ class RuntimeLLMModelClient:
         tool_calling_reminder: str = NATIVE_TOOL_CALLING_REMINDER,
         forced_tool_choice: dict[str, Any] | None = None,
         forced_tool_choice_extra_body: dict[str, Any] | None = None,
+        preserve_prompt_prefix: bool = False,
         max_forced_requests: int = 2,
     ):
         self._llm_service = llm_service
@@ -115,6 +116,7 @@ class RuntimeLLMModelClient:
         self._tool_calling_reminder = tool_calling_reminder
         self._forced_tool_choice = forced_tool_choice
         self._forced_tool_choice_extra_body = dict(forced_tool_choice_extra_body or {})
+        self._preserve_prompt_prefix = preserve_prompt_prefix
         self._max_forced_requests = max_forced_requests
         self._forced_requests = 0
 
@@ -141,8 +143,18 @@ class RuntimeLLMModelClient:
         # A compaction request has no tools; it still consumes this phase's request budget.
         return {"parallel_tool_calls": False}
 
+    def _validate_forced_tool_calls(self, calls: list[dict[str, Any]]) -> None:
+        if self._forced_tool_choice is None:
+            return
+        target = self._forced_tool_choice["function"]["name"]
+        if any(call.get("name") != target for call in calls):
+            raise NonRetryableModelCallError(
+                "Forced finalization returned a non-terminal tool call",
+                error_kind="finalization_wrong_tool",
+            )
+
     def _effective_system_prompt(self, system_prompt: str | None) -> str | None:
-        if self._forced_tool_choice is not None:
+        if self._forced_tool_choice is not None and not self._preserve_prompt_prefix:
             # Do not carry the Planner/Reviewer system instructions into the isolated
             # finalizer request: they may advertise investigation tools that are no
             # longer registered in this phase.
@@ -231,10 +243,12 @@ class RuntimeLLMModelClient:
             **self._request_tool_options(tool_definitions),
             max_tokens=max_output_tokens_override,
         )
+        normalized_calls = [self._normalize_tool_call(item) for item in response.get("tool_calls") or []]
+        self._validate_forced_tool_calls(normalized_calls)
         return RuntimeModelResponse(
             content=response.get("content", "") or "",
             reasoning_content=str(response.get("reasoning_content") or ""),
-            tool_calls=[self._normalize_tool_call(item) for item in response.get("tool_calls") or []],
+            tool_calls=normalized_calls,
             stop_reason=response.get("finish_reason") or "stop",
             recoverable_error_kind=self._classify_recoverable_error_kind(response),
             recoverable_error_message=str(response.get("error_message") or "").strip() or None,
@@ -305,10 +319,12 @@ class RuntimeLLMModelClient:
                 )
 
         final_event = final_event or {}
+        normalized_calls = [self._normalize_tool_call(item) for item in final_event.get("tool_calls") or []]
+        self._validate_forced_tool_calls(normalized_calls)
         return RuntimeModelResponse(
             content=str(final_event.get("content") or ""),
             reasoning_content=str(final_event.get("reasoning_content") or ""),
-            tool_calls=[self._normalize_tool_call(item) for item in final_event.get("tool_calls") or []],
+            tool_calls=normalized_calls,
             stop_reason=str(final_event.get("finish_reason") or "stop"),
             recoverable_error_kind=self._classify_recoverable_error_kind(final_event),
             recoverable_error_message=str(final_event.get("error") or final_event.get("user_message") or "").strip() or None,
@@ -394,6 +410,10 @@ class RuntimeLLMModelClient:
                 normalized = self._normalize_stream_event(event, accumulated=accumulated)
                 if normalized is None:
                     continue
+                if normalized.get("type") == "tool_call":
+                    self._validate_forced_tool_calls([normalized["tool_call"]])
+                elif normalized.get("type") == "done":
+                    self._validate_forced_tool_calls(normalized.get("tool_calls") or [])
                 if normalized.get("type") == "content_delta":
                     accumulated = normalized.get("accumulated") or accumulated
                 yield normalized
@@ -431,7 +451,7 @@ class RuntimeLLMModelClient:
         tool_message_format: ToolMessageFormat | str = ToolMessageFormat.OPENAI_TOOLS,
         tool_calling_reminder: str = NATIVE_TOOL_CALLING_REMINDER,
     ) -> list[dict[str, Any]]:
-        if self._forced_tool_choice is not None:
+        if self._forced_tool_choice is not None and not self._preserve_prompt_prefix:
             transcript = self._finalizer_transcript(transcript)
         effective_system_prompt = (system_prompt or "").strip()
         if tool_definitions and tool_calling_reminder:
@@ -845,8 +865,17 @@ class RuntimeBridge:
                 continue
             normal_tools.append(tool)
         deep_registry = ToolRegistry([*normal_tools, finalizer_tool])
-        forced_finalizer_choice = self._deep_finalizer_tool_choice()
-        forced_finalizer_extra_body = self._deep_finalizer_extra_body()
+        finalizer_capability, capability_source = self._deep_finalizer_capability()
+        forced_finalizer_choice = (
+            {"type": "function", "function": {"name": "FinalizeReview"}}
+            if finalizer_capability in {"thinking_and_forced_tool", "forced_tool_only_with_thinking_disabled"}
+            else None
+        )
+        forced_finalizer_extra_body = (
+            {"thinking": {"type": "disabled"}}
+            if finalizer_capability == "forced_tool_only_with_thinking_disabled"
+            else None
+        )
 
         recon_payload: dict[str, Any] = {}
         if cwd:
@@ -866,6 +895,8 @@ class RuntimeBridge:
                 finalizer_tools=[finalizer_tool],
                 forced_finalizer_tool_choice=forced_finalizer_choice,
                 forced_finalizer_extra_body=forced_finalizer_extra_body,
+                finalizer_capability=finalizer_capability,
+                finalizer_capability_source=capability_source,
                 terminal_action_nudge_message=DEEP_RUNTIME_TERMINAL_NUDGE,
                 on_session_created=created_session_ids.append,
                 _tool_registry=deep_registry,
@@ -898,33 +929,28 @@ class RuntimeBridge:
             cost_usd=cost_usd,
         )
 
-    def _deep_finalizer_tool_choice(self) -> dict[str, Any]:
-        get_config = getattr(self._llm_service, "get_config_for", None)
-        if callable(get_config):
-            config = get_config(self._agent_type)
-            capabilities = PROVIDER_METADATA.get(config.provider, {}).get("tool_capability", {})
-            if "forced" not in capabilities.get("tool_choice", []):
-                raise HarnessIncompleteError(
-                    "Configured model provider does not support forced FinalizeReview tool choice"
-                )
-        return {"type": "function", "function": {"name": "FinalizeReview"}}
-
-    def _deep_finalizer_extra_body(self) -> dict[str, Any] | None:
-        """Disable DeepSeek thinking only for the forced FinalizeReview requests."""
-
+    def _deep_finalizer_capability(self) -> tuple[str, str]:
+        """Resolve per-model override before conservative provider fallback."""
         get_config = getattr(self._llm_service, "get_config_for", None)
         if not callable(get_config):
-            return None
+            # Test doubles without configuration preserve historical forced-tool behavior.
+            return "thinking_and_forced_tool", "test_default"
         config = get_config(self._agent_type)
-        provider = str(
-            getattr(getattr(config, "provider", None), "value", None)
-            or getattr(config, "provider", "")
-        ).strip().lower()
+        override = str(getattr(config, "finalizer_capability", "auto") or "auto").strip().lower()
+        if override != "auto":
+            if override not in {
+                "thinking_and_forced_tool", "forced_tool_only_with_thinking_disabled",
+                "no_forced_tool", "unknown",
+            }:
+                raise HarnessIncompleteError("Invalid finalizer capability override")
+            return override, "model_config"
         host = urlsplit(str(getattr(config, "base_url", None) or "")).hostname or ""
-        is_deepseek = provider == "deepseek" or host.lower() == "api.deepseek.com" or host.lower().endswith(".deepseek.com")
-        if not is_deepseek:
-            return None
-        return {"thinking": {"type": "disabled"}}
+        is_deepseek = host.lower() == "api.deepseek.com"
+        if is_deepseek:
+            return "forced_tool_only_with_thinking_disabled", "known_endpoint"
+        # Provider-wide tool metadata does not establish whether this model/endpoint
+        # accepts forced tool choice while thinking. Require an explicit override.
+        return "unknown", "unverified"
 
     def _harness_metering(self, session_id: str | None) -> tuple[dict[str, Any] | None, float | None]:
         if session_id is None:
@@ -983,6 +1009,8 @@ class RuntimeBridge:
         finalizer_tools: list[Any] | None = None,
         forced_finalizer_tool_choice: dict[str, Any] | None = None,
         forced_finalizer_extra_body: dict[str, Any] | None = None,
+        finalizer_capability: str | None = None,
+        finalizer_capability_source: str | None = None,
         terminal_action_nudge_message: str | None = None,
         on_session_created: Callable[[str], Any] | None = None,
         runtime_metadata: dict[str, Any] | None = None,
@@ -1046,16 +1074,50 @@ class RuntimeBridge:
             fallback_payload_builder=None if bare_runtime else self._default_fallback_payload,
             finalizer_tools=finalizer_tools,
         )
+        if bare_runtime:
+            # Deep Review keeps the same tool schema and order at finalization.
+            ensure_kwargs["finalizer_registry"] = tool_registry
+            ensure_kwargs["finalizer_capability"] = finalizer_capability or "unknown"
+            ensure_kwargs["finalizer_capability_source"] = finalizer_capability_source or "unverified"
         if forced_finalizer_tool_choice is not None:
             ensure_kwargs["forced_finalizer_tool_choice"] = forced_finalizer_tool_choice
         if forced_finalizer_extra_body is not None:
             ensure_kwargs["forced_finalizer_extra_body"] = forced_finalizer_extra_body
+        main_turns = len(self._session_store.load_session_snapshot(result["session_id"]).turns)
         snapshot, final_payload = await self._ensure_payload(**ensure_kwargs)
+        finalizer_messages = [
+            message for message in snapshot.messages
+            if str(message.name or "").startswith("runtime_finalizer")
+        ]
+        finalizer_metadata = (
+            dict(finalizer_messages[0].message_metadata or {}) if finalizer_messages else {}
+        )
+        finalizer_turn_ids = {turn.id for turn in snapshot.turns[main_turns:]}
+        validation_corrections = sum(
+            1 for call in snapshot.tool_calls
+            if call.turn_id in finalizer_turn_ids
+            and call.tool_name == "FinalizeReview"
+            and isinstance(call.output_payload, dict)
+            and call.output_payload.get("finalization_rejected") is True
+        )
         return {
             **result,
             "final_payload": final_payload,
             "turn_count": len(snapshot.turns),
             "tool_call_count": len(snapshot.tool_calls),
+            "finalization": {
+                "strategy": finalizer_metadata.get("strategy", "natural"),
+                "capability": finalizer_metadata.get("capability", finalizer_capability),
+                "capability_source": finalizer_metadata.get("capability_source", finalizer_capability_source),
+                "thinking_disabled": bool(finalizer_metadata.get("thinking_disabled")),
+                "main_turns": main_turns,
+                "finalizer_turns": max(0, len(snapshot.turns) - main_turns),
+                "finalizer_requests": max(0, len(snapshot.turns) - main_turns),
+                "finalizer_prompts": len(finalizer_messages),
+                "validation_corrections": validation_corrections,
+                "terminal_status": "accepted" if isinstance(final_payload, dict) else "incomplete",
+                "cache_read_tokens": None,  # not exposed by the streaming runtime aggregate
+            },
         }
 
     async def run_chat_session(
@@ -1358,6 +1420,9 @@ class RuntimeBridge:
         finalizer_tools: list[Any] | None = None,
         forced_finalizer_tool_choice: dict[str, Any] | None = None,
         forced_finalizer_extra_body: dict[str, Any] | None = None,
+        finalizer_registry: ToolRegistry | None = None,
+        finalizer_capability: str = "unknown",
+        finalizer_capability_source: str = "unverified",
         terminal_action_nudge_message: str | None = None,
     ) -> tuple[Any, Any]:
         snapshot = self._session_store.load_session_snapshot(session_id)
@@ -1378,15 +1443,20 @@ class RuntimeBridge:
                 return snapshot, fallback_payload_builder(snapshot)
             raise ValueError('Runtime session ended without a machine-parseable payload for the requested continuation.')
 
-        finalizer_registry = ToolRegistry(finalizer_tools or [FinalizeReviewTool()])
+        shared_finalizer_registry = finalizer_registry is not None
+        finalizer_registry = finalizer_registry or ToolRegistry(finalizer_tools or [FinalizeReviewTool()])
         finalizer_model_client = model_client
         if forced_finalizer_tool_choice is not None:
             finalizer_model_client = RuntimeLLMModelClient(
                 llm_service=self._llm_service,
                 agent_type=self._agent_type,
-                tool_calling_reminder=HARNESS_TOOL_CALLING_REMINDER,
+                tool_calling_reminder=(
+                    model_client._tool_calling_reminder if shared_finalizer_registry
+                    else HARNESS_TOOL_CALLING_REMINDER
+                ),
                 forced_tool_choice=forced_finalizer_tool_choice,
                 forced_tool_choice_extra_body=forced_finalizer_extra_body,
+                preserve_prompt_prefix=finalizer_capability != "unknown",
                 max_forced_requests=2,
             )
         finalizer_orchestrator = ToolGateway(
@@ -1401,7 +1471,14 @@ class RuntimeBridge:
                     role=RuntimeMessageRole.USER,
                     name='runtime_finalizer' if index == 1 else f'runtime_finalizer_retry_{index}',
                     content=prompt,
-                    metadata={'kind': 'finalization_prompt', 'attempt': index},
+                    metadata={
+                        'kind': 'finalization_prompt', 'attempt': index,
+                        'capability': finalizer_capability,
+                        'capability_source': finalizer_capability_source,
+                        'thinking_disabled': bool(forced_finalizer_extra_body),
+                        'strategy': 'append_only_forced' if forced_finalizer_tool_choice
+                        else 'append_only_auto',
+                    },
                 ),
             )
             runner = RuntimeRunner(

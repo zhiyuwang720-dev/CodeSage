@@ -177,13 +177,15 @@ def test_planner_prompt_defines_investigation_not_finding_quota() -> None:
     for phrase in (
         "assigns review work", "coverage boundaries", "not a list of predicted defects",
         "Semantic Brief is a set of leads", "max_planner_dimensions",
-        "complete coverage takes priority", "failure consequence",
+        "complete coverage takes priority", "old/new behavior or invariant",
         "branch-reachability question", "feasible trace",
         "FinalizeReview", "ReviewPlanDraft",
         "summary` within 2000 characters", "relation` within",
     ):
         assert phrase in prompt
     assert "check code quality" not in prompt
+    assert "three lenses within this one planning task" in prompt
+    assert "not three mandatory dimensions" in prompt
 
 
 def test_semantic_prompt_matches_draft_and_marks_truncated_evidence(
@@ -703,7 +705,7 @@ def test_planning_cli_with_fake_runtime_writes_observations(
     )
     assert cli.main([
         "--repo", str(repo), "--base", base, "--head", head,
-        "--through", "planning", "--store-dir", str(tmp_path / "events"),
+        "--through", "planning", "--allow-model-calls", "--store-dir", str(tmp_path / "events"),
         "--output", str(output),
     ]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
@@ -758,7 +760,7 @@ def test_review_cli_runs_preparation_and_reviewer_with_fake_runtime(
 
     assert cli.main([
         "--repo", str(repo), "--base", base, "--head", head,
-        "--through", "review", "--store-dir", str(tmp_path / "events"),
+        "--through", "review", "--allow-model-calls", "--store-dir", str(tmp_path / "events"),
         "--output", str(output),
     ]) == 0
 

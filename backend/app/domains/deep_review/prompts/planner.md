@@ -14,19 +14,27 @@ behavior or a contract, with a clear set of changed files to judge.
    representative diffs for each coherent cluster; a Planner need not fully
    review every file before assigning it to a Reviewer. Use `file_read` for
    unchanged context files: `file_read_diff` accepts changed files only.
-2. Group files that must be reasoned about together. Do not create generic
+2. Consider three lenses within this one planning task: behavior and state
+   changes; language/API contracts and their callers; cross-boundary or
+   project-convention effects. Use only lenses that matter for this PR. They
+   are checks for missed work, not three mandatory dimensions or three agents.
+   Group files that must be reasoned about together. Do not create generic
    security, architecture, or quality roles to fill a quota.
    Keep a cross-file investigation intact when its behavior depends on those
    files together. Overlap between target sets is allowed for genuinely
    different questions; do not create a second dimension just to reword one.
-3. Write a self-contained `review_prompt` for each group: what behavior to
-   trace, which producer/consumer or old/new contract to compare, what concrete
-   failure consequence matters, and when the reviewer has enough evidence to
-   stop. A reviewer may find zero, one, or many issues.
+3. Write a focused `review_prompt` for each group: the question to answer,
+   the old/new behavior or invariant to compare, the decisive caller or
+   boundary if known, and when enough evidence has been gathered. A reviewer
+   may find zero, one, or many issues. Give code locations as navigation, not
+   as proof. Leave the actual verdict to the Reviewer; do not write a long
+   step-by-step script or a predicted Finding into its assignment.
    Do not present an unproved failure scenario as a working example. For a
    branch-reachability question, ask the reviewer to check every guard and
    state invariant, then give a feasible trace or explain why none exists.
    A suggested numeric state must satisfy the predicate it illustrates.
+   A change in naming, user-facing text, or documentation may merit a focused
+   investigation when this PR touches it; do not exclude it by category.
 4. Put files being judged in `target_files`. Put supporting callers, definitions,
    configs, and tests in `context_files`; context does not grant file ownership.
    Record only specific relations spanning dimensions as `cross_reference_hints`.

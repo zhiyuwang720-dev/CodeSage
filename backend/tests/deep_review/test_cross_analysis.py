@@ -370,12 +370,16 @@ async def test_cross_failure_keeps_every_candidate_and_marks_partial(snapshot) -
 
 
 @pytest.mark.asyncio
-async def test_full_fake_final_run_applies_drop_and_new_finding(snapshot, monkeypatch) -> None:
+async def test_full_fake_final_run_applies_drop_and_new_finding(snapshot, monkeypatch, tmp_path: Path) -> None:
+    from app.domains.deep_review.storage.jsonl_repository import JsonlDeepReviewStore
+
     class Store:
         def __init__(self):
             self.events = []
+            self.jsonl = JsonlDeepReviewStore(tmp_path / "domain")
 
         def append(self, run_id, kind, payload):
+            self.jsonl.append(run_id, kind, payload)
             self.events.append((run_id, kind, payload))
 
     class Factory:
@@ -426,6 +430,18 @@ async def test_full_fake_final_run_applies_drop_and_new_finding(snapshot, monkey
     events = [payload for _, kind, payload in store.events if kind == "final_result"]
     assert events[0]["dropped_by_cross"] == 1
     assert events[0]["candidate_count"] == 2 and events[0]["finding_count"] == 2
+    process = [payload["report"] for _, kind, payload in store.events if kind == "process_report"]
+    assert process[0]["mode"] == "final" and process[0]["pipeline_complete"] is True
+    assert process[0]["run_id"] == first.run_id
+    assert process[0]["final_content_hash"] == first.content_hash
+    assert process[0]["plan"] and process[0]["semantic"] and process[0]["cross"]
+    assert len(process[0]["agent_observations"]) == 4
+    assert "final" in process[0]["stage_durations_ms"]
+    run_dir = tmp_path / "domain" / first.run_id
+    materialized_result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    materialized_process = json.loads((run_dir / "process_report.json").read_text(encoding="utf-8"))
+    assert materialized_result["content_hash"] == materialized_process["final_content_hash"]
+    assert materialized_process["run_id"] == first.run_id
 
 
 @pytest.mark.asyncio
@@ -443,17 +459,25 @@ async def test_final_cli_writes_result_and_summary(tmp_path: Path, monkeypatch) 
 
     async def fake_run(self, review_input, *, through):
         assert through == "final"
-        return DeepReviewResult(
+        result = DeepReviewResult(
             run_id="fake-run", status="completed", findings=[finding()],
             summary="verified", metrics=ReviewMetrics(model_calls=4, total_tokens=10),
             content_hash="a" * 64, candidate_count=2, cross_status="completed",
         )
+        run_dir = self.store.root / result.run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(result.model_dump_json(), encoding="utf-8")
+        (run_dir / "process_report.json").write_text(json.dumps({
+            "run_id": result.run_id, "final_status": result.status,
+            "final_content_hash": result.content_hash,
+        }), encoding="utf-8")
+        return result
 
     monkeypatch.setattr(entry.DeepReviewService, "run", fake_run)
     report_path = tmp_path / "report.json"
     args = entry.build_parser().parse_args([
         "--repo", str(tmp_path), "--base", "base000", "--head", "head000",
-        "--through", "final", "--output", str(report_path),
+        "--through", "final", "--allow-model-calls", "--output", str(report_path),
         "--store-dir", str(tmp_path / "events"),
     ])
     assert await entry._run(args) == 0

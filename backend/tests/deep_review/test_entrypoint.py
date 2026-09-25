@@ -94,6 +94,7 @@ def test_cli_without_output_writes_json_to_stdout(cli_repo: Path, tmp_path: Path
             "--repo", str(cli_repo),
             "--base", base,
             "--head", head,
+            "--through", "anatomy",
             "--store-dir", str(tmp_path / "events"),
         ]
     )
@@ -112,6 +113,7 @@ def test_cli_invalid_ref_returns_two_without_success_report(cli_repo: Path, tmp_
             "--repo", str(cli_repo),
             "--base", "does-not-exist",
             "--head", head,
+            "--through", "anatomy",
             "--output", str(output),
             "--store-dir", str(tmp_path / "events"),
         ]
@@ -136,3 +138,28 @@ def test_cli_unsupported_through_returns_two(cli_repo: Path, tmp_path: Path) -> 
 
     assert result.returncode == 2
     assert "invalid choice" in result.stderr
+
+
+def test_cli_default_final_requires_explicit_model_opt_in(cli_repo: Path, tmp_path: Path) -> None:
+    base, head = base_head(cli_repo)
+    store_dir = tmp_path / "events"
+    result = run_cli([
+        "--repo", str(cli_repo), "--base", base, "--head", head,
+        "--store-dir", str(store_dir),
+    ])
+    assert result.returncode == 2
+    assert "--allow-model-calls" in result.stderr
+    assert not store_dir.exists()
+
+
+def test_cli_config_rejects_unknown_fields(cli_repo: Path, tmp_path: Path) -> None:
+    base, head = base_head(cli_repo)
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"unknown_option": true}', encoding="utf-8")
+    result = run_cli([
+        "--repo", str(cli_repo), "--base", base, "--head", head,
+        "--through", "anatomy", "--config", str(config_path),
+        "--store-dir", str(tmp_path / "events"),
+    ])
+    assert result.returncode == 2
+    assert not (tmp_path / "events").exists()

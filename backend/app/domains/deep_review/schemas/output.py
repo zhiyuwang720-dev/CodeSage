@@ -88,3 +88,15 @@ class PreparationReport(BaseModel):
     reviewer_dimensions_deferred: int = Field(default=0, ge=0)
     reviewer_dimensions_degraded: int = Field(default=0, ge=0)
     agent_observations: list[AgentObservation] = Field(default_factory=list)
+
+
+class ProcessReport(PreparationReport):
+    """The final run's diagnostic projection, never the source of final Findings."""
+
+    mode: Literal["final"] = "final"
+    pipeline_complete: Literal[True] = True
+    completed_stage: Literal["final"] = "final"
+    final_status: Literal["completed", "partial", "failed"]
+    final_content_hash: str = Field(min_length=64, max_length=64)
+    final_metrics: ReviewMetrics
+    stage_durations_ms: dict[str, int] = Field(default_factory=dict)

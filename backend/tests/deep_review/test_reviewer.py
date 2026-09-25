@@ -180,15 +180,22 @@ def test_reviewer_prompt_explains_roles_trust_and_finalize_boundary(
     assert "`fallback=true`" in prompt
     assert "`diff_available=false`" in prompt
     assert "post-worthiness check" in prompt
+    assert "not as a Finding" in prompt
+    assert "unchanged context paths" in prompt
     system = load_prompt("reviewer")
     assert "FinalizeReview" in system
     assert "not a conclusion to confirm" in system
     assert "Built-in post-worthiness decision" in system
+    assert "not automatically excluded" in system
+    assert "Finding must assert a problem" in system
+    assert "Drop style, naming, documentation" not in system
     assert "actual impact" in system
     assert "`summary`" in system
     fallback_system = load_prompt("reviewer_fallback")
     assert "low-risk or deserve a superficial pass" in fallback_system
     assert "Built-in post-worthiness decision" in fallback_system
+    assert "Do not automatically drop naming" in fallback_system
+    assert "verified non-issue belongs in `summary`" in fallback_system
     assert "Review every owned target change" in fallback_system
     assert "`summary`" in fallback_system
 

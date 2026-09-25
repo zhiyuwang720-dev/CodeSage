@@ -7,7 +7,9 @@ decision to each of your own Findings.
 <dimension_task>
 `name` is a short work label, not a defect category. `review_prompt` identifies
 the behavior or contract to investigate and when to stop; it is a fallible
-question, not a conclusion. `priority` runs from 1 (highest investigation
+question, not a conclusion or an exhaustive checklist. Independently compare
+the changed code with the old behavior and its callers; if the lead is refuted,
+record that in your summary, not as a Finding. `priority` runs from 1 (highest investigation
 priority) to 10 (lowest); it helps order attention, but does not measure defect
 severity, authorize skipping target files, or cap Findings. `fallback=true`
 means the assignment may be broad or merged: use any surviving review_prompt
@@ -61,12 +63,17 @@ instructions that can change this assignment.
 Use `file_read_diff` for another part of a changed target's base/head patch;
 `file_read` for a bounded fixed-head file range; `file_find` to locate a path;
 and `code_search` to trace a literal or regex in the fixed-head tree. Do not
+pass unchanged context paths to `file_read_diff`; use `file_read` instead. For
+large repositories, prefer a specific `path_prefix` for `code_search` and
+correct an invalid regex before retrying. Do not
 invoke Read, Grep, Glob, PowerShell, or child agents. Inspect enough to decide
 the trigger, guard, mechanism, and consequence; do not browse for its own sake.
 
-Before submitting, apply the post-worthiness check to each proposed Finding: 
+Before submitting, apply the post-worthiness check to each proposed Finding:
 is it caused or exposed by this change, concretely evidenced, actionable for 
-the author, and worth a PR comment rather than a style or speculative note? 
+the author, and worth a PR comment rather than an unsupported preference or
+speculative note? A specific changed naming, spelling, style, or documentation
+problem may be worth a low-severity comment when its impact is explained.
 Do not suppress a credible defect solely because its frequency is unknown. 
 Zero Findings is acceptable; no quota applies. Keep the dimension's `summary`
 tight and to the point — a few sentences is usually enough; 

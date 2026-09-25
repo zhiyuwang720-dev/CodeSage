@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -13,6 +15,7 @@ from app.domains.deep_review.schemas.output import (
     AgentObservation,
     DeepReviewResult,
     PreparationReport,
+    ProcessReport,
     ReviewMetrics,
     ReviewerDimensionReport,
 )
@@ -65,6 +68,18 @@ class ReviewerExecution:
 
 def _safe_error(exc: BaseException) -> str:
     message = str(exc).strip() or exc.__class__.__name__
+    for key, secret in os.environ.items():
+        sensitive = any(marker in key.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD"))
+        credential_url = key.upper().endswith(("_URL", "_DSN")) and "://" in secret and "@" in secret
+        if (sensitive or credential_url) and len(secret) >= 8:
+            message = message.replace(secret, "[REDACTED]")
+            if credential_url:
+                try:
+                    password = urlsplit(secret).password
+                except ValueError:
+                    password = None
+                if password and len(password) >= 4:
+                    message = message.replace(password, "[REDACTED]")
     return message[:500]
 
 
@@ -83,6 +98,7 @@ class PreparationOrchestrator:
         self.reviewer_semaphore = reviewer_semaphore or asyncio.Semaphore(
             config.max_concurrent_reviewers
         )
+        self._stage_durations_ms: dict[str, int] = {}
 
     async def run_preparation(
         self,
@@ -132,6 +148,7 @@ class PreparationOrchestrator:
             assert plan is not None and cross_result is not None and cross_status is not None
             return self._run_final_stage(
                 run_id=run_id, context=context, plan=plan, reviewers=reviewer_reports,
+                semantic=semantic,
                 candidates=candidates, evidence=evidence, cross=cross_result,
                 cross_status=cross_status, cross_diagnostics=cross_diagnostics,
                 observations=observations, run_started=run_started,
@@ -405,11 +422,11 @@ class PreparationOrchestrator:
             fallback_reason = f"cross_failed:{type(exc).__name__}"
             result = keep_all_result(candidates, fallback_reason)
             diagnostics = [fallback_reason]
-            self.store.append(run_id, "cross_failed", {
-                "error": fallback_reason, "candidate_count": len(candidates),
-            })
+            observation = AgentObservation(stage="cross", error=_safe_error(exc))
+            self._append_agent_event(run_id, "cross_failed", observation,
+                                     candidate_count=len(candidates), diagnostics=diagnostics)
             self._stage_completed(run_id, "cross", started, status="partial")
-            return result, "partial", diagnostics, None
+            return result, "partial", diagnostics, observation
 
         call = outcome.call
         observation = _agent_observation("cross", call)
@@ -441,7 +458,7 @@ class PreparationOrchestrator:
 
     def _run_final_stage(
         self, *, run_id: str, context: DeepReviewRunContext,
-        plan: ReviewPlan, reviewers: list[ReviewerDimensionReport],
+        semantic: SemanticBrief, plan: ReviewPlan, reviewers: list[ReviewerDimensionReport],
         candidates: list[ReviewFinding], evidence: dict[int, EvidencePackage],
         cross: CrossAnalysisResult, cross_status: Literal["completed", "partial", "skipped"],
         cross_diagnostics: list[str], observations: list[AgentObservation],
@@ -460,7 +477,7 @@ class PreparationOrchestrator:
             ))
             partial = (
                 cross_status == "partial" or not plan.coverage_complete
-                or bool(coverage_gaps) or bool(cross_diagnostics)
+                or bool(coverage_gaps) or bool(cross_diagnostics) or bool(merged.diagnostics)
             )
             status: Literal["completed", "partial"] = "partial" if partial else "completed"
             diagnostics = [*context.diagnostics, *cross_diagnostics, *merged.diagnostics]
@@ -475,7 +492,7 @@ class PreparationOrchestrator:
                 cross_status=cross_status, diagnostics=diagnostics,
                 content_hash=stable_business_hash(merged.findings, cross.summary, risks, status),
             )
-            self.store.append(run_id, "final_result", {
+            final_event = {
                 "status": status, "candidate_count": len(candidates),
                 "finding_count": len(result.findings),
                 "dropped_by_cross": merged.dropped_by_cross,
@@ -488,11 +505,46 @@ class PreparationOrchestrator:
                      "diff_proximity": item.diff_proximity}
                     for item in merged.scores
                 ],
-            })
+                "result": result.model_dump(mode="json"),
+            }
+            self.store.append(run_id, "final_result", final_event)
             self._stage_completed(
                 run_id, "final", started, status=status,
                 candidate_count=len(candidates), finding_count=len(result.findings),
             )
+            decisions = context.snapshot.filter_result.decisions
+            process_report = ProcessReport(
+                run_id=run_id,
+                base_commit=context.snapshot.base_commit,
+                head_commit=context.snapshot.head_commit,
+                merge_base=context.snapshot.merge_base,
+                review_paths=context.snapshot.review_paths,
+                context_paths=context.snapshot.context_paths,
+                excluded_count=sum(item.action.value == "exclude" for item in decisions),
+                stats=context.anatomy.stats,
+                clusters=context.anatomy.clusters,
+                related_paths=context.blast_radius,
+                diagnostics=diagnostics,
+                semantic=semantic,
+                plan=plan,
+                reviewers=reviewers,
+                candidates=candidates,
+                candidate_count=len(candidates),
+                cross=cross,
+                cross_status=cross_status,
+                cross_diagnostics=cross_diagnostics,
+                reviewer_dimensions_started=sum(item.status != "deferred" for item in reviewers),
+                reviewer_dimensions_succeeded=sum(item.status == "succeeded" for item in reviewers),
+                reviewer_dimensions_failed=sum(item.status == "failed" for item in reviewers),
+                reviewer_dimensions_deferred=sum(item.status == "deferred" for item in reviewers),
+                reviewer_dimensions_degraded=sum(item.status == "degraded" for item in reviewers),
+                agent_observations=observations,
+                stage_durations_ms=dict(self._stage_durations_ms),
+                final_status=status,
+                final_content_hash=result.content_hash,
+                final_metrics=result.metrics,
+            )
+            self.store.append(run_id, "process_report", {"report": process_report.model_dump(mode="json")})
             self.store.append(run_id, "run_completed", {
                 "status": status, "content_hash": result.content_hash,
             })
@@ -542,6 +594,12 @@ class PreparationOrchestrator:
                 duration_ms=max(0, int((time.monotonic() - dimension_started) * 1000)),
             )
 
+        self.store.append(run_id, "reviewer_batch_started", {
+            "dimensions": [
+                {"dimension_order": order, "dimension_name": dimension.name}
+                for order, dimension in active
+            ],
+        })
         tasks = [asyncio.create_task(execute(order, dimension)) for order, dimension in active]
         try:
             async with asyncio.timeout(self.config.max_duration_seconds):
@@ -740,6 +798,7 @@ class PreparationOrchestrator:
             "stage_completed",
             {"stage": stage, "duration_ms": duration_ms, **details},
         )
+        self._stage_durations_ms[stage] = duration_ms
         logger.info(
             "deep_review.stage_completed run_id=%s stage=%s duration_ms=%d %s",
             run_id,
@@ -758,7 +817,8 @@ class PreparationOrchestrator:
                 {"stage": stage, "duration_ms": duration_ms, "error_type": type(exc).__name__, "error": error},
             )
         finally:
-            logger.exception("deep_review.stage_failed run_id=%s stage=%s", run_id, stage)
+            logger.error("deep_review.stage_failed run_id=%s stage=%s error_type=%s error=%s",
+                         run_id, stage, type(exc).__name__, error)
 
     def _append_agent_event(
         self,
@@ -798,7 +858,7 @@ def _agent_observation(
         session_id=call.session_id,
         usage=call.usage,
         cost_usd=call.cost_usd,
-        error=call.error,
+        error=_safe_error(RuntimeError(call.error)) if call.error else None,
     )
 
 
@@ -829,7 +889,9 @@ def _review_metrics(
         input_tokens=sum(inputs) if inputs and all(value is not None for value in inputs) else None,
         output_tokens=sum(outputs) if outputs and all(value is not None for value in outputs) else None,
         cost_usd=sum(costs) if costs and all(value is not None for value in costs) else None,
-        usage_complete=bool(totals) and all(value is not None for value in totals),
+        usage_complete=bool(totals) and all(
+            value is not None for series in (totals, inputs, outputs) for value in series
+        ) and all((item.usage or {}).get("usage_complete") is not False for item in observations),
         cost_available=bool(costs) and all(value is not None for value in costs),
         duration_ms=elapsed_ms,
     )

@@ -30,6 +30,7 @@ from app.domains.deep_review.services.orchestrator import (
     DeepReviewRunContext,
     PreparationError,
     PreparationOrchestrator,
+    _safe_error,
     _sort_candidates,
 )
 from app.domains.deep_review.services.service import DeepReviewService
@@ -44,6 +45,15 @@ def git(repo: Path, *args: str) -> str:
         text=True,
         encoding="utf-8",
     ).stdout.strip()
+
+
+def test_safe_error_redacts_configured_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "very-secret-token-123")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:db-secret-456@localhost/db")
+    rendered = _safe_error(RuntimeError("provider rejected very-secret-token-123"))
+    assert "very-secret-token-123" not in rendered
+    assert "[REDACTED]" in rendered
+    assert "db-secret-456" not in _safe_error(RuntimeError("connection rejected password db-secret-456"))
 
 
 @pytest.fixture
@@ -582,3 +592,44 @@ async def test_empty_diff_is_valid_preparation(preparation_repo: Path) -> None:
     assert report.context_paths == []
     assert report.completed_stage == "anatomy"
     assert report.pipeline_complete is False
+
+
+@pytest.mark.asyncio
+async def test_service_cancellation_records_terminal_event_and_propagates(
+    preparation_repo: Path, prepared_head: tuple[str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+
+    async def wait_forever(self, run_id, review_input, *, through):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(PreparationOrchestrator, "run_preparation", wait_forever)
+    store = MemoryStore()
+    base, head = prepared_head
+    task = asyncio.create_task(make_service(store).run(
+        ReviewInput(repo_path=str(preparation_repo), base_ref=base, head_ref=head),
+        through="anatomy",
+    ))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert store.events[-1][1] == "run_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_service_global_deadline_records_run_failed(
+    preparation_repo: Path, prepared_head: tuple[str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def wait_forever(self, run_id, review_input, *, through):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(PreparationOrchestrator, "run_preparation", wait_forever)
+    store = MemoryStore()
+    base, head = prepared_head
+    service = DeepReviewService(config=DeepReviewConfig(max_duration_seconds=1), store=store)
+    with pytest.raises(TimeoutError):
+        await service.run(ReviewInput(repo_path=str(preparation_repo), base_ref=base, head_ref=head), through="anatomy")
+    assert store.events[-1][1] == "run_failed"
+    assert store.events[-1][2]["error_type"] == "TimeoutError"

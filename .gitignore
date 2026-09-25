@@ -27,12 +27,17 @@ code-review-benchmark/offline/.pytest-*/
 Thumbs.db
 claude-code-main
 pi
-# docs: only modules/ is public; specs/ideas/intent/analyses stay local
+# docs: only explicitly listed guides/analyses are versioned; other local notes stay ignored
 /docs/*
 !/docs/modules/
 !/docs/guide/
 /docs/guide/*
 !/docs/guide/docker-compose.md
+!/docs/guide/deep-review.md
+!/docs/analysis/
+/docs/analysis/*
+!/docs/analysis/25.5B-三例Review质量基线.md
+!/docs/analysis/25.9-DeepReview真实Smoke与AACR对照.md
 Kode-CLI/
 .omc/
 .omo/

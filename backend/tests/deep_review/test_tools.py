@@ -119,6 +119,18 @@ async def test_find_and_search(tools) -> None:
     assert searched.output_payload["matches"][0]["path"] == "a.py"
 
 
+async def test_invalid_regex_is_actionable_and_context_diff_suggests_file_read(tools) -> None:
+    _read, file_diff, _find, search = tools[0]
+    invalid = await execute(search, {"query": "func (t \\*Tensor) Dim(", "is_regex": True})
+    assert invalid.is_error
+    assert invalid.output_payload["error"] == "invalid_regex"
+    assert "is_regex=false" in invalid.output_payload["message"]
+    context_diff = await execute(file_diff, {"path": "context_helper.py"})
+    assert context_diff.is_error
+    assert context_diff.output_payload["error"] == "invalid_path"
+    assert "file_read" in context_diff.output_payload["message"]
+
+
 async def test_search_can_reach_nonsecret_unmodified_context(tools) -> None:
     _read, _diff, _find, search = tools[0]
     repo = Path(tools[1].input.repo_path)

@@ -76,4 +76,8 @@ class FileReadDiffTool(RuntimeTool):
                 max_bytes=limit,
             )
         except (ToolPathError, ValueError) as exc:
-            return error_payload("invalid_path", str(exc), max_bytes=self.context.config.max_tool_output_bytes)
+            return error_payload(
+                "invalid_path",
+                f"{exc}; file_read_diff accepts changed review paths only. Use file_read for unchanged context files.",
+                max_bytes=self.context.config.max_tool_output_bytes,
+            )

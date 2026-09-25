@@ -39,6 +39,8 @@ from app.execution_plane.runtime.bridge import RuntimeBridge, RuntimeLLMModelCli
 from app.execution_plane.runtime.errors import NonRetryableModelCallError
 from app.execution_plane.models.types import LLMProvider
 from app.tool_gateway.schema_finalize_review import SchemaFinalizeReviewTool
+from app.tool_gateway.runtime import build_runtime_tool
+from app.contracts.models import ToolExecutionPayload
 from app.domains.deep_review.agents.planner import ReviewPlanDraft
 
 
@@ -358,7 +360,7 @@ def test_harness_json_response_enters_forced_finalization() -> None:
     assert llm.calls[1]["parallel_tool_calls"] is False
 
 
-def test_forced_finalizer_uses_isolated_system_prompt_and_only_terminal_tool() -> None:
+def test_forced_finalizer_preserves_original_prompt_and_tool_schema() -> None:
     llm = HarnessFakeLLMService([
         [done_event("investigation complete")],
         [tool_call_event("FinalizeReview", strict_payload(), call_id="forced-final"), done_event("done")],
@@ -379,11 +381,15 @@ def test_forced_finalizer_uses_isolated_system_prompt_and_only_terminal_tool() -
     planner_system = next(message["content"] for message in llm.calls[0]["messages"] if message["role"] == "system")
     finalizer_system = next(message["content"] for message in llm.calls[1]["messages"] if message["role"] == "system")
     assert "Planner prompt" in planner_system
-    assert "Planner prompt" not in finalizer_system
-    assert "file_read" not in finalizer_system
-    assert "code_search" not in finalizer_system
-    assert "finalization-only" in finalizer_system
-    assert [tool["function"]["name"] for tool in llm.calls[1]["tools"]] == ["FinalizeReview"]
+    assert finalizer_system == planner_system
+    assert len(llm.calls[1]["messages"]) > len(llm.calls[0]["messages"])
+    assert all(
+        before == after for before, after in zip(
+            llm.calls[0]["messages"], llm.calls[1]["messages"], strict=False,
+        )
+    )
+    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+    assert "FinalizeReview" in llm.calls[1]["messages"][-1]["content"]
     assert llm.calls[1]["tool_choice"] == {
         "type": "function", "function": {"name": "FinalizeReview"},
     }
@@ -453,6 +459,53 @@ def test_deepseek_thinking_is_disabled_only_for_forced_finalizer_request() -> No
         "type": "function", "function": {"name": "FinalizeReview"},
     }
     assert llm.calls[1]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
+    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+
+
+def test_explicit_model_capability_preserves_full_tool_prefix_and_rejects_wrong_tool() -> None:
+    executed: list[str] = []
+
+    async def read_tool(_parsed, _context):
+        executed.append("read")
+        return ToolExecutionPayload(content="read", output_payload={})
+
+    file_tool = build_runtime_tool(name="file_read", description="Read evidence", execute=read_tool)
+    llm = HarnessFakeLLMService([
+        [done_event("investigation complete")],
+        [tool_call_event("FinalizeReview", strict_payload(), call_id="glm-final"), done_event("done")],
+    ])
+    llm.get_config_for = lambda _agent_type: types.SimpleNamespace(
+        provider=LLMProvider.ZHIPU, model="glm-5.3-flash",
+        finalizer_capability="thinking_and_forced_tool", base_url="https://example.invalid",
+    )
+    bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
+    result = asyncio.run(bridge.harness(
+        "review", schema=StrictReviewResult, tools=[file_tool],
+        tool_allowlist={"file_read"}, max_turns=1,
+    ))
+    assert result.parsed.summary == "done"
+    assert [tool["function"]["name"] for tool in llm.calls[0]["tools"]] == ["file_read", "FinalizeReview"]
+    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+    assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
+    assert llm.calls[1]["tool_choice"]["function"]["name"] == "FinalizeReview"
+    assert llm.calls[1]["extra_body"] is None
+    assert executed == []
+
+    bad_llm = HarnessFakeLLMService([
+        [done_event("investigation complete")],
+        [tool_call_event("file_read", {}, call_id="wrong-tool"), done_event("done")],
+    ])
+    bad_llm.get_config_for = llm.get_config_for
+    bad_bridge = RuntimeBridge(llm_service=bad_llm, tools=[], session_factory=build_session_factory())
+    with pytest.raises(HarnessIncompleteError):
+        asyncio.run(bad_bridge.harness(
+            "review", schema=StrictReviewResult, tools=[file_tool],
+            tool_allowlist={"file_read"}, max_turns=1,
+        ))
+    assert executed == []
+    # A terminal nudge may spend one more bounded request; it must never run file_read.
+    assert len(bad_llm.calls) <= 3
 
 
 def test_harness_invalid_tool_call_then_retry_succeeds() -> None:
@@ -533,19 +586,71 @@ def test_harness_forced_finalization_repairs_invalid_payload_once() -> None:
 
     assert result.parsed.summary == "done"
     assert len(llm.calls) == 3
+    assert result.result["finalization"]["finalizer_requests"] == 2
+    assert result.result["finalization"]["validation_corrections"] == 1
+    assert result.result["finalization"]["terminal_status"] == "accepted"
     assert all(call["tool_choice"] == {
         "type": "function", "function": {"name": "FinalizeReview"},
     } for call in llm.calls[1:])
 
 
-def test_harness_rejects_provider_without_forced_tool_choice_before_call() -> None:
-    llm = HarnessFakeLLMService()
+def test_harness_uses_bounded_append_only_auto_when_forced_choice_is_unavailable() -> None:
+    llm = HarnessFakeLLMService([
+        [done_event("investigation complete")],
+        [tool_call_event("FinalizeReview", strict_payload(), call_id="auto-final"), done_event("done")],
+    ])
     llm.get_config_for = lambda _agent_type: types.SimpleNamespace(provider=LLMProvider.QWEN)
     bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
 
-    with pytest.raises(HarnessIncompleteError, match="forced FinalizeReview"):
-        asyncio.run(bridge.harness("review", schema=StrictReviewResult))
-    assert llm.calls == []
+    result = asyncio.run(bridge.harness("review", schema=StrictReviewResult, max_turns=1))
+    assert result.parsed.summary == "done"
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["tool_choice"] is None
+    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+
+
+@pytest.mark.parametrize(
+    ("capability", "expected_choice", "expected_extra"),
+    [
+        ("thinking_and_forced_tool", True, None),
+        ("forced_tool_only_with_thinking_disabled", True, {"thinking": {"type": "disabled"}}),
+        ("no_forced_tool", False, None),
+        ("unknown", False, None),
+    ],
+)
+def test_explicit_finalizer_capability_matrix(
+    capability: str, expected_choice: bool, expected_extra: dict[str, Any] | None,
+) -> None:
+    llm = HarnessFakeLLMService([
+        [done_event("investigation complete")],
+        [tool_call_event("FinalizeReview", strict_payload(), call_id="matrix-final"), done_event("done")],
+    ])
+    llm.get_config_for = lambda _agent_type: types.SimpleNamespace(
+        provider=LLMProvider.OPENAI, base_url="https://example.invalid",
+        finalizer_capability=capability,
+    )
+    bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
+
+    result = asyncio.run(bridge.harness("review", schema=StrictReviewResult, max_turns=1))
+
+    assert result.parsed.summary == "done"
+    assert bool(llm.calls[1]["tool_choice"]) is expected_choice
+    assert llm.calls[1]["extra_body"] == expected_extra
+    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+    assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
+    assert result.result["finalization"]["capability"] == capability
+    assert result.result["finalization"]["capability_source"] == "model_config"
+    assert result.result["finalization"]["cache_read_tokens"] is None
+
+
+def test_provider_name_alone_does_not_claim_thinking_and_forced_support() -> None:
+    llm = HarnessFakeLLMService()
+    llm.get_config_for = lambda _agent_type: types.SimpleNamespace(
+        provider=LLMProvider.OPENAI, model="unverified-thinking-model",
+        base_url="https://gateway.example.invalid", finalizer_capability="auto",
+    )
+    bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
+    assert bridge._deep_finalizer_capability() == ("unknown", "unverified")
 
 
 def test_harness_schema_isolation() -> None:

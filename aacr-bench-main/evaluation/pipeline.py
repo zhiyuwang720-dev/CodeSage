@@ -27,6 +27,7 @@ from repo_utils import RepoError, log
 from reviewers import claude as claude_reviewer
 from reviewers import codex as codex_reviewer
 from reviewers import ocr as ocr_reviewer
+from reviewers import codesage_deep as codesage_deep_reviewer
 from schema import ReviewInstance, load_instances
 
 try:
@@ -61,6 +62,9 @@ def _review_one_instance(
     max_tools: int = 30,
     codex_home: Optional[Path] = None,
     on_done: Optional[Callable[[str], None]] = None,
+    allow_model_calls: bool = False,
+    codesage_python: str | None = None,
+    codesage_backend: Path | None = None,
 ) -> Dict[str, Any]:
     """评审单条样本，返回状态摘要；RepoError 转为 error 状态而非中断。
 
@@ -70,6 +74,14 @@ def _review_one_instance(
     codex_home 仅 codex 评审器需要（pipeline 在 review 阶段开始时一次性生成）。
     """
     try:
+        if reviewer == "codesage_deep":
+            return codesage_deep_reviewer.review_instance(
+                instance=instance, repo_dir=repo_dir, results_dir=results_dir,
+                timeout_minutes=timeout_minutes, preview=preview,
+                allow_model_calls=allow_model_calls,
+                python_executable=codesage_python,
+                backend_root=codesage_backend,
+            )
         if reviewer == "ocr":
             return ocr_reviewer.review_instance(
                 instance=instance,
@@ -116,6 +128,9 @@ def run_review_stage(
     concurrency: int = 1,
     ocr_command: str = "ocr",
     max_tools: int = 30,
+    allow_model_calls: bool = False,
+    codesage_python: str | None = None,
+    codesage_backend: Path | None = None,
 ) -> List[Dict[str, Any]]:
     """执行评审阶段：逐样本评审并落盘结果文件，返回每条状态摘要。
 
@@ -126,7 +141,10 @@ def run_review_stage(
 
     reviewer_env: Dict[str, str] = {}
     codex_home: Optional[Path] = None
-    if reviewer == "ocr":
+    if reviewer == "codesage_deep":
+        if not preview and not allow_model_calls:
+            raise ValueError("codesage_deep review requires --allow-model-calls")
+    elif reviewer == "ocr":
         ocr_reviewer.ensure_ocr_installed(ocr_command)
         ocr_reviewer.check_env(preview)
     elif reviewer == "claude":
@@ -188,6 +206,9 @@ def run_review_stage(
                     max_tools=max_tools,
                     codex_home=codex_home,
                     on_done=on_instance_done,
+                    allow_model_calls=allow_model_calls,
+                    codesage_python=codesage_python,
+                    codesage_backend=codesage_backend,
                 )
             )
         return group_summary
@@ -307,6 +328,8 @@ def _print_average_summary(reviewer: str, summary: Dict[str, Any], rounds: int) 
 
 def run_pipeline(args) -> int:
     """根据 CLI 参数编排各阶段。"""
+    if args.reviewer == "codesage_deep" and args.stage == "all":
+        raise ValueError("codesage_deep requires separate --stage review and --stage eval; judge is never automatic")
     instances = load_instances(args.dataset, args.limit)
     log(f"Loaded {len(instances)} instance(s) from {args.dataset}")
     if not instances:
@@ -324,6 +347,9 @@ def run_pipeline(args) -> int:
             concurrency=args.concurrency,
             ocr_command=args.ocr_command,
             max_tools=args.max_tools,
+            allow_model_calls=getattr(args, "allow_model_calls", False),
+            codesage_python=getattr(args, "codesage_python", None),
+            codesage_backend=getattr(args, "codesage_backend", None),
         )
 
     if args.stage in ("all", "eval"):
@@ -363,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--reviewer",
-        choices=["ocr", "claude", "codex"],
+        choices=["ocr", "claude", "codex", "codesage_deep"],
         required=True,
         help="使用哪个评审器",
     )
@@ -434,6 +460,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="预览模式：只 clone/checkout，不真正调用评审 LLM",
     )
+    run_parser.add_argument(
+        "--allow-model-calls", action="store_true",
+        help="explicitly authorize CodeSageDeep review model calls; does not authorize judge",
+    )
+    run_parser.add_argument("--codesage-python", default=None,
+                            help="Python executable with CodeSage backend dependencies")
+    run_parser.add_argument("--codesage-backend", type=Path, default=None,
+                            help="absolute path to the CodeSage backend directory")
     return parser
 
 

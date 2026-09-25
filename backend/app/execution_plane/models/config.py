@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from app.contracts.model_boundary import MODEL_BOUNDARY_VERSION
@@ -73,6 +73,10 @@ class LLMConfig:
     presence_penalty: Optional[float] = None
     endpoint_protocol: str = "openai_chat"
     tool_message_format: str = "auto"
+    finalizer_capability: Literal[
+        "auto", "thinking_and_forced_tool", "forced_tool_only_with_thinking_disabled",
+        "no_forced_tool", "unknown",
+    ] = "auto"
     custom_headers: Dict[str, str] = field(default_factory=dict)
     stream_options_include_usage: bool = True
     purpose: str = "review"
@@ -111,6 +115,7 @@ class LLMConfig:
             "transport": self.transport,
             "endpoint_protocol": self.endpoint_protocol,
             "tool_message_format": self.tool_message_format,
+            "finalizer_capability": self.finalizer_capability,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,

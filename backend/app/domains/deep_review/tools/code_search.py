@@ -67,6 +67,15 @@ class CodeSearchTool(RuntimeTool):
                 timeout_seconds=self.context.config.tool_timeout_seconds,
             )
             if result.returncode not in {0, 1}:
+                if parsed_input.is_regex and any(
+                    marker in result.stderr.lower()
+                    for marker in ("invalid regular expression", "unmatched", "unbalanced", "trailing backslash")
+                ):
+                    return error_payload(
+                        "invalid_regex",
+                        "Invalid regex; escape special characters or retry with is_regex=false for a literal search.",
+                        max_bytes=self.context.config.max_tool_output_bytes,
+                    )
                 return error_payload("git_failed", "code_search could not search the head commit.")
             matches = []
             for line in result.stdout.splitlines():

@@ -6,7 +6,7 @@ import uuid
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.schemas.output import DeepReviewResult, PreparationReport
-from app.domains.deep_review.services.orchestrator import PreparationOrchestrator
+from app.domains.deep_review.services.orchestrator import PreparationOrchestrator, _safe_error
 from app.domains.deep_review.services.runtime import DeepReviewRuntimeFactory
 from app.domains.deep_review.storage.protocol import DeepReviewStore, DeepReviewStoreError
 
@@ -59,15 +59,16 @@ class DeepReviewService:
             reviewer_semaphore=self._reviewer_semaphore,
         )
         try:
-            return await orchestrator.run_preparation(run_id, review_input, through=requested_stage)
+            async with asyncio.timeout(self.config.max_duration_seconds):
+                return await orchestrator.run_preparation(run_id, review_input, through=requested_stage)
         except asyncio.CancelledError:
-            self._append_terminal(run_id, "run_cancelled", {"stage": "preparation"})
+            self._append_terminal(run_id, "run_cancelled", {"stage": requested_stage})
             raise
         except Exception as exc:
             self._append_terminal(
                 run_id,
                 "run_failed",
-                {"stage": "preparation", "error_type": type(exc).__name__, "error": str(exc)[:500]},
+                {"stage": requested_stage, "error_type": type(exc).__name__, "error": _safe_error(exc)},
             )
             raise
 

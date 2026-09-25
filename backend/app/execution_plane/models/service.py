@@ -92,6 +92,7 @@ class LLMService:
                     "subAgentTimeout",
                     "toolTimeout",
                     "alwaysThinkingEnabled",
+                    "finalizerCapability",
                 ):
                     value = override.get(key)
                     if value not in (None, ""):
@@ -247,6 +248,16 @@ class LLMService:
         )
         if tool_message_format == "auto":
             resolve_tool_message_format(endpoint_protocol, provider=provider.value)
+        finalizer_capability = str(
+            user_llm_config.get("finalizerCapability")
+            or self._first_env_value(runtime_env, ["LLM_FINALIZER_CAPABILITY"])
+            or getattr(settings, "LLM_FINALIZER_CAPABILITY", "auto")
+        ).strip().lower()
+        if finalizer_capability not in {
+            "auto", "thinking_and_forced_tool", "forced_tool_only_with_thinking_disabled",
+            "no_forced_tool", "unknown",
+        }:
+            raise ModelConfigurationError("Invalid finalizerCapability")
         custom_headers = user_llm_config.get("llmCustomHeaders")
         if not isinstance(custom_headers, dict):
             custom_headers = {}
@@ -270,6 +281,7 @@ class LLMService:
             top_p=user_llm_config.get("llmTopP"),
             endpoint_protocol=endpoint_protocol,
             tool_message_format=tool_message_format,
+            finalizer_capability=finalizer_capability,
             custom_headers={str(k): str(v) for k, v in custom_headers.items()},
             purpose=purpose,
             retry_owner=retry_owner,

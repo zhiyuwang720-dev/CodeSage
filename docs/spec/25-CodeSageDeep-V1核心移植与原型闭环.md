@@ -17,6 +17,7 @@ OCR：`85cecfe5f935da2b2aae8f91ce4fee8ed343a681`
 | 2 | [25.3B：Preparation 性能与 Blast Radius 边界](25.3B-Preparation性能与BlastRadius边界.md) | 批量读取 head blob，限制影响面扫描成本，稳定 Anatomy cluster |
 | 2 | [25.4：Semantic、Planner 与 Plan Repair](25.4-Semantic与Planner及PlanRepair.md) | run 接入两个模型阶段，输出经过修复的调查计划 |
 | 3 | [25.5：并行 Reviewer 与 Candidate 汇总](25.5-并行Reviewer与Candidate汇总.md) | 有界并行审查、部分失败记录和稳定 Candidate |
+| 3A | [25.5B：审查质量基线、Plan/Reviewer 提示词与终结兼容](25.5B-审查质量基线与终结兼容.md) | 三例可复核质量基线、提示词改进与按模型能力选择的有界终结路径；阶段 4 turn 调整不在本包 |
 | 4 | [25.6：Cross Analysis 与确定性收尾](25.6-CrossAnalysis与确定性收尾.md) | 全部 Candidate 的裁决及可计算的最终结果 |
 | 5 | [25.7：运行终态与 JSONL 可靠记录](25.7-运行终态与JSONL可靠记录.md) | 完整终态、用量、取消、写入失败和结果物化 |
 | 6 | [25.8：CLI 契约冻结与 AACR 适配](25.8-CLI冻结与AACR适配.md) | AACR 可启动同一 CLI 并正确读取 comments |
