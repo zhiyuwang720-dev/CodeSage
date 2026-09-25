@@ -92,14 +92,14 @@ async def test_file_limit_degrades_blast_radius(tmp_path: Path) -> None:
 
 async def test_non_python_changes_skip_python_import_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     async def unexpected_scan(*_args, **_kwargs):
-        raise AssertionError("Python import graph should not be built for a Go-only diff")
+        raise AssertionError("No source scan is needed for unsupported suffixes")
 
     monkeypatch.setattr(
         "app.domains.deep_review.services.blast_radius.load_head_tree_index",
         unexpected_scan,
     )
     result, index = await analyze_blast_radius(
-        ["cmd/server/main.go", "internal/config/config.ts"],
+        ["src/main.rs", "assets/logo.xyz"],
         "unused",
         "unused",
         DeepReviewConfig(),
@@ -107,7 +107,7 @@ async def test_non_python_changes_skip_python_import_scan(monkeypatch: pytest.Mo
 
     assert result.displayed_paths == []
     assert index is None
-    assert result.coverage_by_language == {"go": "unsupported", "typescript": "unsupported"}
+    assert result.coverage_by_language == {"rust": "unsupported", "unsupported:.xyz": "unsupported"}
 
 
 async def test_total_blob_limit_degrades_blast_radius(tmp_path: Path) -> None:

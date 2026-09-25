@@ -11,9 +11,11 @@ from app.domains.deep_review.schemas.pipeline import Anatomy, ChangeCluster, Dif
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
 
 _LANGUAGES = {
-    ".py": "python", ".ts": "typescript", ".tsx": "typescript", ".js": "javascript",
-    ".jsx": "javascript", ".go": "go", ".rs": "rust", ".java": "java", ".kt": "kotlin",
+    ".py": "python", ".pyi": "python", ".ts": "typescript", ".tsx": "typescript", ".js": "javascript",
+    ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".go": "go", ".rs": "rust", ".java": "java", ".kt": "kotlin",
     ".rb": "ruby", ".php": "php", ".cs": "csharp", ".c": "c", ".cpp": "cpp",
+    ".cc": "cpp", ".cxx": "cpp", ".h": "c_family", ".hpp": "c_family", ".hxx": "c_family",
     ".swift": "swift", ".sh": "shell", ".sql": "sql", ".yaml": "yaml",
     ".yml": "yaml", ".json": "json", ".toml": "toml",
 }

@@ -52,10 +52,10 @@ async def test_python_blast_streams_direct_head_import_without_legacy_graph(
 
 async def test_unsupported_language_never_scans_python_tree() -> None:
     result, index = await analyze_blast_radius(
-        ["main.go", "web/app.ts"], "unused", "unused", DeepReviewConfig(),
+        ["main.rs", "web/image.xyz"], "unused", "unused", DeepReviewConfig(),
     )
     assert index is None
-    assert result.coverage_by_language == {"go": "unsupported", "typescript": "unsupported"}
+    assert result.coverage_by_language == {"rust": "unsupported", "unsupported:.xyz": "unsupported"}
     assert result.displayed_paths == []
 
 

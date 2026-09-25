@@ -80,7 +80,10 @@ async def load_head_tree_index(
         if not record:
             continue
         entry = _decode_entry(record)
-        if entry is None or PurePosixPath(entry.path).suffix.lower() not in SOURCE_SUFFIXES:
+        if entry is None or (
+            PurePosixPath(entry.path).suffix.lower() not in SOURCE_SUFFIXES
+            and PurePosixPath(entry.path).name != "go.mod"
+        ):
             continue
         if not path_filter.is_related_path_allowed(entry.path):
             continue
