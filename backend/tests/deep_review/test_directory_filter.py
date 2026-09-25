@@ -19,6 +19,18 @@ def test_normalize_path_rejects_escape_and_absolute() -> None:
         normalize_path("C:/a.py")
 
 
+def test_related_path_policy_respects_secret_and_existing_overrides() -> None:
+    default = DirectoryFilter(DeepReviewConfig())
+    assert default.is_related_path_allowed("src/caller.py")
+    assert not default.is_related_path_allowed(".env")
+    assert not default.is_related_path_allowed("tests/test_caller.py")
+    assert not default.is_related_path_allowed("../escape.py")
+
+    included = DirectoryFilter(DeepReviewConfig(include_paths=["**/test_*.py"]))
+    assert included.is_related_path_allowed("tests/test_caller.py")
+    assert not included.is_related_path_allowed(".env")
+
+
 def test_secret_and_template_paths() -> None:
     result = DirectoryFilter(DeepReviewConfig()).filter(
         [change(".env"), change(".env.example"), change("keys/id_rsa")]
