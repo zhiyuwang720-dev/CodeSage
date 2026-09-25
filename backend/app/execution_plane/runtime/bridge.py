@@ -866,6 +866,16 @@ class RuntimeBridge:
             normal_tools.append(tool)
         deep_registry = ToolRegistry([*normal_tools, finalizer_tool])
         finalizer_capability, capability_source = self._deep_finalizer_capability()
+        # DeepSeek's thinking-disabled forced-call path has been observed to
+        # return an investigation tool despite tool_choice=FinalizeReview. In
+        # that compatibility path expose only the terminal tool and remove old
+        # tool-call instructions from the transcript. Models explicitly
+        # configured for forced-tool support keep the original schema/prefix.
+        finalizer_registry = (
+            ToolRegistry([finalizer_tool])
+            if finalizer_capability == "forced_tool_only_with_thinking_disabled"
+            else deep_registry
+        )
         forced_finalizer_choice = (
             {"type": "function", "function": {"name": "FinalizeReview"}}
             if finalizer_capability in {"thinking_and_forced_tool", "forced_tool_only_with_thinking_disabled"}
@@ -900,6 +910,7 @@ class RuntimeBridge:
                 terminal_action_nudge_message=DEEP_RUNTIME_TERMINAL_NUDGE,
                 on_session_created=created_session_ids.append,
                 _tool_registry=deep_registry,
+                _finalizer_tool_registry=finalizer_registry,
                 _payload_extractor=self._schema_payload_extractor(schema),
             )
         except (ValueError, RuntimeError) as exc:
@@ -907,6 +918,7 @@ class RuntimeBridge:
             usage, cost_usd = self._harness_metering(session_id)
             raise HarnessIncompleteError(
                 str(exc), session_id=session_id, usage=usage, cost_usd=cost_usd,
+                error_kind=getattr(exc, "error_kind", None),
             ) from exc
 
         session_id = str(result["session_id"])
@@ -918,6 +930,7 @@ class RuntimeBridge:
             raise HarnessIncompleteError(
                 f"Harness ended without a schema-valid payload: {exc}",
                 session_id=session_id, usage=usage, cost_usd=cost_usd,
+                error_kind="final_payload_invalid",
             ) from exc
 
         usage, cost_usd = self._harness_metering(session_id)
@@ -1015,6 +1028,7 @@ class RuntimeBridge:
         on_session_created: Callable[[str], Any] | None = None,
         runtime_metadata: dict[str, Any] | None = None,
         _tool_registry: ToolRegistry | None = None,
+        _finalizer_tool_registry: ToolRegistry | None = None,
         _payload_extractor: Callable[[Any], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
         tool_registry = _tool_registry or self._build_tool_registry(tool_allowlist=tool_allowlist)
@@ -1075,8 +1089,7 @@ class RuntimeBridge:
             finalizer_tools=finalizer_tools,
         )
         if bare_runtime:
-            # Deep Review keeps the same tool schema and order at finalization.
-            ensure_kwargs["finalizer_registry"] = tool_registry
+            ensure_kwargs["finalizer_registry"] = _finalizer_tool_registry or tool_registry
             ensure_kwargs["finalizer_capability"] = finalizer_capability or "unknown"
             ensure_kwargs["finalizer_capability_source"] = finalizer_capability_source or "unverified"
         if forced_finalizer_tool_choice is not None:
@@ -1456,7 +1469,7 @@ class RuntimeBridge:
                 ),
                 forced_tool_choice=forced_finalizer_tool_choice,
                 forced_tool_choice_extra_body=forced_finalizer_extra_body,
-                preserve_prompt_prefix=finalizer_capability != "unknown",
+                preserve_prompt_prefix=finalizer_capability == "thinking_and_forced_tool",
                 max_forced_requests=2,
             )
         finalizer_orchestrator = ToolGateway(
@@ -1476,8 +1489,13 @@ class RuntimeBridge:
                         'capability': finalizer_capability,
                         'capability_source': finalizer_capability_source,
                         'thinking_disabled': bool(forced_finalizer_extra_body),
-                        'strategy': 'append_only_forced' if forced_finalizer_tool_choice
-                        else 'append_only_auto',
+                        'strategy': (
+                            'append_only_forced'
+                            if forced_finalizer_tool_choice and finalizer_capability == 'thinking_and_forced_tool'
+                            else 'isolated_forced'
+                            if forced_finalizer_tool_choice
+                            else 'append_only_auto'
+                        ),
                     },
                 ),
             )

@@ -402,6 +402,16 @@ class ToolGateway:
             parsed_input = tool.validate_input(request.input)
         except ValidationError as exc:
             return _PreparedToolCall(request=request, tool=tool, validation_error=_format_validation_error(tool.name, exc))
+        except ValueError as exc:
+            # RuntimeTool validators may enforce cross-field and scoped-path
+            # rules after Pydantic parsing. Treat those as rejected tool input
+            # so the model can correct the call instead of aborting the turn.
+            detail = str(exc).strip() or "invalid value"
+            return _PreparedToolCall(
+                request=request,
+                tool=tool,
+                validation_error=f"Invalid input for tool '{tool.name}': {detail}",
+            )
 
         try:
             is_concurrency_safe = bool(tool.is_concurrency_safe(parsed_input))

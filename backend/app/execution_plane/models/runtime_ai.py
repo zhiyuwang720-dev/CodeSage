@@ -40,11 +40,13 @@ class HarnessIncompleteError(RuntimeError):
     def __init__(
         self, message: str, *, session_id: str | None = None,
         usage: dict[str, Any] | None = None, cost_usd: float | None = None,
+        error_kind: str | None = None,
     ):
         super().__init__(message)
         self.session_id = session_id
         self.usage = usage
         self.cost_usd = cost_usd
+        self.error_kind = error_kind
 
 
 @dataclass

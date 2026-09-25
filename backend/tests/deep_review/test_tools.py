@@ -4,13 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
-from app.contracts.models import ToolExecutionPayload
+from app.contracts.models import ToolCallRequest, ToolExecutionPayload
 from app.contracts.tools import ToolExecutionContext
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.services.input_builder import build_review_snapshot
 from app.domains.deep_review.tools.catalog import build_review_tools
+from app.tool_gateway.runtime import ToolGateway, ToolRegistry
 
 
 def git(repo: Path, *args: str) -> str:
@@ -65,6 +65,35 @@ async def test_file_read_and_diff(tools) -> None:
     deleted = await execute(file_read, {"path": "deleted.py"})
     assert deleted.output_payload["error"] == "unavailable_deleted_file"
     assert "deleted.py" in snapshot.allowed_paths
+
+
+@pytest.mark.parametrize(
+    ("raw_input", "message"),
+    [
+        (
+            {"path": "a.py", "start_line": 11, "end_line": 3},
+            "end_line must be >= start_line",
+        ),
+        (
+            {"path": "../../../etc/passwd"},
+            "invalid repository path",
+        ),
+    ],
+)
+def test_invalid_file_read_input_becomes_recoverable_tool_validation(
+    tools, raw_input: dict, message: str,
+) -> None:
+    file_read = tools[0][0]
+    gateway = ToolGateway(session_store=object(), tool_registry=ToolRegistry([file_read]))
+
+    prepared = gateway._prepare_call(ToolCallRequest(
+        id="invalid-range",
+        name="file_read",
+        input=raw_input,
+    ))
+
+    assert prepared.validation_error is not None
+    assert message in prepared.validation_error
 
 
 async def test_file_read_diff_pages_the_in_memory_patch_without_losing_lines(tools) -> None:

@@ -459,8 +459,11 @@ def test_deepseek_thinking_is_disabled_only_for_forced_finalizer_request() -> No
         "type": "function", "function": {"name": "FinalizeReview"},
     }
     assert llm.calls[1]["extra_body"] == {"thinking": {"type": "disabled"}}
-    assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
-    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+    assert len(llm.calls[1]["tools"]) == 1
+    assert llm.calls[1]["tools"][0]["function"]["name"] == "FinalizeReview"
+    finalizer_messages = json.dumps(llm.calls[1]["messages"], ensure_ascii=False)
+    assert "autonomous deep review agent" not in finalizer_messages
+    assert "file_read" not in finalizer_messages
 
 
 def test_explicit_model_capability_preserves_full_tool_prefix_and_rejects_wrong_tool() -> None:
@@ -636,8 +639,13 @@ def test_explicit_finalizer_capability_matrix(
     assert result.parsed.summary == "done"
     assert bool(llm.calls[1]["tool_choice"]) is expected_choice
     assert llm.calls[1]["extra_body"] == expected_extra
-    assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
-    assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
+    if capability == "forced_tool_only_with_thinking_disabled":
+        assert [tool["function"]["name"] for tool in llm.calls[1]["tools"]] == ["FinalizeReview"]
+        finalizer_messages = json.dumps(llm.calls[1]["messages"], ensure_ascii=False)
+        assert "autonomous deep review agent" not in finalizer_messages
+    else:
+        assert llm.calls[1]["tools"] == llm.calls[0]["tools"]
+        assert llm.calls[1]["messages"][:len(llm.calls[0]["messages"])] == llm.calls[0]["messages"]
     assert result.result["finalization"]["capability"] == capability
     assert result.result["finalization"]["capability_source"] == "model_config"
     assert result.result["finalization"]["cache_read_tokens"] is None

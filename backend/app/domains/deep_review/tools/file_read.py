@@ -4,7 +4,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.models import ToolExecutionPayload
 from app.contracts.tools import RuntimeTool, ToolExecutionContext
@@ -17,6 +17,12 @@ class FileReadInput(BaseModel):
     start_line: int = Field(default=1, ge=1)
     end_line: int | None = Field(default=None, ge=1)
 
+    @model_validator(mode="after")
+    def validate_line_range(self) -> "FileReadInput":
+        if self.end_line is not None and self.end_line < self.start_line:
+            raise ValueError("end_line must be >= start_line")
+        return self
+
 
 class FileReadTool(RuntimeTool):
     name = "file_read"
@@ -28,8 +34,6 @@ class FileReadTool(RuntimeTool):
 
     def validate_input(self, raw_input: dict) -> FileReadInput:
         parsed = super().validate_input(raw_input)
-        if parsed.end_line is not None and parsed.end_line < parsed.start_line:
-            raise ValueError("end_line must be >= start_line")
         self.context.validate_path(parsed.path)
         return parsed
 

@@ -211,9 +211,11 @@ async def run_planner_agent(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        error_kind = getattr(exc, "error_kind", None)
+        error = f"{type(exc).__name__}:{error_kind}" if error_kind else type(exc).__name__
         return AgentCallResult(
             value=None,
-            error=type(exc).__name__,
+            error=error,
             session_id=harness_result.session_id if harness_result is not None else getattr(exc, "session_id", None),
             usage=harness_result.usage if harness_result is not None else getattr(exc, "usage", None),
             cost_usd=harness_result.cost_usd if harness_result is not None else getattr(exc, "cost_usd", None),
