@@ -11,8 +11,8 @@ from app.domains.deep_review.services.blast_analyzers.common import bounded_entr
 from app.domains.deep_review.services.blast_analyzers.lexing import mask_comments_and_literals
 
 
-_PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;")
-_IMPORT = re.compile(r"(?m)^\s*import\s+(static\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$*][\w$*]*)+)\s*;")
+_PACKAGE = re.compile(r"(?m)^[ \t]*package[ \t]+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)[ \t]*;")
+_IMPORT = re.compile(r"(?m)^[ \t]*import[ \t]+(static[ \t]+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$*][\w$*]*)+)[ \t]*;")
 _TYPE = re.compile(r"\b(?:@interface|class|interface|enum|record)\s+([A-Za-z_$][\w$]*)")
 
 

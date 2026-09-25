@@ -12,7 +12,7 @@ from app.domains.deep_review.services.blast_analyzers.lexing import mask_comment
 
 
 SUFFIXES = frozenset({".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx"})
-_QUOTE_INCLUDE = re.compile(r'(?m)^\s*#\s*include\s*"([^"\n]+)"')
+_QUOTE_INCLUDE = re.compile(r'(?m)^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"')
 
 
 def _includes(content: str) -> set[str]:

@@ -232,10 +232,15 @@ async def analyze_blast_radius(
         seeds = requested.intersection(all_seeds)
         remaining_groups = len(active) - index
         remaining_time = max(0.0, deadline - time.monotonic())
+        # Reserve one second for each later adapter instead of dividing the
+        # whole window equally. A large first-language blob should not degrade
+        # when later adapters finish almost instantly, yet none may monopolize
+        # the entire global deadline.
+        reserved = min(1.0, remaining_time / remaining_groups) * (remaining_groups - 1)
         context = BlastContext(
             repo_path=repo_path, head_commit=head_commit, seed_paths=seeds,
             head_tree=head_tree, config=config,
-            deadline=min(deadline, time.monotonic() + remaining_time / remaining_groups),
+            deadline=min(deadline, time.monotonic() + max(0.0, remaining_time - reserved)),
             scan_byte_budget=(
                 config.max_import_scan_bytes // len(active)
                 + (1 if index < config.max_import_scan_bytes % len(active) else 0)

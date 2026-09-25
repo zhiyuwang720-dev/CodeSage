@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Iterable
@@ -15,6 +16,7 @@ SOURCE_SUFFIXES = frozenset({
     ".py", ".pyi", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
     ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".java",
 })
+_SOURCE_SUFFIXES_BYTES = frozenset(suffix.encode("ascii") for suffix in SOURCE_SUFFIXES)
 REGULAR_MODES = frozenset({"100644", "100755"})
 
 
@@ -66,6 +68,7 @@ def _decode_entry(record: bytes) -> HeadEntry | None:
 async def load_head_tree_index(
     repo_path: str, head_commit: str, config: DeepReviewConfig, *, timeout_seconds: float,
 ) -> HeadTreeIndex:
+    deadline = time.monotonic() + timeout_seconds
     result = await run_git_binary_bounded(
         repo_path, ["ls-tree", "-r", "-z", head_commit],
         max_bytes=config.max_import_tree_bytes,
@@ -76,14 +79,20 @@ async def load_head_tree_index(
     path_filter = DirectoryFilter(config)
     entries: dict[str, HeadEntry] = {}
     path_bytes = 0
-    for record in result.stdout.split(b"\0"):
+    for offset, record in enumerate(result.stdout.split(b"\0")):
+        if offset % 1024 == 0 and time.monotonic() >= deadline:
+            raise HeadTreeUnavailable("fixed-head source index exceeded time budget")
         if not record:
             continue
+        _, separator, raw_path = record.partition(b"\t")
+        if not separator:
+            raise HeadTreeUnavailable("malformed fixed-head tree entry")
+        name = raw_path.rsplit(b"/", 1)[-1].lower()
+        suffix = b"." + name.rsplit(b".", 1)[-1] if b"." in name else b""
+        if suffix not in _SOURCE_SUFFIXES_BYTES and name != b"go.mod":
+            continue
         entry = _decode_entry(record)
-        if entry is None or (
-            PurePosixPath(entry.path).suffix.lower() not in SOURCE_SUFFIXES
-            and PurePosixPath(entry.path).name != "go.mod"
-        ):
+        if entry is None:
             continue
         if not path_filter.is_related_path_allowed(entry.path):
             continue

@@ -1,79 +1,34 @@
-"""Tiny comment/string masker for conservative static import extraction."""
+"""Fast comment/string masking for conservative static import extraction."""
 
 from __future__ import annotations
 
+import re
+
+
+_TOKEN = re.compile(
+    r'//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"""[\s\S]*?(?:"""|\Z)'
+    r'|"(?:\\[\s\S]|[^"\\])*?(?:"|\Z)'
+    r"|'(?:\\[\s\S]|[^'\\])*?(?:'|\Z)"
+    r'|`(?:\\[\s\S]|[^`\\])*?(?:`|\Z)'
+)
+_NON_NEWLINE = re.compile(r"[^\n]")
+
 
 def mask_comments_and_literals(content: str, *, mask_quoted: bool = False) -> str:
-    """Keep newlines and positions; mask comments and template/raw literals.
+    """Keep offsets/newlines; retain ordinary quotes for module specifiers.
 
-    Ordinary quoted strings stay visible when an adapter needs their module
-    specifier. Java passes ``mask_quoted=True`` because its imports have no
-    quoted module names.
+    An unterminated token masks through EOF; it must not expose fake imports.
+    Tokenization runs in the regex engine, not a Python loop over every byte.
     """
     output: list[str] = []
     cursor = 0
-    state = "code"
-    quote = ""
-    while cursor < len(content):
-        char = content[cursor]
-        next_char = content[cursor + 1] if cursor + 1 < len(content) else ""
-        if state == "code":
-            if char == "/" and next_char == "/":
-                output.extend((" ", " "))
-                cursor += 2
-                state = "line_comment"
-                continue
-            if char == "/" and next_char == "*":
-                output.extend((" ", " "))
-                cursor += 2
-                state = "block_comment"
-                continue
-            if mask_quoted and content.startswith('"""', cursor):
-                output.extend((" ", " ", " "))
-                cursor += 3
-                state = "text_block"
-                continue
-            if char in {'"', "'", "`"}:
-                quote = char
-                state = "quoted"
-                output.append(" " if mask_quoted or char == "`" else char)
-                cursor += 1
-                continue
-            output.append(char)
-            cursor += 1
-            continue
-        if state == "line_comment":
-            output.append("\n" if char == "\n" else " ")
-            cursor += 1
-            if char == "\n":
-                state = "code"
-            continue
-        if state == "block_comment":
-            if char == "*" and next_char == "/":
-                output.extend((" ", " "))
-                cursor += 2
-                state = "code"
-            else:
-                output.append("\n" if char == "\n" else " ")
-                cursor += 1
-            continue
-        if state == "text_block":
-            if content.startswith('"""', cursor):
-                output.extend((" ", " ", " "))
-                cursor += 3
-                state = "code"
-            else:
-                output.append("\n" if char == "\n" else " ")
-                cursor += 1
-            continue
-        if char == "\\" and next_char:
-            masked = mask_quoted or quote == "`"
-            output.extend((" " if masked else char, " " if masked else next_char))
-            cursor += 2
-            continue
-        masked = mask_quoted or quote == "`"
-        output.append("\n" if char == "\n" and masked else " " if masked else char)
-        cursor += 1
-        if char == quote:
-            state = "code"
+    for match in _TOKEN.finditer(content):
+        output.append(content[cursor:match.start()])
+        token = match.group()
+        if not mask_quoted and token.startswith(('"', "'")) and not token.startswith('"""'):
+            output.append(token)
+        else:
+            output.append(_NON_NEWLINE.sub(" ", token))
+        cursor = match.end()
+    output.append(content[cursor:])
     return "".join(output)

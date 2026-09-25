@@ -3,7 +3,10 @@
 from pathlib import Path
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
+from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.services.blast_radius import analyze_blast_radius
+from app.domains.deep_review.services.service import DeepReviewService
+from app.domains.deep_review.storage.jsonl_repository import JsonlDeepReviewStore
 from tests.deep_review.test_blast_radius import git
 
 
@@ -136,3 +139,39 @@ async def test_same_directory_test_pair_is_weak_hint_not_language_coverage(tmp_p
         (hint.path, hint.relation) for hint in result.hints
     }
     assert result.coverage_by_language == {"go": "degraded"}  # no go.mod
+
+
+async def test_large_go_blob_and_java_anatomy_need_no_model(tmp_path: Path) -> None:
+    repo, base = repository(tmp_path, {
+        "go.mod": "module example.com/demo\n",
+        "pkg/large.go": "package pkg\n" + (("// " + "x" * 1400 + "\n") * 1000),
+        "pkg/use.go": "package pkg\n",
+        "src/main/java/p/Thing.java": "package p; public class Thing {}\n",
+        "src/main/java/q/Use.java": "package q;\nimport p.Thing;\nclass Use {}\n",
+    })
+    (repo / "pkg/large.go").write_text(
+        "package pkg\nconst Value = 1\n" + (("// " + "x" * 1400 + "\n") * 1000), encoding="utf-8",
+    )
+    (repo / "src/main/java/p/Thing.java").write_text(
+        "package p; public class Thing { int value; }\n", encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "change")
+    head = git(repo, "rev-parse", "HEAD")
+    blast, _ = await analyze_blast_radius(
+        ["pkg/large.go", "src/main/java/p/Thing.java"], str(repo), head,
+        DeepReviewConfig(),
+    )
+    assert blast.scanned_bytes > 1_000_000
+    assert blast.coverage_by_language == {"go": "analyzed", "java": "analyzed"}, blast.diagnostics
+    assert set(blast.displayed_paths) == {"pkg/use.go", "src/main/java/q/Use.java"}
+
+    service = DeepReviewService(
+        config=DeepReviewConfig(), store=JsonlDeepReviewStore(tmp_path / "events"),
+    )
+    report = await service.run(
+        ReviewInput(repo_path=str(repo), base_ref=base, head_ref=head), through="anatomy",
+    )
+    assert report.completed_stage == "anatomy"
+    assert report.blast_radius.coverage_by_language == {"go": "analyzed", "java": "analyzed"}
+    assert "src/main/java/q/Use.java" in report.related_paths

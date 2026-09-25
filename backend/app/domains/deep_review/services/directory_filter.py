@@ -36,7 +36,7 @@ def normalize_path(value: str) -> str:
     return path.as_posix()
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=None)
 def _resource(name: str) -> tuple[str, ...]:
     payload = json.loads(files("app.domains.deep_review.resources").joinpath(name).read_text("utf-8"))
     return tuple(str(item).lower() for item in payload)

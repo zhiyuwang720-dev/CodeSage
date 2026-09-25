@@ -131,3 +131,5 @@ Semantic 当前收到 `related_paths`，但它只能看有界 diff，依赖路�
 7. 用 LVGL C 与 TypeScript-Go Go 样本执行 `--through anatomy`，记录各语言状态、线索和耗时；再比较 Planner 输入字节数。增加 Java 固定仓库的 `--through anatomy` 无模型验收。无需为 Blast Radius 验收重新调用付费模型。
 
 完成 26.1–26.3 后，才根据基准中的真实漏报和扫描耗时决定下一批语言适配器与是否增加持久缓存。
+
+实施后的实测结果、降级边界与无模型验收记录见 [Plan 26 Blast Radius 实施验收](../analysis/26-BlastRadius实施验收.md)。

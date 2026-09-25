@@ -6,6 +6,7 @@ import pytest
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.services.blast_radius import analyze_blast_radius
+from app.domains.deep_review.services.directory_filter import DirectoryFilter, _resource
 from app.domains.deep_review.services.head_tree import validate_head_context_paths
 
 
@@ -14,6 +15,14 @@ def git(repo: Path, *args: str) -> str:
         ["git", "-C", str(repo), *args], check=True, capture_output=True,
         text=True, encoding="utf-8",
     ).stdout.strip()
+
+
+def test_directory_resources_do_not_thrash_between_secret_and_exclude_checks() -> None:
+    _resource.cache_clear()
+    path_filter = DirectoryFilter(DeepReviewConfig())
+    for index in range(50):
+        assert path_filter.is_related_path_allowed(f"src/module{index}.go")
+    assert _resource.cache_info().misses <= 3
 
 
 @pytest.fixture
