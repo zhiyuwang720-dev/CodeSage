@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+<title id="title">REVIEW QUALITY, IN CONTEXT.</title>
+<desc id="desc">CodeSage F1 32.4%, precision 52.8%, recall 23.4%. OCR reference F1 21.3%, precision 32.3%, recall 15.9%. Different samples; not a head-to-head ranking.</desc>
+<rect width="1600" height="1000" fill="#101510"/>
+<circle cx="1335" cy="315" r="365" fill="#17231A"/>
+<path d="M70 112H1530 M70 925H1530 M70 645H1530" stroke="#354431" stroke-width="1"/>
+<path d="M70 0V1000 M800 0V1000 M1530 0V1000" stroke="#354431" stroke-opacity=".23" stroke-dasharray="2 16"/>
+<path d="M79 61 62 80l17 19 M94 61l17 19-17 19 M92 67 82 93" stroke="#D3F86A" stroke-width="5" fill="none"/>
+<text x="137" y="87" fill="#F2F2E8" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="0">CodeSage</text>
+<text x="70" y="166" fill="#D3F86A" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="23" font-weight="400" letter-spacing="2.5">AACR-BENCH / SEMANTIC MATCHING</text>
+<text x="70" y="248" fill="#F2F2E8" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="0">REVIEW QUALITY, IN CONTEXT.</text>
+<text x="73" y="296" fill="#9BA993" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="23" font-weight="400" letter-spacing="0">CodeSage Deep · GLM-5.2 · 2026.09.28</text>
+<rect x="70" y="339" width="1460" height="279" rx="13" fill="#182019" stroke="#476035"/>
+<rect x="70" y="339" width="8" height="279" fill="#D3F86A"/>
+<text x="116" y="400" fill="#A5B59C" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="24" font-weight="400" letter-spacing="0">F1 SCORE</text>
+<text x="116" y="512" fill="#D3F86A" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="96" font-weight="700" letter-spacing="0">32.4%</text>
+<rect x="116" y="556" width="385" height="9" rx="4" fill="#354431"/>
+<rect x="116" y="556" width="124.7" height="9" rx="4" fill="#D3F86A"/>
+<text x="604" y="400" fill="#A5B59C" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="24" font-weight="400" letter-spacing="0">PRECISION</text>
+<text x="604" y="512" fill="#F2F2E8" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="96" font-weight="700" letter-spacing="0">52.8%</text>
+<rect x="604" y="556" width="385" height="9" rx="4" fill="#354431"/>
+<rect x="604" y="556" width="203.3" height="9" rx="4" fill="#D3F86A"/>
+<text x="1092" y="400" fill="#A5B59C" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="24" font-weight="400" letter-spacing="0">RECALL</text>
+<text x="1092" y="512" fill="#F2F2E8" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="96" font-weight="700" letter-spacing="0">23.4%</text>
+<rect x="1092" y="556" width="385" height="9" rx="4" fill="#354431"/>
+<rect x="1092" y="556" width="90.1" height="9" rx="4" fill="#D3F86A"/>
+<text x="72" y="675" fill="#D3F86A" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif" font-size="23" font-weight="400" letter-spacing="0">This run: 100 evaluated instances* · 802 expected notes</text>
+<text x="70" y="744" fill="#9BA993" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="24" font-weight="400" letter-spacing="0">REFERENCE: OCR PUBLISHED RESULT · GLM-5.2 · v1.3.1</text>
+<rect x="70" y="771" width="1460" height="89" rx="10" fill="#171E18" stroke="#354431"/>
+<text x="96" y="825" fill="#F2F2E8" font-family="Bahnschrift, 'Arial Narrow', Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="0">OCR</text>
+<text x="480" y="825" fill="#D4DAD0" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="29" font-weight="400" letter-spacing="0">F1  21.3%</text>
+<text x="815" y="825" fill="#D4DAD0" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="29" font-weight="400" letter-spacing="0">PRECISION  32.3%</text>
+<text x="1170" y="825" fill="#D4DAD0" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="29" font-weight="400" letter-spacing="0">RECALL  15.9%</text>
+<text x="73" y="897" fill="#9BA993" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif" font-size="21" font-weight="400" letter-spacing="0">OCR published scope: 200 PRs · 1,505 expected notes</text>
+<text x="73" y="942" fill="#F2F2E8" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif" font-size="21" font-weight="400" letter-spacing="0">Different case sets and run conditions. These snapshots are not a controlled head-to-head comparison.</text>
+<text x="73" y="973" fill="#9BA993" font-family="'Microsoft YaHei', 'Noto Sans CJK SC', Arial, sans-serif" font-size="18" font-weight="400" letter-spacing="0">* CodeSage source summary conflicts with its missing_instance_ids; completion coverage needs reconciliation.</text>
+<text x="1040" y="86" fill="#9BA993" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="20" font-weight="400" letter-spacing="0">SOURCE-BOUND / 2026</text>
+</svg>

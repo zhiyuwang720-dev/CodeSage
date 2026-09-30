@@ -1,0 +1,39 @@
+{
+  "name": "codesage-showreel",
+  "version": "1.0.0",
+  "description": "CodeSage — Clear Signal. A 15-second engineering showreel.",
+  "repository": {},
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "4.0.529",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.529",
+    "@remotion/transitions": "4.0.529",
+    "@remotion/media": "4.0.529",
+    "@fontsource/barlow-condensed": "5.2.8",
+    "@fontsource/ibm-plex-mono": "5.2.7"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.529",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "remotion studio --no-open",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc",
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "render": "remotion render CodeSage out/render.mp4 --codec h264 --crf 18 --pixel-format yuv420p",
+    "export": "node scripts/export-media.mjs",
+    "poster": "remotion still CodeSage ../codesage-showreel-poster.png --frame 828"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}

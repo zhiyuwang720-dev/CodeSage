@@ -1,0 +1,7 @@
+{
+  "validation_status": "synthetic_reference_derived_not_review_benchmark",
+  "precision": 52.8,
+  "recall": 23.4,
+  "f1": 32.4,
+  "source": "aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json"
+}

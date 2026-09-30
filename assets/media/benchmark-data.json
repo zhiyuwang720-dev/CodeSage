@@ -1,0 +1,37 @@
+{
+  "validation_status": "synthetic_reference_derived_not_review_benchmark",
+  "validation_note": "The supplied run manifest records zero reviewer and judge calls, reference-answer paraphrases and template-generated comments. Do not interpret these numbers as measured review performance or ranking evidence.",
+  "codesage": {
+    "label": "CodeSage Deep",
+    "model": "GLM-5.2",
+    "run": "deep-GLM-5.2",
+    "date": "2026-09-28",
+    "evaluated_instances_reported": 100,
+    "expected_notes": 802,
+    "generated_notes": 356,
+    "semantic_matches": 188,
+    "precision": 52.8,
+    "recall": 23.4,
+    "f1": 32.4,
+    "avg_duration_seconds": 258.85,
+    "avg_tokens": 105715.16,
+    "source_path": "aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json",
+    "source_sha256": "27c30be8305d2cffe1c78d3a2406b31c78841ae5a58b2ffee85aa9edc9100d14",
+    "source_coverage_note": "The source summary reports 100 evaluated instances and zero missing, while ex_info.missing_instance_ids lists seven IDs; completion coverage has not been independently reconciled."
+  },
+  "ocr_reference": {
+    "label": "Open Code Review",
+    "model": "GLM-5.2",
+    "version": "v1.3.1",
+    "instances": 200,
+    "expected_notes": 1505,
+    "generated_notes": 741,
+    "semantic_matches": 239,
+    "precision": 32.3,
+    "recall": 15.9,
+    "f1": 21.3,
+    "source_url": "https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png",
+    "source_table_url": "https://github.com/alibaba/open-code-review/blob/main/pages/src/components/BenchmarkSection.tsx"
+  },
+  "comparability": "The CodeSage result and the OCR published row cover different case subsets and run conditions. Their displayed numbers are reference snapshots, not a controlled head-to-head result."
+}
