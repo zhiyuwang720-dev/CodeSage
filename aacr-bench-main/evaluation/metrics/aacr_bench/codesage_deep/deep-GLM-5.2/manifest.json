@@ -1,0 +1,23 @@
+{
+  "created_at": "2026-09-28T11:07:15.790619+00:00",
+  "source_instance_count": 100,
+  "unique_source_instance_count": 100,
+  "reference_comment_count": 802,
+  "result_json_count": 100,
+  "confusion_matrix": {
+    "tp": 188,
+    "fp": 168,
+    "fn": 614,
+    "generated": 356,
+    "expected": 802
+  },
+  "requested_metrics_from_raw_counts": {
+    "precision_percent": 52.81,
+    "recall_percent": 23.4,
+    "f1_percent": 32.47
+  },
+  "comment_authoring": {
+    "model": "GLM-5.2",
+    "endpoint_host": "open.bigmodel.cn"
+  }
+}

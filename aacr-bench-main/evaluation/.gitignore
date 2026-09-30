@@ -23,6 +23,28 @@ codex_home/
 results/
 metrics/
 
+# Published CodeSage GLM-5.2 AACR-Bench snapshot only.
+!/results/
+/results/*
+!/results/aacr_bench/
+/results/aacr_bench/*
+!/results/aacr_bench/codesage_deep/
+/results/aacr_bench/codesage_deep/*
+!/results/aacr_bench/codesage_deep/deep-GLM-5.2/
+/results/aacr_bench/codesage_deep/deep-GLM-5.2/*
+!/results/aacr_bench/codesage_deep/deep-GLM-5.2/*.json
+!/results/aacr_bench/codesage_deep/deep-GLM-5.2/*.jsonl
+
+!/metrics/
+/metrics/*
+!/metrics/aacr_bench/
+/metrics/aacr_bench/*
+!/metrics/aacr_bench/codesage_deep/
+/metrics/aacr_bench/codesage_deep/*
+!/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/
+/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/*
+!/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/*.json
+
 # Python 缓存
 __pycache__/
 *.pyc
