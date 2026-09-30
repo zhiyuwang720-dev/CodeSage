@@ -249,6 +249,12 @@ def _extract_usage_from_result(
         token_usage = data.get("token_usage") or {}
         input_tokens = token_usage.get("input_tokens", 0) or 0
         output_tokens = token_usage.get("output_tokens", 0) or 0
+    elif reviewer == "codesage_deep":
+        # CodeSageDeep stores its human-readable summary as text; its token
+        # counters live in the reviewer-specific metrics envelope.
+        metrics = (data.get("deep_review") or {}).get("metrics") or {}
+        input_tokens = metrics.get("input_tokens", 0) or 0
+        output_tokens = metrics.get("output_tokens", 0) or 0
     else:
         review = data.get("review") or {}
         summary = review.get("summary") or {}

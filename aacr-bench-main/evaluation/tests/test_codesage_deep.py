@@ -22,7 +22,10 @@ def _final_payload(*, findings: list[dict] | None = None) -> dict:
     return {
         "run_id": "run-123", "status": "completed", "findings": findings or [],
         "summary": "review complete", "unresolved_risks": [],
-        "metrics": {"reviewed_files": 1, "model_calls": 4, "duration_ms": 100},
+        "metrics": {
+            "reviewed_files": 1, "model_calls": 4, "duration_ms": 100,
+            "input_tokens": 123, "output_tokens": 45,
+        },
         "content_hash": "a" * 64, "candidate_count": len(findings or []),
         "cross_status": "completed", "diagnostics": [],
     }
@@ -64,6 +67,30 @@ def test_adapter_calls_same_cli_and_evaluator_reads_one_comment(tmp_path: Path, 
     assert comments[0]["path"] == "src/a.py"
     assert comments[0]["from_line"] == 5 and comments[0]["to_line"] == 6
     assert "Typo" in comments[0]["note"]
+    envelope = json.loads(config.result_path(results_dir, instance.instance_id).read_text(encoding="utf-8"))
+    assert envelope["review"]["summary"] == "review complete"
+    usage = evaluate._extract_usage_from_result(results_dir, "codesage_deep", instance.instance_id)
+    assert usage == {
+        "duration_seconds": envelope["duration_seconds"],
+        "input_tokens": 123,
+        "output_tokens": 45,
+    }
+
+
+def test_codesage_usage_fix_preserves_ocr_summary_shape(tmp_path: Path) -> None:
+    instance = _instance()
+    path = config.result_path(tmp_path, instance.instance_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "duration_seconds": 12.5,
+        "review": {"summary": {"input_tokens": 78, "output_tokens": 9}},
+    }), encoding="utf-8")
+
+    assert evaluate._extract_usage_from_result(tmp_path, "ocr", instance.instance_id) == {
+        "duration_seconds": 12.5,
+        "input_tokens": 78,
+        "output_tokens": 9,
+    }
 
 
 def test_adapter_rejects_preparation_without_success_envelope(tmp_path: Path, monkeypatch) -> None:
