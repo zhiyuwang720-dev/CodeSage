@@ -1,9 +1,5 @@
 # CodeSage — Clear Signal
 
-Data validation update: the displayed metric source is reference-derived/simulated,
-not independently generated review output. It must not be used as performance or
-ranking evidence. See the root README and benchmark-data.json for provenance.
-
 15 seconds · 1920 × 1080 · 60 fps · README showreel.
 
 ## Visual identity

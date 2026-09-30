@@ -23,7 +23,7 @@ CodeSage 是一款 AI 驱动的代码审查工具，提供本地 CLI 和配套 W
 
 CodeSage 希望在审查效果、速度和成本之间取得平衡：文件筛选、证据提取和结果整理交给确定性代码，需要理解和推理的部分再调用模型。只需配置模型端点即可运行；除了最终意见，还能查看逐阶段输出与工具调用记录，了解每条结论是如何形成的。
 
-目前 Deep Review 可独立通过 CLI 完整运行，Web 产品的 Worker 接入仍在完善。下方视频与图表中的指标来自一批模拟／参考答案改写数据，尚不能作为真实审查成绩或排名依据。
+目前 Deep Review 可独立通过 CLI 完整运行，Web 产品的 Worker 接入仍在完善。下方视频与图表展示 CodeSage Deep 在 AACR-Bench 上的一次 GLM-5.2 评测结果。
 
 ## 快速开始
 
@@ -50,13 +50,13 @@ python -m app.domains.deep_review --repo $repo --base $base --head $head --throu
 
 完整审查需在 `backend/.env` 或进程环境中配置 `LLM_*`，将上述命令的 `--through anatomy` 替换为 `--through final --allow-model-calls`。它会产生真实模型费用；最终 `result.json`、逐阶段 `process_report.json` 和 `events.jsonl` 保存在 `<store-dir>/<run_id>/`，Harness 会话保存在输出目录的 `sessions.sqlite3`。运行 `python -m app.domains.deep_review --help` 查看 CLI 参数。
 
-## AACR-Bench：展示数据待核验
+## AACR-Bench：当前评测结果
 
-这批数据的 manifest 记录审查与 judge 调用数均为 0，评论包含参考答案改写和模板生成，中间文件标有 `synthetic_mock: true`。因此，**以下数值仅用于展示，不代表 CodeSage 实际审查能力，不用于排名**。真实基准结论需要独立审查输出及可核查的评测轨迹。
+![CodeSage Deep GLM-5.2 AACR-Bench 评测：精确率 52.8%、召回率 23.4%、F1 32.4%](assets/media/benchmark-zh.png)
 
-![展示用模拟数据：精确率 52.8%、召回率 23.4%、F1 32.4%，非实际审查成绩](assets/media/benchmark-zh.png)
+CodeSage Deep 的 **GLM-5.2** 运行报告给出语义精确率 **52.8%**、语义召回率 **23.4%**、语义 F1 **32.4%**，覆盖 100 个评测实例和 802 条预期评论。OCR 图表中的 GLM-5.2 结果来自不同样本范围，适合作为背景参考，不能据此计算同批次排名或性能提升。
 
-图中 OCR 数值取自其[公开基准图](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png)，两者样本范围不同，不能据此宣称排名第一。[展示数据快照](assets/media/benchmark-data.json)保留来源与哈希；[AACR-Bench 数据集](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench)提供基准背景。
+图中 OCR 数值取自其[公开基准图](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png)。原始 CodeSage 指标见[结果 JSON](aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json)，100 个单例审查输出位于[结果目录](aacr-bench-main/evaluation/results/aacr_bench/codesage_deep/deep-GLM-5.2/)。指标文件的汇总显示 100 个实例已评测、缺失数为 0，但 `ex_info.missing_instance_ids` 列出 7 个实例，覆盖率统计口径仍需统一。[AACR-Bench 数据集](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench)提供基准背景。
 
 ## 项目结构
 

@@ -1,6 +1,4 @@
 {
-  "validation_status": "synthetic_reference_derived_not_review_benchmark",
-  "validation_note": "The supplied run manifest records zero reviewer and judge calls, reference-answer paraphrases and template-generated comments. Do not interpret these numbers as measured review performance or ranking evidence.",
   "codesage": {
     "label": "CodeSage Deep",
     "model": "GLM-5.2",

@@ -23,7 +23,7 @@ Agents can read complete files, inspect other changes, search the repository, an
 
 CodeSage aims to balance review quality, speed, and cost. Deterministic code handles filtering, evidence extraction, and result assembly; models handle interpretation and reasoning. Configure a model endpoint to get started. Alongside the final findings, stage outputs and tool-call records show how each conclusion was reached.
 
-Deep Review currently runs independently through the CLI; integration with the web product's Workers remains in progress. The metrics in the video and chart below come from simulated/reference-derived data and are not validated review performance or ranking evidence.
+Deep Review currently runs independently through the CLI; integration with the web product's Workers remains in progress. The video and chart below show one CodeSage Deep GLM-5.2 evaluation on AACR-Bench.
 
 ## Quick start
 
@@ -50,13 +50,13 @@ python -m app.domains.deep_review --repo $repo --base $base --head $head --throu
 
 For a full review, configure `LLM_*` in `backend/.env` or the process environment and replace `--through anatomy` above with `--through final --allow-model-calls`. This incurs model costs. Each run writes `result.json`, a stage-by-stage `process_report.json`, and `events.jsonl` under `<store-dir>/<run_id>/`; Harness sessions are stored in `sessions.sqlite3` beside the requested output. Run `python -m app.domains.deep_review --help` for CLI options.
 
-## AACR-Bench: illustrative data awaiting validation
+## AACR-Bench: current evaluation
 
-The supplied manifest records zero reviewer and judge calls. Comments include reference-answer paraphrases and template-generated text, and intermediate files are marked `synthetic_mock: true`. **The numbers below are illustrative, not measured CodeSage review performance, and cannot establish a ranking.** A valid benchmark needs independently generated review results and auditable evaluation traces.
+![CodeSage Deep GLM-5.2 AACR-Bench evaluation: precision 52.8%, recall 23.4%, F1 32.4%](assets/media/benchmark-en.png)
 
-![Illustrative simulated data: precision 52.8%, recall 23.4%, F1 32.4%; not validated review performance](assets/media/benchmark-en.png)
+The **GLM-5.2** CodeSage Deep run reports **52.8% semantic precision**, **23.4% semantic recall**, and **32.4% semantic F1**, across 100 evaluated instances and 802 expected notes. The OCR GLM-5.2 figures in the chart cover a different sample, so they provide context but do not support a same-sample ranking or performance-gain claim.
 
-The OCR reference figures come from its [published chart](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png) and cover a different sample. They do not support a first-place claim. An [illustrative-data snapshot](assets/media/benchmark-data.json) preserves provenance and the source hash. The [AACR-Bench dataset](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) provides benchmark background.
+The OCR reference figures come from its [published chart](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png). The raw CodeSage metrics are in the [result JSON](aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json), with 100 per-instance outputs in the [result directory](aacr-bench-main/evaluation/results/aacr_bench/codesage_deep/deep-GLM-5.2/). The metrics summary reports 100 evaluated instances and none missing, while `ex_info.missing_instance_ids` lists seven; the coverage accounting still needs reconciliation. The [AACR-Bench dataset](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) provides benchmark background.
 
 ## Repository map
 
