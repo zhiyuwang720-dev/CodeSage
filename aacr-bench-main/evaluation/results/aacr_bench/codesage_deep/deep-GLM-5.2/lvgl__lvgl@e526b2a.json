@@ -1,0 +1,91 @@
+{
+  "instance_id": "lvgl__lvgl@e526b2a",
+  "repo": "lvgl/lvgl",
+  "base_commit": "244b3b996e0b331468cf5967c937029535af569c",
+  "head_commit": "e526b2a1faa4672eeb3610b466ecc25b1abb220b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:32:54.567401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "lvgl__lvgl@e526b2a",
+  "review": {
+    "comments": [
+      {
+        "path": "docs/src/details/auxiliary-modules/observer/observer.rst",
+        "start_line": 584,
+        "end_line": 584,
+        "content": "[medium] Grammar issue in the observer.rst docs: \"support\" should be \"supports\" to agree with the third-person singular subject."
+      },
+      {
+        "path": "src/others/xml/lv_xml.c",
+        "start_line": 10,
+        "end_line": 13,
+        "content": "[medium] `lv_xml.h` appears twice in the include list — once before `#if LV_USE_XML` and once right after it. The duplication seems unnecessary and could be dropped to avoid confusion and reduce compile overhead. If the first include exists to make the `LV_USE_XML` macro visible, keep that one and remove the second.\n\n```suggestion\n#include \"lv_xml.h\"\n#if LV_USE_XML\n\n#include \"lv_xml_base_types.h\"\n```"
+      },
+      {
+        "path": "src/others/xml/lv_xml_style.c",
+        "start_line": 311,
+        "end_line": 316,
+        "content": "[medium] Once the style property has been set, the allocated dsc_array needs to be freed; otherwise it leaks."
+      },
+      {
+        "path": "src/others/xml/parsers/lv_xml_spangroup_parser.c",
+        "start_line": 101,
+        "end_line": 101,
+        "content": "[medium] There is a use-after-free problem in the span text binding implementation: the observer keeps holding a reference to the span after it has been deleted, so memory corruption can occur when the subject notifies an update. The binding mechanism should clean up properly and unsubscribe observers whenever a span is destroyed."
+      },
+      {
+        "path": "src/others/xml/parsers/lv_xml_tabview_parser.c",
+        "start_line": 100,
+        "end_line": 106,
+        "content": "[medium] There may be a problem with how negative indices are handled here. `LV_ABS(index_int)` is compared against `btn_cnt`, yet the original (negative) index is what actually gets used. Either apply the absolute value consistently or handle negative indices in some other way."
+      },
+      {
+        "path": "src/widgets/span/lv_span.c",
+        "start_line": 267,
+        "end_line": 273,
+        "content": "[medium] This function suffers from the same implementation problems as `lv_span_set_text_fmt`:\n1. `va_end(args)` is never called before the `return` when allocation of `text` fails.\n2. The logic for releasing `span->txt` is wrong. With `if(span->txt == NULL && span->static_flag)`, existing dynamic memory is never freed and leaks. The condition should instead read `if(span->static_flag == 0 && span->txt != NULL)`."
+      },
+      {
+        "path": "src/widgets/tabview/lv_tabview.c",
+        "start_line": 245,
+        "end_line": 245,
+        "content": "[medium] The parameter type is inconsistent with the rest of the API: tab indices should use uint32_t, matching other tabview functions such as lv_tabview_get_tab_active and lv_tabview_get_tab_count. A negative index has no meaning for tab buttons."
+      },
+      {
+        "path": "xmls/lv_textarea.xml",
+        "start_line": 9,
+        "end_line": 9,
+        "content": "[medium] This schema change renames \"placeholder\" to \"placeholder_text\", but the XML parser still looks for \"placeholder\" — as a result, placeholder values in parsed XML files are silently ignored. The schema change should be reverted back to \"placeholder\" so it stays compatible with the current parser implementation."
+      },
+      {
+        "path": "xmls/lv_switch.xml",
+        "start_line": 9,
+        "end_line": 11,
+        "content": "[low] Please verify that `lv switch` remains stable when this operation is invoked more than once."
+      },
+      {
+        "path": "docs/src/details/auxiliary-modules/observer/observer.rst",
+        "start_line": 584,
+        "end_line": 584,
+        "content": "[low] The `observer` behavior could use a test that confirms the result remains deterministic."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "e17791cdbd4c",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 9,
+      "dimensions": 9,
+      "model_calls": 17,
+      "total_tokens": 204788,
+      "input_tokens": 191120,
+      "output_tokens": 13668,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 491604
+    }
+  }
+}

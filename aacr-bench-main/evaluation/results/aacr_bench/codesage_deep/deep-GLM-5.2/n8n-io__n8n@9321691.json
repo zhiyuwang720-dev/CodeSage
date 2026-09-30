@@ -1,0 +1,55 @@
+{
+  "instance_id": "n8n-io__n8n@9321691",
+  "repo": "n8n-io/n8n",
+  "base_commit": "aae55fe7ac77594444c3405161555a517902c68b",
+  "head_commit": "93216919462181f52d6994f8f20a9a478716545f",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:51:12.854401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "n8n-io__n8n@9321691",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/@n8n/config/src/configs/generic.config.ts",
+        "start_line": 12,
+        "end_line": 13,
+        "content": "[medium] Since `@Env` handles `Date` values by running them through `Date.parse()`, there's a risk around format/timezone ambiguity — non-ISO strings can behave differently depending on the environment. It may be worth documenting the expected format (e.g., ISO-8601 such as `2025-12-31T00:00:00Z`) and/or naming the env var to signal a timestamp/ISO value if that fits. Also worth checking whether `releaseDate?: string` would be more appropriate if consumers need the raw value."
+      },
+      {
+        "path": "packages/core/src/errors/error-reporter.ts",
+        "start_line": 26,
+        "end_line": 26,
+        "content": "[medium] Having six weeks hardcoded in `SIX_WEEKS_IN_MS` hurts maintainability; a time utility constant would be a better choice."
+      },
+      {
+        "path": "packages/core/src/errors/error-reporter.ts",
+        "start_line": 88,
+        "end_line": 92,
+        "content": "[medium] `SIX_WEEKS_IN_MS` works out to roughly 42 days, which is beyond the largest delay `setTimeout` accepts in Node.js (about 24.8 days, or 2^31-1 ms).\n\nFor new releases, `releaseExpiresInMs` will cross that threshold, so the timeout fires immediately (or with a negligible delay), effectively turning error tracking off as soon as the process starts.\n\n**Suggestion:**\nInstead of using `setTimeout`, store the expiration timestamp in a class property (e.g., `this.releaseExpirationTime`) and check `if (Date.now() > this.releaseExpirationTime)` inside the `beforeSend` method."
+      },
+      {
+        "path": "packages/@n8n/config/src/decorators.ts",
+        "start_line": 58,
+        "end_line": 64,
+        "content": "[low] The intent of `decorators` is not obvious from this location; a concise explanation would help maintainers."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "dfea5d56fc41",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 107666,
+      "input_tokens": 99837,
+      "output_tokens": 7829,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 228135
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "instance_id": "elastic__elasticsearch@a9973f6",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "7c46556e2137a92e7d92ddf40af0ae5388c1e888",
+  "head_commit": "a9973f67256e21340a8b00039531e69b724d0856",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:40:16.754401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@a9973f6",
+  "review": {
+    "comments": [
+      {
+        "path": "libs/entitlement/asm-provider/src/main/java/org/elasticsearch/entitlement/instrumentation/impl/InstrumentationServiceImpl.java",
+        "start_line": 86,
+        "end_line": 86,
+        "content": "[medium] This error message is out of date: per the PR description, class names are now mandatory in every checker method, yet the text still presents \"check$$methodName\" (no class name) as an acceptable format, which is no longer valid.\n\nPlease update it to:\n\n```suggestion\n                    \"Checker method %s has incorrect name format: must be check$className$methodName or check$className$$methodName\",\n```"
+      },
+      {
+        "path": "libs/entitlement/src/main/java/org/elasticsearch/entitlement/instrumentation/MethodKey.java",
+        "start_line": 23,
+        "end_line": 23,
+        "content": "[medium] The `hasReceiver` field in `MethodKey` needs a decision: either rename it to `isInstance`, which more accurately describes its role in identifying nonstatic (instance) methods, or delete the field entirely, since it is unused dead code with no current references."
+      },
+      {
+        "path": "libs/entitlement/asm-provider/src/main/java/org/elasticsearch/entitlement/instrumentation/impl/InstrumentationServiceImpl.java",
+        "start_line": 73,
+        "end_line": 73,
+        "content": "[low] Please confirm that `lastIndexOf(\"$$\")` cannot cause duplicate work when this branch is revisited."
+      },
+      {
+        "path": "libs/entitlement/src/main/java/org/elasticsearch/entitlement/instrumentation/MethodKey.java",
+        "start_line": 20,
+        "end_line": 21,
+        "content": "[low] A focused regression test for `MethodKey` would make this behavior safer to refactor."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "d6c7a6a865d2",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 9,
+      "total_tokens": 102062,
+      "input_tokens": 94520,
+      "output_tokens": 7542,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 298494
+    }
+  }
+}

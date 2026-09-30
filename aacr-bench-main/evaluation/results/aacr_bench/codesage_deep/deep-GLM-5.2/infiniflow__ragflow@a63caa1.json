@@ -1,0 +1,49 @@
+{
+  "instance_id": "infiniflow__ragflow@a63caa1",
+  "repo": "infiniflow/ragflow",
+  "base_commit": "0a42e5777eb966b26aaf8f2a7d593ae99a4aa87a",
+  "head_commit": "a63caa1087852ada98964678be26b7c4d8363af6",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:12:57.381401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "infiniflow__ragflow@a63caa1",
+  "review": {
+    "comments": [
+      {
+        "path": "graphrag/general/extractor.py",
+        "start_line": 216,
+        "end_line": 217,
+        "content": "[medium] Consistent with the earlier fixes made to the node merging logic, the same idiom should be applied here: prefer building a new combined collection instead of mutating the existing one, e.g. `edge0_attrs[\"keywords\"] = list(set(edge0_attrs[\"keywords\"] + edge1_attrs[\"keywords\"]))`. This improves readability and cuts down on mutation-related confusion."
+      },
+      {
+        "path": "graphrag/entity_resolution.py",
+        "start_line": 115,
+        "end_line": 115,
+        "content": "[low] Consider recording the relevant `merging_nodes` value only when it is safe to expose in diagnostics."
+      },
+      {
+        "path": "graphrag/entity_resolution.py",
+        "start_line": 114,
+        "end_line": 114,
+        "content": "[low] Consider moving the `.nodes` assumption into an explicit validation step before this work begins."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2dbb2cef9844",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 95499,
+      "input_tokens": 86920,
+      "output_tokens": 8579,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 269078
+    }
+  }
+}

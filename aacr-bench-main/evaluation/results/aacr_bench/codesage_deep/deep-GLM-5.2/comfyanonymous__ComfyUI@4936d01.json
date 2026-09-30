@@ -1,0 +1,43 @@
+{
+  "instance_id": "comfyanonymous__ComfyUI@4936d01",
+  "repo": "comfyanonymous/ComfyUI",
+  "base_commit": "924d771e18000f4cb223575189daa6d2c6c5a9c1",
+  "head_commit": "4936d01872b8719ede33f9a11dc8e898c33d39e4",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:27:20.508401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "comfyanonymous__ComfyUI@4936d01",
+  "review": {
+    "comments": [
+      {
+        "path": "comfy_extras/nodes_string.py",
+        "start_line": 285,
+        "end_line": 290,
+        "content": "[medium] Off-by-one issue: the check `len(match.groups()) >= group_index` doesn't hold up for `group_index` because `groups()` omits group 0. With 1 capturing group and `group_index=1`, `len(groups())` is 1, so `>= 1` passes as expected, and `group_index=2` correctly fails. The real problem surfaces with `group_index=0`: `len(groups()) >= 0` passes, but `match.group(0)` returns the full match, not a capture group. If 0 is meant to denote the full match, handle that case explicitly; otherwise enforce `min=1` and validate `group_index` as `1 <= group_index <= match.re.groups`.\n\n```suggestion\n            elif mode == \"First Group\":\n                match = re.search(regex_pattern, string, flags)\n                if not match:\n                    result = \"\"\n                elif group_index == 0:\n                    result = match.group(0)  # full match\n                elif 1 <= group_index <= match.re.groups:\n                    result = match.group(group_index)\n                else:\n                    result = \"\"\n```"
+      },
+      {
+        "path": "comfy_extras/nodes_string.py",
+        "start_line": 296,
+        "end_line": 297,
+        "content": "[low] The `match.groups()` branch could use a test for a value that is valid syntactically but unusual in practice."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "768cfd735760",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 6,
+      "total_tokens": 74553,
+      "input_tokens": 68618,
+      "output_tokens": 5935,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 157166
+    }
+  }
+}

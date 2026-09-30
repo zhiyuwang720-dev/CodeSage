@@ -1,0 +1,55 @@
+{
+  "instance_id": "timescale__timescaledb@2568b01",
+  "repo": "timescale/timescaledb",
+  "base_commit": "17fb43d888dbe3b328da6b08b310bc83d3167d39",
+  "head_commit": "2568b018719e25f262255626c474a461da38fc21",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:07:19.742401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "timescale__timescaledb@2568b01",
+  "review": {
+    "comments": [
+      {
+        "path": "tsl/src/hypercore/hypercore_handler.c",
+        "start_line": 105,
+        "end_line": 110,
+        "content": "[medium] Although the function takes a `mode` parameter, it unconditionally passes `AccessShareLock` to `table_open()`. As a result, callers requesting `RowExclusiveLock`, `RowShareLock`, or `AccessExclusiveLock` won't actually obtain the lock level they asked for, which risks concurrency problems or deadlocks.\n\nSuggestion: Forward the `mode` parameter to `table_open()` rather than hardcoding `AccessShareLock`:\n\n```suggestion\nstatic Relation\nhypercore_open_compressed(Relation relation, LOCKMODE mode)\n{\n\tHypercoreInfo *hcinfo = RelationGetHypercoreInfo(relation);\n\treturn table_open(hcinfo->compressed_relid, mode);\n}\n```"
+      },
+      {
+        "path": "tsl/src/hypercore/hypercore_handler.c",
+        "start_line": 3899,
+        "end_line": 3899,
+        "content": "[medium] Performance/robustness concern: `RelationGetHypercoreInfo(rel)` gets invoked inside the inner loop on every attribute. If that function isn't trivial (e.g., a cache lookup), this adds unnecessary overhead, and repeated calls also raise the odds of running into invalidation edge cases. Better to fetch it once per `IndexOptInfo` (outside the `for (i...)` loop); and if resilience to invalidation is needed, copy just the required `columns[]` flags into locals before making further planner calls."
+      },
+      {
+        "path": "tsl/src/hypercore/hypercore_handler.c",
+        "start_line": 1751,
+        "end_line": 1752,
+        "content": "[low] The lifecycle of `hinfo` could be clearer if this code documented who owns its updates."
+      },
+      {
+        "path": "tsl/src/hypercore/hypercore_handler.c",
+        "start_line": 1751,
+        "end_line": 1752,
+        "content": "[low] Please document what callers should expect when `hinfo` is unavailable."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "b5dcd125088b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 122036,
+      "input_tokens": 111952,
+      "output_tokens": 10084,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 322495
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "instance_id": "langflow-ai__langflow@bcfe6f9",
+  "repo": "langflow-ai/langflow",
+  "base_commit": "5bcf4d001f1174ed9e63b7115f10e5dbe1bcca9f",
+  "head_commit": "bcfe6f9ded091cd360b3212b6e9f5a58cbcdac5e",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:24:06.927401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "langflow-ai__langflow@bcfe6f9",
+  "review": {
+    "comments": [
+      {
+        "path": "src/backend/base/langflow/graph/utils.py",
+        "start_line": 163,
+        "end_line": 165,
+        "content": "[medium] This introduces a subtle behavior change: `serialize()` falls back to its default truncation limits (MAX_TEXT_LENGTH=20000, MAX_ITEMS_LENGTH=1000), whereas the old `serialize_field()` never truncated. Vertex build `data` and `artifacts` persisted to the DB/logs could therefore be cut off without warning. If full fidelity matters for debugging/auditing, pass `max_length=None, max_items=None` here, or use a dedicated `serialize_or_str`/configurable limits instead.\n\n```suggestion\n            data=serialize(data, max_length=None, max_items=None),\n            # Serialize artifacts using our custom serializer\n            artifacts=serialize(artifacts, max_length=None, max_items=None) if artifacts else None,\n```"
+      },
+      {
+        "path": "src/backend/base/langflow/serialization/serialization.py",
+        "start_line": 158,
+        "end_line": 167,
+        "content": "[medium] The specific object-type arms on lines 161-165 (Enum, TypeVar, and Type alias/generic types) can never execute, because they sit after the generic `case object() if not isinstance(obj, type):` on line 159. Python evaluates match cases in order and takes the first match, and line 159 already matches any instance that isn't a class — so Enums, TypeVars, and Type aliases all get captured before reaching their dedicated handlers.\n\nSuggestion: reorder so the specific object type cases (Enum, TypeVar, Type alias) come before the generic object() instance case."
+      },
+      {
+        "path": "src/backend/base/langflow/serialization/serialization.py",
+        "start_line": 19,
+        "end_line": 20,
+        "content": "[low] The `_serialize_str` behavior could use a test that confirms the result remains deterministic."
+      },
+      {
+        "path": "src/backend/base/langflow/components/vectorstores/pinecone.py",
+        "start_line": 64,
+        "end_line": 67,
+        "content": "[low] The lifecycle of `Pinecone` could be clearer if this code documented who owns its updates."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "db02a48d9b1e",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 5,
+      "model_calls": 10,
+      "total_tokens": 126362,
+      "input_tokens": 116989,
+      "output_tokens": 9373,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 350441
+    }
+  }
+}

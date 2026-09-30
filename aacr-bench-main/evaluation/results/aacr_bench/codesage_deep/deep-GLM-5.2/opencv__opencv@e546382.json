@@ -1,0 +1,43 @@
+{
+  "instance_id": "opencv__opencv@e546382",
+  "repo": "opencv/opencv",
+  "base_commit": "16a3d37dc159dbcaaf8ee74cf63669f0203f9655",
+  "head_commit": "e546382fc1cbb61a7679c0511303729844a70111",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:59:45.307401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "opencv__opencv@e546382",
+  "review": {
+    "comments": [
+      {
+        "path": "modules/imgcodecs/src/grfmt_png.cpp",
+        "start_line": 293,
+        "end_line": 294,
+        "content": "[low] Please check whether `grfmt png` needs cleanup when the surrounding operation exits early."
+      },
+      {
+        "path": "modules/imgcodecs/src/grfmt_png.cpp",
+        "start_line": 293,
+        "end_line": 294,
+        "content": "[low] A named constant for the `grfmt png` default may make later policy changes easier to audit."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "26913f1d6fc1",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 87170,
+      "input_tokens": 78884,
+      "output_tokens": 8286,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 265225
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "instance_id": "FreeCAD__FreeCAD@f8cd643",
+  "repo": "FreeCAD/FreeCAD",
+  "base_commit": "730e07db5d2acafe7723eb89c83641375c375bc3",
+  "head_commit": "f8cd64328c49510285490dfd9872253ce7a53040",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:56:32.995401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "FreeCAD__FreeCAD@f8cd643",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Mod/ReverseEngineering/App/RegionGrowing.cpp",
+        "start_line": 58,
+        "end_line": 58,
+        "content": "[medium] This could be safer and more in line with modern C++ style if `std::make_shared` were used here instead of a raw 'new'."
+      },
+      {
+        "path": "src/Mod/ReverseEngineering/Gui/Command.cpp",
+        "start_line": 636,
+        "end_line": 636,
+        "content": "[medium] The tooltip is currently phrased as a noun phrase rather than the action-oriented verb form expected by the UI conventions — change \"Triangulation of structured point clouds\" to \"Triangulates structured point clouds\" to keep it consistent."
+      },
+      {
+        "path": "src/Mod/ReverseEngineering/Gui/AppReverseEngineeringGui.cpp",
+        "start_line": 85,
+        "end_line": 85,
+        "content": "[low] Consider moving the `AppReverseEngineeringGui` assumption into an explicit validation step before this work begins."
+      },
+      {
+        "path": "src/Mod/ReverseEngineering/App/RegionGrowing.cpp",
+        "start_line": 58,
+        "end_line": 58,
+        "content": "[low] Consider testing `RegionGrowing` when the related collection contains no entries."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "12d8bdd28138",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 5,
+      "model_calls": 10,
+      "total_tokens": 136385,
+      "input_tokens": 126065,
+      "output_tokens": 10320,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 347981
+    }
+  }
+}

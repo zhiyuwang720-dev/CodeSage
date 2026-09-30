@@ -1,0 +1,49 @@
+{
+  "instance_id": "elastic__elasticsearch@e355340",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "fdfe63eb372a01b91a5b43eb5555c52731a69687",
+  "head_commit": "e355340162f24705db5e48ea2cf0a867490ae001",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:42:37.545401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@e355340",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/main/java/org/elasticsearch/snapshots/SnapshotsService.java",
+        "start_line": 1409,
+        "end_line": 1409,
+        "content": "[medium] The comment on the SnapshotFinalization class is too vague: it doesn't describe the preparatory steps, explain the purpose of FinalizeSnapshotContext, or give concrete examples of what happens next (e.g., snapshot completion or delete operations). Adding those details would improve clarity for developers reading the code."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/snapshots/SnapshotsService.java",
+        "start_line": 1590,
+        "end_line": 1597,
+        "content": "[medium] Currently, `onRejection` only treats an `EsRejectedExecutionException` with `isExecutorShutdown()` as a normal shutdown scenario. Every other rejection (queue full, for example) is routed to `onFailure()`, which logs at ERROR level and asserts false — meaning a transient load spike could end up classified as an 'unexpected failure'. Would it make sense to treat non-shutdown rejections as a routine operational failure (WARN) and call `handleFinalizationFailure` directly, or alternatively add a retry/backoff if that fits better?"
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/snapshots/SnapshotsService.java",
+        "start_line": 1412,
+        "end_line": 1412,
+        "content": "[low] Consider separating the `BlobStoreRepository#finalizeSnapshot` decision from this block if it is reused by another path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "692f5311f4bc",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 91386,
+      "input_tokens": 83633,
+      "output_tokens": 7753,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 199659
+    }
+  }
+}

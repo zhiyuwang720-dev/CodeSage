@@ -1,0 +1,73 @@
+{
+  "instance_id": "CherryHQ__cherry-studio@5644b00",
+  "repo": "CherryHQ/cherry-studio",
+  "base_commit": "636c788e2ba413d21a5fd385c3ea4cc7e134e1be",
+  "head_commit": "5644b00b87e07fa1acd84d4ec93f9f2fb1205090",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:11:51.594401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "CherryHQ__cherry-studio@5644b00",
+  "review": {
+    "comments": [
+      {
+        "path": "src/renderer/src/middleware/convertLinksMiddleware.ts",
+        "start_line": 16,
+        "end_line": 21,
+        "content": "[medium] The `'text-delta'` value is a protocol discriminator; if other middleware branches on it too, moving it to a shared enum or constant would prevent the literal from drifting. Also guard `chunk.textDelta` before passing a potentially malformed chunk to `convertLinks`, since a non-string value could make that middleware throw (for example, `typeof (chunk as any).textDelta === 'string'`)."
+      },
+      {
+        "path": "src/renderer/src/middleware/extractReasoningMiddleware.ts",
+        "start_line": 23,
+        "end_line": 23,
+        "content": "[medium] Prefer strict equality (`===`) over loose equality (`==`) here. With `==`, implicit type coercion can produce surprising results."
+      },
+      {
+        "path": "src/renderer/src/providers/AiProvider/OpenAIProvider.ts",
+        "start_line": 63,
+        "end_line": 66,
+        "content": "[medium] In the `finish` variant of `OpenAIStreamChunk`, the fields `finishReason`, `usage`, `delta`, and `chunk` are all typed as `any`, which defeats TypeScript's type checking. These should be replaced with proper interfaces that spell out each property and its type."
+      },
+      {
+        "path": "src/renderer/src/providers/AiProvider/OpenAIProvider.ts",
+        "start_line": 533,
+        "end_line": 549,
+        "content": "[medium] Neither the middleware invocations nor the stream iteration are covered by try-catch. Should the middleware or stream processing throw, the stream would crash without any meaningful feedback to the user. Wrapping this block in try-catch would let errors be handled gracefully."
+      },
+      {
+        "path": "src/renderer/src/utils/getPotentialIndex.ts",
+        "start_line": 21,
+        "end_line": 26,
+        "content": "[medium] This suffix-matching loop runs in O(n^2) time and creates a fresh string every pass via `text.substring(i)`. With large inputs (e.g., streaming buffers) that could get costly — an index-based comparison avoids the allocations, for instance looping `k` over candidate suffix lengths and testing `searchedText.startsWith(text.slice(-k))` with a cap on `k`, or comparing characters directly. If the substring approach stays, `text.slice(i)` is preferable when applicable, and the scan can be bounded up front with `Math.min(text.length, searchedText.length)`."
+      },
+      {
+        "path": "src/renderer/src/middleware/extractReasoningMiddleware.ts",
+        "start_line": 12,
+        "end_line": 12,
+        "content": "[low] Please verify that `extractReasoningMiddleware` does not silently discard information needed by the next stage."
+      },
+      {
+        "path": "src/renderer/src/middleware/extractReasoningMiddleware.ts",
+        "start_line": 56,
+        "end_line": 57,
+        "content": "[low] Please verify that `flush()` remains stable when this operation is invoked more than once."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5f23437a4904",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 4,
+      "dimensions": 6,
+      "model_calls": 12,
+      "total_tokens": 156453,
+      "input_tokens": 145706,
+      "output_tokens": 10747,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 362126
+    }
+  }
+}

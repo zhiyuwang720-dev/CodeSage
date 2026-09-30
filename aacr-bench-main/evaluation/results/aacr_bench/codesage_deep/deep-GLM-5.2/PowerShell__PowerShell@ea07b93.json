@@ -1,0 +1,43 @@
+{
+  "instance_id": "PowerShell__PowerShell@ea07b93",
+  "repo": "PowerShell/PowerShell",
+  "base_commit": "ce76ae1def6d5b00fff0d855ec01575121268ef3",
+  "head_commit": "ea07b93a40f64274505e3a070c1fd91684ff2959",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:00:40.854401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "PowerShell__PowerShell@ea07b93",
+  "review": {
+    "comments": [
+      {
+        "path": "src/System.Management.Automation/engine/remoting/common/RunspaceConnectionInfo.cs",
+        "start_line": 2238,
+        "end_line": 2242,
+        "content": "[medium] Since this code executes external processes, it may be worth validating that 'filePath' hasn't been redirected to an unexpected location via symbolic links or junction points."
+      },
+      {
+        "path": "src/System.Management.Automation/engine/remoting/common/RunspaceConnectionInfo.cs",
+        "start_line": 2230,
+        "end_line": 2237,
+        "content": "[low] The contract for `Path.IsPathFullyQualified(path)` would be easier to preserve with a focused test at this boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c9516ec704f0",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 74665,
+      "input_tokens": 68576,
+      "output_tokens": 6089,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 200703
+    }
+  }
+}

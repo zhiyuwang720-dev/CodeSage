@@ -1,0 +1,43 @@
+{
+  "instance_id": "mpv-player__mpv@0b0330f",
+  "repo": "mpv-player/mpv",
+  "base_commit": "5ba7ee513751dd005379a06fb627303e6fe1b3dd",
+  "head_commit": "0b0330fa9d5d70c78f36e1010a3b826fa7046387",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:44:32.004401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "mpv-player__mpv@0b0330f",
+  "review": {
+    "comments": [
+      {
+        "path": "test/language.c",
+        "start_line": 104,
+        "end_line": 104,
+        "content": "[medium] Coverage is missing for scenarios where hearing impaired and forced subtitles appear together. Please add tests where both the `hearing_impaired` and `forced` flags are true at the same time, and also cover reversed tag order — for instance \"[forced][hi]\" rather than \"[hi][forced]\"."
+      },
+      {
+        "path": "player/loadfile.c",
+        "start_line": 993,
+        "end_line": 993,
+        "content": "[low] Consider including `e->forced` in the diagnostic context so failures are easier to trace."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "88d7ba57e5c1",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 6,
+      "total_tokens": 98608,
+      "input_tokens": 92289,
+      "output_tokens": 6319,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 201326
+    }
+  }
+}

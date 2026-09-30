@@ -1,0 +1,85 @@
+{
+  "instance_id": "immich-app__immich@5f47591",
+  "repo": "immich-app/immich",
+  "base_commit": "584e5894bfd4fe356e790fa9781ccee4e5224874",
+  "head_commit": "5f4759196534661bd332085514878d0efbb7ce84",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:03:44.392401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@5f47591",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/database.ts",
+        "start_line": 211,
+        "end_line": 239,
+        "content": "[medium] The newly exported `Person` and `AssetFace` types resemble DB record shapes but are hand-written rather than derived from the actual Kysely/DB schema types (e.g., `Selectable<...>`), so they can quietly drift from the real schema (missing columns, wrong nullability, wrong types). Importing the generated DB table types and using `Selectable<DBPerson>` / `Selectable<DBAssetFace>` (or `Insertable/Updateable` as appropriate) would keep everything in sync.\n\nSeparately, `AssetFace.person?: Person | null;` marks `person` as both optional and nullable, which is generally redundant/ambiguous (property may be missing vs explicitly null). Pick a single representation matching how relations are loaded — `person: Person | null` when it's always present on loaded rows, or `person?: Person` when the join is conditional."
+      },
+      {
+        "path": "server/src/dtos/person.dto.ts",
+        "start_line": 249,
+        "end_line": 260,
+        "content": "[medium] Duplicated logic here: `mapFaces` now spells out inline every property that `mapFacesWithoutPerson` already handles, which adds maintenance burden. Restoring the spread — `...mapFacesWithoutPerson(face)` — would keep this DRY and consistent with the original implementation.\n\n```suggestion\nexport function mapFaces(face: AssetFace, auth: AuthDto): AssetFaceResponseDto {\n  return {\n    ...mapFacesWithoutPerson(face),\n    person: face.person?.ownerId === auth.user.id ? mapPerson(face.person) : null,\n  };\n```"
+      },
+      {
+        "path": "server/src/repositories/person.repository.ts",
+        "start_line": 113,
+        "end_line": 113,
+        "content": "[medium] The `params` config on the `@GenerateSql` decorator still models entity objects carrying an `id` property, while the `delete` method has since moved to taking a plain array of string IDs.\nAdjust the decorator to `[[DummyValue.UUID]]` so it reflects the new string-array parameter."
+      },
+      {
+        "path": "server/src/repositories/person.repository.ts",
+        "start_line": 152,
+        "end_line": 152,
+        "content": "[medium] `getAllForUser` relies on page-based pagination, which can become inefficient as the dataset grows. Switching to cursor-based pagination with ID cursors would scale better."
+      },
+      {
+        "path": "server/src/repositories/person.repository.ts",
+        "start_line": 331,
+        "end_line": 339,
+        "content": "[medium] `getById` no longer declares an explicit return type (`Promise<... | null>`). It'd be worth restoring one so callers clearly see nullability and so the type can't silently widen to something unintended."
+      },
+      {
+        "path": "server/src/repositories/search.repository.ts",
+        "start_line": 361,
+        "end_line": 362,
+        "content": "[medium] Since `minBirthDate` may now be `null`, prefer an explicit `minBirthDate != null` guard over the truthiness check (`!!minBirthDate`) paired with a non-null assertion (`minBirthDate!`). The current form happens to work for `Date | null | undefined`, but dropping the `!` and checking against `null` is clearer, safer against future sentinel values, and more idiomatic TypeScript.\n\n```suggestion\n          .$if(minBirthDate != null, (qb) =>\n            qb.where((eb) =>\n              eb.or([eb('person.birthDate', 'is', null), eb('person.birthDate', '<=', minBirthDate)]),\n            ),\n          )\n```"
+      },
+      {
+        "path": "server/src/services/person.service.ts",
+        "start_line": 662,
+        "end_line": 668,
+        "content": "[medium] The inline type on the `asset` parameter is fairly dense. Pulling it out into a named type alias or interface (for example `AssetInput`) would make the signature easier to read and maintain."
+      },
+      {
+        "path": "server/src/repositories/search.repository.ts",
+        "start_line": 361,
+        "end_line": 362,
+        "content": "[low] The `minBirthDate` branch could use a test for a value that is valid syntactically but unusual in practice."
+      },
+      {
+        "path": "server/src/utils/database.ts",
+        "start_line": 26,
+        "end_line": 26,
+        "content": "[low] A short comment describing the intended invariant for `eb.fn.toJson()` could prevent accidental drift."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "33c04e27990d",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 6,
+      "dimensions": 8,
+      "model_calls": 13,
+      "total_tokens": 189548,
+      "input_tokens": 175049,
+      "output_tokens": 14499,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 435283
+    }
+  }
+}

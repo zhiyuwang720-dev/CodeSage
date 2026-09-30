@@ -1,0 +1,61 @@
+{
+  "instance_id": "microsoft__typescript-go@892b4a3",
+  "repo": "microsoft/typescript-go",
+  "base_commit": "a9efe52c52001ea5b49d2ae8d7b0fa32ec8339f3",
+  "head_commit": "892b4a3f6b701352047ceb019fc0683ab1146bb3",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:41:06.171401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__typescript-go@892b4a3",
+  "review": {
+    "comments": [
+      {
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 70,
+        "end_line": 74,
+        "content": "[medium] The test names written into `manualTests.txt` don't match what this code checks against. `makeManual.mts` stores the full filename (e.g., 'testFile_test.go'), whereas this code compares against the capitalized base name (e.g., 'TestFile'). As a result, the skip logic may never match. Please align the naming between the two scripts, or check both formats."
+      },
+      {
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 12,
+        "end_line": 14,
+        "content": "[medium] When no arguments are supplied, the script silently exits with status 1 and never tells users how to invoke it. Please add descriptive error messages explaining the expected argument format and the script's purpose."
+      },
+      {
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 32,
+        "end_line": 36,
+        "content": "[medium] It would be worth adding error handling around the manualTests.txt file operations. If the file is corrupted or contains invalid content, the split operation might fail. Wrapping the file operations in a try-catch block would help as well."
+      },
+      {
+        "path": "internal/fourslash/_scripts/makeManual.mts",
+        "start_line": 29,
+        "end_line": 30,
+        "content": "[low] Since renameSync can fail across filesystem boundaries (EXDEV), a copy-then-delete fallback would make the script more robust when the source tree and output location end up on different mounts."
+      },
+      {
+        "path": "internal/fourslash/_scripts/convertFourslash.mts",
+        "start_line": 44,
+        "end_line": 44,
+        "content": "[low] Consider a small smoke test that runs the converter and asserts the expected output artifacts exist, so regressions in the script's file layout are caught in CI."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "cc44010ba76e",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 112361,
+      "input_tokens": 103945,
+      "output_tokens": 8416,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 274051
+    }
+  }
+}

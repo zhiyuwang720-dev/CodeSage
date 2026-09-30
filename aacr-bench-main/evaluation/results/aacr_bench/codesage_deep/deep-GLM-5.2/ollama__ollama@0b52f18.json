@@ -1,0 +1,43 @@
+{
+  "instance_id": "ollama__ollama@0b52f18",
+  "repo": "ollama/ollama",
+  "base_commit": "c2f5d6662ba696b94455eaaa298a797d56fdca5c",
+  "head_commit": "0b52f186fb4af8fa7d4f6a71967f922eb6b69cdc",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:55:00.989401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ollama__ollama@0b52f18",
+  "review": {
+    "comments": [
+      {
+        "path": "cmd/cmd.go",
+        "start_line": 128,
+        "end_line": 139,
+        "content": "[medium] **Bug: goroutine closure captures loop variables**\n\nThe goroutine closure references the loop variables `f` and `digest`. Because goroutines may run after the loop has advanced, all of them can end up reading the values from the final iteration.\n\n**Fix:** Shadow the variables at the top of each iteration so the closure gets its own copy:\n```go\nfor f, digest := range temp {\n    f, digest := f, digest  // Create new variables for each iteration\n    g.Go(func() error {\n        // ... rest of the code\n    })\n}\n```\n\nThe same problem applies to both the `req.Files` and `req.Adapters` loops."
+      },
+      {
+        "path": "cmd/cmd.go",
+        "start_line": 128,
+        "end_line": 139,
+        "content": "[low] Consider checking the interaction between `f` and a retry or repeated-call path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "899fa3155fbc",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 77689,
+      "input_tokens": 70868,
+      "output_tokens": 6821,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 278737
+    }
+  }
+}

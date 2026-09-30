@@ -1,0 +1,61 @@
+{
+  "instance_id": "mrdoob__three.js@7388f60",
+  "repo": "mrdoob/three.js",
+  "base_commit": "1fc010cb7bd1e17d94c1a33ba8dacdf9e34193cb",
+  "head_commit": "7388f600209ce8a98f7211cd0e93a170b6e98d61",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:47:53.330401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "mrdoob__three.js@7388f60",
+  "review": {
+    "comments": [
+      {
+        "path": "src/extras/PMREMGenerator.js",
+        "start_line": 164,
+        "end_line": 164,
+        "content": "[medium] Would you mind updating the JSDoc type expression from `{null}` to `{WebGLRenderTarget|null}`? That would convey the actual type more clearly and matches the union-style syntax used for nullable object references elsewhere in the ThreeJS codebase."
+      },
+      {
+        "path": "src/nodes/geometry/RangeNode.js",
+        "start_line": 65,
+        "end_line": 66,
+        "content": "[medium] For the JSDoc, the `@return` type should use the lowercase primitive `number` to follow JSDoc conventions and satisfy many linters. Adding `@param {NodeBuilder} builder` is a nice touch; if your doc tooling supports it, referencing/importing the type would give better linking.\n\n```suggestion\n\t * @param {NodeBuilder} builder - The current node builder.\n\t * @return {number} The vector length.\n```"
+      },
+      {
+        "path": "src/renderers/common/extras/PMREMGenerator.js",
+        "start_line": 132,
+        "end_line": 137,
+        "content": "[medium] Per JSDoc conventions, the primitive number type should be written as `number` in lowercase — `Number` refers to the object wrapper instead."
+      },
+      {
+        "path": "src/renderers/common/extras/PMREMGenerator.js",
+        "start_line": 581,
+        "end_line": 585,
+        "content": "[medium] JSDoc convention calls for the lowercase primitive type `number` here; `Number` denotes the object wrapper rather than the primitive."
+      },
+      {
+        "path": "src/renderers/common/extras/PMREMGenerator.js",
+        "start_line": 191,
+        "end_line": 193,
+        "content": "[low] Consider naming the policy used by `RenderTarget?` so nearby call sites do not duplicate it differently."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "e5290430da18",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 4,
+      "model_calls": 10,
+      "total_tokens": 120363,
+      "input_tokens": 112345,
+      "output_tokens": 8018,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 277861
+    }
+  }
+}

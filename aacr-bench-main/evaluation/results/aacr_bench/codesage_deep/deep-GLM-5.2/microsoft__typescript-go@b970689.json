@@ -1,0 +1,67 @@
+{
+  "instance_id": "microsoft__typescript-go@b970689",
+  "repo": "microsoft/typescript-go",
+  "base_commit": "bc3195e0f2727d11a48ed9fc61f37a90c9b7deb4",
+  "head_commit": "b970689fe86e0b6ef4f5285b18343ddf16b294eb",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:41:10.524401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__typescript-go@b970689",
+  "review": {
+    "comments": [
+      {
+        "path": "internal/ast/utilities.go",
+        "start_line": 2367,
+        "end_line": 2369,
+        "content": "[medium] `IsDefaultImport` was extended to accept `KindJSImportDeclaration`, but it still goes through `node.AsImportDeclaration()`. That's only safe if `JSImportDeclaration` shares the same struct/accessor as `ImportDeclaration`; if it has its own node type (e.g., `AsJSImportDeclaration()`), this could panic or read the wrong fields at runtime. Could you confirm which accessor maps to `KindJSImportDeclaration`? If it's distinct, switch to the matching `As*` method, or add a shared helper that extracts `ImportClause` for both kinds."
+      },
+      {
+        "path": "internal/transformers/commonjsmodule.go",
+        "start_line": 66,
+        "end_line": 66,
+        "content": "[medium] CommonJSModuleTransformer shouldn't be processing `JSImportDeclaration` nodes directly. This node kind should be normalized by earlier passes (for example, the type eraser or import ellision) so transformer responsibilities stay separated and module transformers only ever handle edition-appropriate syntax."
+      },
+      {
+        "path": "internal/transformers/externalmoduleinfo.go",
+        "start_line": 50,
+        "end_line": 50,
+        "content": "[medium] Handling ast.KindImportDeclaration and ast.KindJSImportDeclaration as one group presumes `.AsImportDeclaration()` applies interchangeably to both. Please verify that each of these node kinds actually supports this conversion in a structurally consistent way."
+      },
+      {
+        "path": "testdata/baselines/reference/submodule/conformance/importTag3.types",
+        "start_line": 18,
+        "end_line": 19,
+        "content": "[medium] The displayed type has regressed from 'Foo' to 'default'. Since 'Foo' is the local name of the imported interface, this hurts readability. The regression appears tied to the new handling of JSDoc `@import` tags (via `JSImportDeclaration`), where the default import symbol isn't being aliased back to — or printed with — its local name."
+      },
+      {
+        "path": "internal/printer/printer.go",
+        "start_line": 3956,
+        "end_line": 3956,
+        "content": "[low] Consider adding a focused test that runs the printer over a module containing this declaration kind, so any silent fall-through in the switch surfaces as a visible output difference rather than going unnoticed."
+      },
+      {
+        "path": "internal/transformers/externalmoduleinfo.go",
+        "start_line": 50,
+        "end_line": 50,
+        "content": "[low] A unit test covering representative import shapes (default, namespace, named, and side-effect imports) through this grouping would help confirm both node kinds are handled uniformly as intended."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "3a46ec323eb2",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 5,
+      "dimensions": 5,
+      "model_calls": 11,
+      "total_tokens": 141584,
+      "input_tokens": 131649,
+      "output_tokens": 9935,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 366676
+    }
+  }
+}

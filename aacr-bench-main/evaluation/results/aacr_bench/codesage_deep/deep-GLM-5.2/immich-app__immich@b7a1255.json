@@ -1,0 +1,55 @@
+{
+  "instance_id": "immich-app__immich@b7a1255",
+  "repo": "immich-app/immich",
+  "base_commit": "b845184c80295603e3a02dfad84ff2755d417aff",
+  "head_commit": "b7a12558bc8e69c9c96b9a5b12f61f94689ea0e3",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:10:59.675401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@b7a1255",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/repositories/job.repository.ts",
+        "start_line": 209,
+        "end_line": 212,
+        "content": "[medium] `item.data.recipientID` is interpolated into the jobId string without optional chaining or any validation. If recipientID can be null/undefined, ids such as `abc/undefined` would be produced, breaking removal/dedup and complicating debugging. Consider validating the required fields for NOTIFY_ALBUM_UPDATE (and throwing/guarding accordingly), or appending recipientID only when it is present.\n\n```suggestion\n        if (!item.data?.id || !item.data?.recipientID) {\n                  throw new ImmichStartupError('NOTIFY_ALBUM_UPDATE requires id and recipientID');\n                }\n                return {\n                  jobId: `${item.data.id}/${item.data.recipientID}`,\n                  delay: item.data?.delay,\n                };\n```"
+      },
+      {
+        "path": "server/src/services/notification.service.ts",
+        "start_line": 309,
+        "end_line": 312,
+        "content": "[medium] Invocations of external dependencies currently lack defensive error handling, so anomalies originating outside trusted boundaries can go undetected and expose consumers to those risks. Consider wrapping these method chains in protective error-handling blocks with graceful fallback procedures so continuity is maintained even amid transient disruptions."
+      },
+      {
+        "path": "server/src/repositories/job.repository.ts",
+        "start_line": 209,
+        "end_line": 212,
+        "content": "[low] Consider testing `item.data.recipientID` when two callers reach this code with different configuration values."
+      },
+      {
+        "path": "server/src/services/notification.service.ts",
+        "start_line": 309,
+        "end_line": 312,
+        "content": "[low] Consider separating the `notification.service` decision from this block if it is reused by another path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "ac70c9d8eb5b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 8,
+      "total_tokens": 105797,
+      "input_tokens": 98380,
+      "output_tokens": 7417,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 322705
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "instance_id": "google-gemini__gemini-cli@77ea28a",
+  "repo": "google-gemini/gemini-cli",
+  "base_commit": "de968877895a8ae5f0edb83a43b37fa190cc8ec9",
+  "head_commit": "77ea28a234023019ddda3f4a5f7a81b3514d3eb8",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:57:22.943401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "google-gemini__gemini-cli@77ea28a",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/cli/src/ui/commands/mcpCommand.ts",
+        "start_line": 255,
+        "end_line": 263,
+        "content": "[medium] The pluralization logic shows up repeatedly — pulling it into a shared helper function would remove the duplication."
+      },
+      {
+        "path": "packages/cli/src/ui/commands/promptCommands.ts",
+        "start_line": 28,
+        "end_line": 28,
+        "content": "[medium] Possible name collisions: registering only `prompt.name` as the slash command name could clash across multiple MCP servers or with built-in commands. Namespacing (e.g., `${serverName}:${prompt.name}`) or introducing a server-level parent command would prevent overrides/ambiguity in the CLI command registry."
+      },
+      {
+        "path": "packages/cli/src/ui/commands/promptCommands.ts",
+        "start_line": 91,
+        "end_line": 94,
+        "content": "[medium] `if (value)` treats empty strings as falsy, so an explicitly supplied empty value (e.g., `--arg=\"\"`) would get dropped even though optional arguments should receive it. Switching to `if (value !== undefined)` would separate \"not provided\" from \"provided as empty string\".\n\n```suggestion\n                const value = argValues[arg.name];\n                                if (value !== undefined) {\n                                  promptInputs[arg.name] = value;\n                                } else if (arg.required) {\n```"
+      },
+      {
+        "path": "packages/cli/src/ui/commands/promptCommands.ts",
+        "start_line": 164,
+        "end_line": 166,
+        "content": "[medium] The completion function may have a regex problem — substring(2) could misbehave when the input contains more than one dash. The mapping logic could also be simplified."
+      },
+      {
+        "path": "packages/core/src/tools/mcp-client.ts",
+        "start_line": 513,
+        "end_line": 514,
+        "content": "[medium] `discoverPrompts` saves `response.prompts` as-is. If that field is ever absent (depending on how the schema/SDK evolves), `undefined` would end up stored in the map, so consider normalizing to an empty array — e.g., `const prompts = response.prompts ?? []` — to keep the map's value type consistent."
+      },
+      {
+        "path": "packages/core/src/tools/mcp-client.ts",
+        "start_line": 566,
+        "end_line": 568,
+        "content": "[medium] Because `promptParams` is an object interpolated directly into a template literal, it renders as '[object Object]', which isn't useful when debugging. Either pass it through JSON.stringify() or log the object as a separate argument instead."
+      },
+      {
+        "path": "packages/cli/src/ui/commands/mcpCommand.ts",
+        "start_line": 255,
+        "end_line": 263,
+        "content": "[low] Consider moving the `if (descLines)` assumption into an explicit validation step before this work begins."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "767c86aacf4c",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 5,
+      "model_calls": 12,
+      "total_tokens": 129336,
+      "input_tokens": 118220,
+      "output_tokens": 11116,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 381449
+    }
+  }
+}

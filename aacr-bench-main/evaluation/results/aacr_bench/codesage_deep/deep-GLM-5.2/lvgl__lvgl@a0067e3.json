@@ -1,0 +1,43 @@
+{
+  "instance_id": "lvgl__lvgl@a0067e3",
+  "repo": "lvgl/lvgl",
+  "base_commit": "5f41926f0414c02f70547c50329969f7fe6a4b8d",
+  "head_commit": "a0067e3984cc95bb3ed0dce9abb664ee6a01a199",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:31:54.147401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "lvgl__lvgl@a0067e3",
+  "review": {
+    "comments": [
+      {
+        "path": "src/misc/lv_text.c",
+        "start_line": 653,
+        "end_line": 653,
+        "content": "[low] Please clarify whether `txt[*i] == '\\0'` is expected to be case-sensitive at this boundary."
+      },
+      {
+        "path": "src/misc/lv_text.c",
+        "start_line": 653,
+        "end_line": 653,
+        "content": "[low] A brief note about the ownership of `txt` could help avoid conflicting updates."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "d00f0a73430f",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 87906,
+      "input_tokens": 81941,
+      "output_tokens": 5965,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 226716
+    }
+  }
+}

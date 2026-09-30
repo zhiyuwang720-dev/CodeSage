@@ -1,0 +1,43 @@
+{
+  "instance_id": "immich-app__immich@9032c7e",
+  "repo": "immich-app/immich",
+  "base_commit": "55f4e93456ab7415082e342af9ad5cabd52562a6",
+  "head_commit": "9032c7e021872a913e28de2e79bd9ab9806e7413",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:05:25.133401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@9032c7e",
+  "review": {
+    "comments": [
+      {
+        "path": "web/src/service-worker/index.ts",
+        "start_line": 57,
+        "end_line": 60,
+        "content": "[medium] If even one resource fails to fetch (e.g., offline at install time, a 404, or an opaque response), `cache.addAll(APP_RESOURCES)` rejects as a whole, which can block the SW from installing or updating. Worth wrapping in try/catch and/or caching items individually with `Promise.allSettled`, and deciding up front whether install should fail hard or continue with a partial cache.\n\n```suggestion\nasync function addFilesToCache() {\n  const cache = await caches.open(CACHE);\n  const results = await Promise.allSettled(APP_RESOURCES.map((p) => cache.add(p)));\n  // Optionally: if you want to fail install on critical assets, detect rejections here\n  const failed = results.filter((r) => r.status === 'rejected');\n  if (failed.length) {\n    // log or decide whether to throw\n  }\n}\n```"
+      },
+      {
+        "path": "web/src/service-worker/index.ts",
+        "start_line": 35,
+        "end_line": 46,
+        "content": "[low] Please clarify whether `event.request.url` is expected to be case-sensitive at this boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "d6123b240e32",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 77723,
+      "input_tokens": 72103,
+      "output_tokens": 5620,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 188949
+    }
+  }
+}

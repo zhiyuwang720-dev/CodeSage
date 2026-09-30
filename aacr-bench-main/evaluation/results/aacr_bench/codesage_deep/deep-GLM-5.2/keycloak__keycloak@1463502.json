@@ -1,0 +1,37 @@
+{
+  "instance_id": "keycloak__keycloak@1463502",
+  "repo": "keycloak/keycloak",
+  "base_commit": "949ef35a3bda916b24763c435033258a84ba8596",
+  "head_commit": "1463502078ae277b3613e02429ecafde921b892b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:19:50.103401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "keycloak__keycloak@1463502",
+  "review": {
+    "comments": [
+      {
+        "path": "adapters/saml/wildfly/wildfly-subsystem/src/main/java/org/keycloak/subsystem/adapter/saml/extension/KeycloakDependencyProcessor.java",
+        "start_line": 38,
+        "end_line": 38,
+        "content": "[low] Please check that `KEYCLOAK_JBOSS_CORE_ADAPTER` remains understandable when the caller takes the early-return path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "d0f11242f735",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 87880,
+      "input_tokens": 82132,
+      "output_tokens": 5748,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 261623
+    }
+  }
+}

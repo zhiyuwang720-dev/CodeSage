@@ -1,0 +1,49 @@
+{
+  "instance_id": "ClickHouse__ClickHouse@f9d51fa",
+  "repo": "ClickHouse/ClickHouse",
+  "base_commit": "e06542d23d77ca297014b40c7fd0f406f15fef81",
+  "head_commit": "f9d51faa7cba634f38a711494003d404946b05de",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:17:53.720401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ClickHouse__ClickHouse@f9d51fa",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Disks/DiskLocalCheckThread.cpp",
+        "start_line": 41,
+        "end_line": 44,
+        "content": "[medium] `diskStatusChange` should get internal linkage — put it in an anonymous namespace or mark it `static` — so it stays scoped to this translation unit and can't trigger ODR issues. Marking it `constexpr` would also allow compile-time evaluation.\n\nSuggested approach:\n```cpp\nnamespace\n{\n    constexpr int diskStatusChange(bool old_val, bool new_val)\n    {\n        return static_cast<int>(new_val) - static_cast<int>(old_val);\n    }\n}\n```\nOr simply:\n```cpp\nstatic constexpr int diskStatusChange(bool old_val, bool new_val)\n{\n    return static_cast<int>(new_val) - static_cast<int>(old_val);\n}\n```"
+      },
+      {
+        "path": "src/Disks/DiskLocalCheckThread.cpp",
+        "start_line": 35,
+        "end_line": 38,
+        "content": "[low] Please check that `formatReadableTime(static_cast<double>(check_period_ms) * 1e6 /* ns */)` remains understandable when the caller takes the early-return path."
+      },
+      {
+        "path": "src/Disks/DiskLocalCheckThread.cpp",
+        "start_line": 77,
+        "end_line": 77,
+        "content": "[low] The behavior around `DiskLocalCheckThread` would be clearer if its precondition were stated at the boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "6cebf465a9a0",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 93023,
+      "input_tokens": 85756,
+      "output_tokens": 7267,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 188820
+    }
+  }
+}

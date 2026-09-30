@@ -1,0 +1,61 @@
+{
+  "instance_id": "ollama__ollama@b6002f6",
+  "repo": "ollama/ollama",
+  "base_commit": "92b96d54efd6b49322b7cf046f9a0dc16b00cd0a",
+  "head_commit": "b6002f6b6c69370f8c18a9e6c1cafa8463273a6b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:55:06.888401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ollama__ollama@b6002f6",
+  "review": {
+    "comments": [
+      {
+        "path": "ml/backend.go",
+        "start_line": 402,
+        "end_line": 404,
+        "content": "[medium] Adding `Ints() []int32` to the `Tensor` interface breaks the API: every concrete tensor implementation as well as any test fakes/mocks must implement it, otherwise compilation fails. Please make sure every backend/wrapper implementing `Tensor` is updated, and also pin down the expected behavior when the underlying tensor dtype is not int32 (e.g., return nil, convert, or panic) so implementations stay consistent."
+      },
+      {
+        "path": "model/input/input.go",
+        "start_line": 61,
+        "end_line": 63,
+        "content": "[medium] 'indicies' is a typo — the correct spelling is 'indices'.\n\n```suggestion\n\t// Outputs are the set of indices into Inputs for which output data should\n\t// be returned.\n\tOutputs ml.Tensor\n```"
+      },
+      {
+        "path": "runner/ollamarunner/runner.go",
+        "start_line": 711,
+        "end_line": 712,
+        "content": "[medium] There is a potential runtime panic here: `vocabSize := len(outputs) / activeBatch.batch.Outputs.Dim(0)` will divide by zero whenever Outputs is empty (Dim(0)==0). Even if Outputs is normally populated, a defensive guard would be worthwhile (ideally also validating that Outputs is 1-D) to prevent panics and hard-to-debug slice bound errors during sampling.\n\n```suggestion\n\t\toutN := activeBatch.batch.Outputs.Dim(0)\n\t\tif outN <= 0 {\n\t\t\ts.hardErrCh <- fmt.Errorf(\"invalid Outputs dimension: %d\", outN)\n\t\t\treturn\n\t\t}\n\t\tvocabSize := len(outputs) / outN\n\t\tlogutil.Trace(\"computeBatch: vocab details\", \"batchID\", activeBatch.id, \"seqIdx\", i, \"len(logits)\", len(outputs), \"len(activeBatch.batch.Outputs)\", outN, \"vocabSize\", vocabSize, \"iBatches\", iBatches)\n```"
+      },
+      {
+        "path": "model/input/input.go",
+        "start_line": 61,
+        "end_line": 63,
+        "content": "[low] Consider adding coverage for `input` when the relevant option is explicitly disabled."
+      },
+      {
+        "path": "kvcache/causal.go",
+        "start_line": 202,
+        "end_line": 202,
+        "content": "[low] Please confirm that `batch.Positions.Ints()` cannot cause duplicate work when this branch is revisited."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "655235187507",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 4,
+      "dimensions": 4,
+      "model_calls": 8,
+      "total_tokens": 127801,
+      "input_tokens": 118448,
+      "output_tokens": 9353,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 333966
+    }
+  }
+}

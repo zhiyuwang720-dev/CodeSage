@@ -1,0 +1,49 @@
+{
+  "instance_id": "wavetermdev__waveterm@90a57d5",
+  "repo": "wavetermdev/waveterm",
+  "base_commit": "286783fb8e71cec6d2294bd871e5ccf8c798c646",
+  "head_commit": "90a57d552d15f1b2a4d92cdfc3a4308efcf5c57b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:20:32.106401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "wavetermdev__waveterm@90a57d5",
+  "review": {
+    "comments": [
+      {
+        "path": "pkg/shellexec/shellexec.go",
+        "start_line": 258,
+        "end_line": 263,
+        "content": "[medium] The debug log leaks the sensitive swap token value. Please strip the token value from the log message so the credential isn't exposed."
+      },
+      {
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 285,
+        "end_line": 310,
+        "content": "[low] Unit tests covering command strings containing metacharacters (semicolons, backticks, $(...), redirections) when shell execution is disabled would pin down exactly which inputs are rejected."
+      },
+      {
+        "path": "pkg/blockcontroller/blockcontroller.go",
+        "start_line": 285,
+        "end_line": 310,
+        "content": "[low] It may help to document the accepted format for the command field (bare executable path versus full argument string) so the validation behavior is an explicit contract rather than an implementation detail."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "7cfb4184b8f7",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 8,
+      "total_tokens": 112281,
+      "input_tokens": 103324,
+      "output_tokens": 8957,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 280689
+    }
+  }
+}

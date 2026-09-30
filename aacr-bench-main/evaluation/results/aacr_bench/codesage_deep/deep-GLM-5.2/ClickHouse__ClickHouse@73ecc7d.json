@@ -1,0 +1,73 @@
+{
+  "instance_id": "ClickHouse__ClickHouse@73ecc7d",
+  "repo": "ClickHouse/ClickHouse",
+  "base_commit": "80e66f08662739d8eaaccb40ef75c573572bb8ba",
+  "head_commit": "73ecc7d809300ed1c29e1078712c531ebddcb181",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:13:04.390401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ClickHouse__ClickHouse@73ecc7d",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Functions/base64Decode.cpp",
+        "start_line": 36,
+        "end_line": 40,
+        "content": "[medium] Could the indentation of the multi-line raw string literal be lined up? That would give it better visual consistency."
+      },
+      {
+        "path": "src/Functions/concat.cpp",
+        "start_line": 302,
+        "end_line": 302,
+        "content": "[medium] Documentation style inconsistency: in the return-value description for concatAssumeInjective, 'String' should be lowercase 'string' — the description refers to the conceptual type rather than a specific type name, so it should follow the convention for conceptual references."
+      },
+      {
+        "path": "src/Functions/decodeHTMLComponent.cpp",
+        "start_line": 223,
+        "end_line": 230,
+        "content": "[medium] These documentation locals are never modified after initialization, so declaring them `const` (or `const auto`) would guard against accidental mutation and better convey intent.\n\nFor example:\n```cpp\nconst FunctionDocumentation::Description description = ...;\nconst FunctionDocumentation documentation{...};\n```"
+      },
+      {
+        "path": "src/Functions/encodeXMLComponent.cpp",
+        "start_line": 150,
+        "end_line": 164,
+        "content": "[medium] The raw string literals holding the example SQL/output start with leading indentation plus an extra newline right after R\"(, which could surface as unwanted whitespace in generated docs or tests. Left-aligning the contents (or trimming via a helper) would make the rendered example match the expected formatting exactly.\n\n```suggestion\n    FunctionDocumentation::Examples examples = {\n        {\n            \"Usage example\",\n            R\"(SELECT\n    '<tag>Hello & \"World\"</tag>' AS original,\n    encodeXMLComponent('<tag>Hello & \"World\"</tag>') AS xml_encoded;)\",\n            R\"(┌─original───────────────────┬─xml_encoded──────────────────────────────────────────┐\n│ <tag>Hello & \"World\"</tag> │ &lt;tag&gt;Hello &amp; &quot;World&quot;&lt;/tag&gt; │\n└────────────────────────────┴──────────────────────────────────────────────────────┘)\"\n        }\n    };\n```"
+      },
+      {
+        "path": "src/Functions/endsWithUTF8.cpp",
+        "start_line": 23,
+        "end_line": 23,
+        "content": "[medium] Docs inconsistency: the returned_value description references `str`, but the argument is declared as `s` in both the syntax and the Arguments section. For consistency with the parameter's defined name, it should say `s` rather than `str`.\n\n```suggestion\n    FunctionDocumentation::ReturnedValue returned_value = {\"Returns `1` if `s` ends with `suffix`, otherwise `0`.\", {\"UInt8\"}};\n```"
+      },
+      {
+        "path": "src/Functions/base64Encode.cpp",
+        "start_line": 26,
+        "end_line": 27,
+        "content": "[low] The `base64Encode` path may benefit from a test that covers both the success and rejection cases."
+      },
+      {
+        "path": "src/Functions/concatWithSeparator.cpp",
+        "start_line": 210,
+        "end_line": 211,
+        "content": "[low] Consider adding coverage for `sep[, exp1, exp2, ...]` when the relevant option is explicitly disabled."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "92e0bdfaf644",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 7,
+      "dimensions": 7,
+      "model_calls": 12,
+      "total_tokens": 170125,
+      "input_tokens": 157097,
+      "output_tokens": 13028,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 330619
+    }
+  }
+}

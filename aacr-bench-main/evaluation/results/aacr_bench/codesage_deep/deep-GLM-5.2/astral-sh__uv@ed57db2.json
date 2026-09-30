@@ -1,0 +1,49 @@
+{
+  "instance_id": "astral-sh__uv@ed57db2",
+  "repo": "astral-sh/uv",
+  "base_commit": "1fae8dbf1789717f45e82ea290c1c99642d05139",
+  "head_commit": "ed57db2b34c2a7a955b2dc76583dce7ace02e628",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:03:55.920401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "astral-sh__uv@ed57db2",
+  "review": {
+    "comments": [
+      {
+        "path": "crates/uv-cache-key/src/canonical_url.rs",
+        "start_line": 75,
+        "end_line": 75,
+        "content": "[medium] The urlencoding crate isn't imported here. The dependency is already declared in Cargo.toml, so just add `use urlencoding;` or `use urlencoding::decode;` to the imports at the top of the file."
+      },
+      {
+        "path": "crates/uv-distribution-types/src/any.rs",
+        "start_line": 17,
+        "end_line": 20,
+        "content": "[low] Consider adding a focused test that constructs a LocalDist and asserts the exposed canonical version matches what the underlying distribution carries, guarding against the two representations drifting apart over time."
+      },
+      {
+        "path": "crates/uv-cache-key/src/canonical_url.rs",
+        "start_line": 90,
+        "end_line": 90,
+        "content": "[low] It may be worth adding a regression test with percent-encoded characters other than separators, such as encoded spaces or non-ASCII bytes, to confirm the decoding behavior here is intentional and stable across future changes."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "bbf331b77f22",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 7,
+      "total_tokens": 121866,
+      "input_tokens": 112983,
+      "output_tokens": 8883,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 296022
+    }
+  }
+}

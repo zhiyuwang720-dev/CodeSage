@@ -1,0 +1,67 @@
+{
+  "instance_id": "FreeCAD__FreeCAD@a050e42",
+  "repo": "FreeCAD/FreeCAD",
+  "base_commit": "0c65673a6fd2421be8fbe613116077120adea068",
+  "head_commit": "a050e422e23ce3eaee960b75ceff236b34f369b9",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:50:50.582401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "FreeCAD__FreeCAD@a050e42",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Mod/TechDraw/App/DrawProjGroup.cpp",
+        "start_line": 1153,
+        "end_line": 1144,
+        "content": "[medium] A TODO is still present in this file, hinting at a possible refactoring of these identical functions into DrawView — it hasn't been resolved."
+      },
+      {
+        "path": "src/Mod/TechDraw/App/DrawViewPart.cpp",
+        "start_line": 1300,
+        "end_line": 1303,
+        "content": "[medium] The two conditions are written as separate `if` statements, so both may end up being evaluated even though they're presumably meant to be mutually exclusive. Chaining them with `else if` would express that exclusivity and skip the unnecessary second check."
+      },
+      {
+        "path": "src/Mod/TechDraw/Gui/DimensionValidators.cpp",
+        "start_line": 391,
+        "end_line": 392,
+        "content": "[medium] This looks like it might be a typo — was `DimensionGeometry::isVertical` intended rather than `isHorizontal`?"
+      },
+      {
+        "path": "src/Mod/TechDraw/Gui/DimensionValidators.h",
+        "start_line": 83,
+        "end_line": 84,
+        "content": "[medium] There's a typo in the parameter name: `minimumCouts` looks misspelled and should be `minimumCounts`, both for correctness and consistency."
+      },
+      {
+        "path": "src/Mod/TechDraw/App/Preferences.cpp",
+        "start_line": 180,
+        "end_line": 181,
+        "content": "[low] Please check that `Preferences` behaves consistently when the caller supplies an empty value."
+      },
+      {
+        "path": "src/Mod/TechDraw/Gui/DimensionValidators.h",
+        "start_line": 70,
+        "end_line": 70,
+        "content": "[low] Consider checking the interaction between `acceptableDimensionGeometrys` and a retry or repeated-call path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "40b069301dc8",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 5,
+      "dimensions": 7,
+      "model_calls": 11,
+      "total_tokens": 169273,
+      "input_tokens": 156671,
+      "output_tokens": 12602,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 342413
+    }
+  }
+}

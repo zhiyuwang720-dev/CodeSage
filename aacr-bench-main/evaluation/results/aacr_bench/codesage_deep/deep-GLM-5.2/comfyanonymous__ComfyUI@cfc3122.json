@@ -1,0 +1,55 @@
+{
+  "instance_id": "comfyanonymous__ComfyUI@cfc3122",
+  "repo": "comfyanonymous/ComfyUI",
+  "base_commit": "a86aaa430183068e2a264495c802c81d05eb350a",
+  "head_commit": "cfc312296c0b9f255bba6b4b2789ac7bbc66a7cb",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:28:08.181401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "comfyanonymous__ComfyUI@cfc3122",
+  "review": {
+    "comments": [
+      {
+        "path": "server.py",
+        "start_line": 57,
+        "end_line": 57,
+        "content": "[medium] Case handling for file extensions is inconsistent: the checks for `.js`, `.css`, and `index.json` match case-sensitively, while the image extension check on line 59 matches case-insensitively via `.lower().endswith()`. As a result, files such as `script.JS` or `styles.CSS` will not receive the intended `no-cache` header.\n\nSuggested fix:\n\n```python\nif request.path.lower().endswith(('.js', '.css')) or request.path.endswith('index.json'):\n```\n\nOr, to make everything fully consistent:\n\n```python\nif request.path.lower().endswith(('.js', '.css', 'index.json')):\n```\n\nEither way, all JavaScript and CSS files would get the `no-cache` header regardless of letter case."
+      },
+      {
+        "path": "server.py",
+        "start_line": 65,
+        "end_line": 69,
+        "content": "[medium] The cache header assignment logic is redundant. Successful responses (200-299) and permanent redirects (301/308) both set the identical \"public, max-age=86400\" header, yet they are handled in separate elif branches, which needlessly duplicates the code."
+      },
+      {
+        "path": "server.py",
+        "start_line": 57,
+        "end_line": 57,
+        "content": "[low] Please verify that `.js` remains stable when this operation is invoked more than once."
+      },
+      {
+        "path": "server.py",
+        "start_line": 72,
+        "end_line": 72,
+        "content": "[low] The `server` behavior could use a test that confirms the result remains deterministic."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2f44749e52d3",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 3,
+      "model_calls": 9,
+      "total_tokens": 103539,
+      "input_tokens": 95034,
+      "output_tokens": 8505,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 254507
+    }
+  }
+}

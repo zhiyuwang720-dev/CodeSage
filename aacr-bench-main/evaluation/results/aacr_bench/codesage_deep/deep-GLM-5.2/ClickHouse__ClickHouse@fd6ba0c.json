@@ -1,0 +1,49 @@
+{
+  "instance_id": "ClickHouse__ClickHouse@fd6ba0c",
+  "repo": "ClickHouse/ClickHouse",
+  "base_commit": "473c1b82e2bc2cbbbaac137fb86187c31d244700",
+  "head_commit": "fd6ba0c19048b6a546188661d1092c6c76a72796",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:18:35.009401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ClickHouse__ClickHouse@fd6ba0c",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp",
+        "start_line": 333,
+        "end_line": 342,
+        "content": "[medium] The lambda `time_t_to_string` is declared inside the loop body, so it gets re-created on every iteration. Since it captures nothing from the surrounding scope, hoisting it out of the loop — or making it a static helper function — would improve performance."
+      },
+      {
+        "path": "src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp",
+        "start_line": 344,
+        "end_line": 349,
+        "content": "[medium] Every TTLDelete scheduling goes through this `LOG_TRACE`, which builds a time string using `ostringstream`/`put_time`. Even with TRACE normally off, the logger implementation may still evaluate the arguments, adding avoidable overhead. Where your logging framework supports it, wrap the construction in `if (log->isTraceEnabled())` (or an equivalent check), or switch to a lazy/formatting helper that does no work when the level is disabled."
+      },
+      {
+        "path": "src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp",
+        "start_line": 336,
+        "end_line": 342,
+        "content": "[low] A small test for the alternate `MergeTreeDataMergerMutator` branch would make this path less fragile."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2d6a3f28ec4a",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 93808,
+      "input_tokens": 84648,
+      "output_tokens": 9160,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 245337
+    }
+  }
+}

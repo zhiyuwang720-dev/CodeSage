@@ -1,0 +1,49 @@
+{
+  "instance_id": "microsoft__typescript-go@1a84d8d",
+  "repo": "microsoft/typescript-go",
+  "base_commit": "da4e121142cd3f891785b573a194b9caaaa01d55",
+  "head_commit": "1a84d8d5705df98fd1e1f81d9d3115a7a203509d",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:37:23.919401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__typescript-go@1a84d8d",
+  "review": {
+    "comments": [
+      {
+        "path": "internal/checker/checker.go",
+        "start_line": 10845,
+        "end_line": 10845,
+        "content": "[medium] This could panic at runtime: the code slices `t.symbol.Name[4:len(t.symbol.Name)-7]` without verifying the string is at least 11 characters long. A short name like 'HTML' or 'Element' would trigger an index-out-of-bounds panic."
+      },
+      {
+        "path": "internal/checker/checker.go",
+        "start_line": 10845,
+        "end_line": 10845,
+        "content": "[low] The `checker` path would be easier to review if the exceptional case were handled next to the normal case."
+      },
+      {
+        "path": "internal/checker/checker.go",
+        "start_line": 10844,
+        "end_line": 10852,
+        "content": "[low] Consider making the ordering expectation for `stringutil.IsASCIILetter` explicit in a test."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "4bd9bf4838a7",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 74856,
+      "input_tokens": 68509,
+      "output_tokens": 6347,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 208185
+    }
+  }
+}

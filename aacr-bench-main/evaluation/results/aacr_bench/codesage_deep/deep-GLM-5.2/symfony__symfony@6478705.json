@@ -1,0 +1,37 @@
+{
+  "instance_id": "symfony__symfony@6478705",
+  "repo": "symfony/symfony",
+  "base_commit": "e06b10c4f0088e2966c510d335531f7daed61915",
+  "head_commit": "647870557cf275de666557e552e11e9a295b9d4a",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:07:18.846401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "symfony__symfony@6478705",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Symfony/Component/TypeInfo/TypeFactoryTrait.php",
+        "start_line": 415,
+        "end_line": 415,
+        "content": "[low] Consider giving `is_subclass_of` a named helper if future changes add another branch here."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "913d6f3c7cbe",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 78184,
+      "input_tokens": 70766,
+      "output_tokens": 7418,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 151885
+    }
+  }
+}

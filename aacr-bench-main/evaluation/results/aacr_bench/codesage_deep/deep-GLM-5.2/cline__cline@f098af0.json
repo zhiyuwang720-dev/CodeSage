@@ -1,0 +1,49 @@
+{
+  "instance_id": "cline__cline@f098af0",
+  "repo": "cline/cline",
+  "base_commit": "b3abbd886e7e693c48b31a0af8046035bf014118",
+  "head_commit": "f098af0f52bf1cdb7eb561c380caef5746b58d40",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:22:40.346401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "cline__cline@f098af0",
+  "review": {
+    "comments": [
+      {
+        "path": "src/core/task/index.ts",
+        "start_line": 1608,
+        "end_line": 1612,
+        "content": "[medium] A more robust pattern for timer management would be worth adopting here. Timers are currently set in multiple places without any centralized cleanup, which can cause memory leaks if they aren't properly cleared along every execution path."
+      },
+      {
+        "path": "src/services/telemetry/index.ts",
+        "start_line": 13,
+        "end_line": 17,
+        "content": "[medium] Re-exporting the enums from \"./TelemetryService\" couples the public telemetry index to a runtime module. If TelemetryService has side effects (singleton init, provider wiring) or imports back from this index, this risks circular dependencies and unexpected load-order issues. Consider moving these enums into a dedicated types/enums file (or exporting them from TelemetryProviderFactory if that fits better) and re-exporting from there. Also verify these are declared as `export enum`/`export const enum`/`export type` as intended, so extra runtime code doesn't get bundled."
+      },
+      {
+        "path": "src/core/task/index.ts",
+        "start_line": 1495,
+        "end_line": 1496,
+        "content": "[low] A regression test around `BUFFER_STUCK_TIMEOUT_MS` would help ensure this branch stays aligned with its neighboring path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "19b7a290210b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 8,
+      "total_tokens": 123568,
+      "input_tokens": 115302,
+      "output_tokens": 8266,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 280162
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "instance_id": "laravel__framework@180c25f",
+  "repo": "laravel/framework",
+  "base_commit": "2e5054a19ba55b335bf8df43a8ae7e032244f671",
+  "head_commit": "180c25ff94ae2dff26d2ca5f8bf779af1e8fc8c2",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:24:11.726401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "laravel__framework@180c25f",
+  "review": {
+    "comments": [
+      {
+        "path": "tests/Validation/ValidationEmailRuleTest.php",
+        "start_line": 327,
+        "end_line": 339,
+        "content": "[low] Consider including `$emailsThatPassOnRfcCompliantButNotRfcCompliantStrict` in the diagnostic context so failures are easier to trace."
+      },
+      {
+        "path": "tests/Validation/ValidationEmailRuleTest.php",
+        "start_line": 106,
+        "end_line": 108,
+        "content": "[low] The intent of `testRfcCompliantStrict` is not obvious from this location; a concise explanation would help maintainers."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2bc1e5b6f4a5",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 102935,
+      "input_tokens": 96836,
+      "output_tokens": 6099,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 248277
+    }
+  }
+}

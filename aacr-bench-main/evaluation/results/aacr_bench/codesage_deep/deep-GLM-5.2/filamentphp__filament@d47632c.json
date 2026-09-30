@@ -1,0 +1,49 @@
+{
+  "instance_id": "filamentphp__filament@d47632c",
+  "repo": "filamentphp/filament",
+  "base_commit": "ce4d9d08df41142ff219bb3dc44968084eaae0dc",
+  "head_commit": "d47632c0583bac481d4ce7cc9b6b1711d0f8e0fc",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:48:06.742401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "filamentphp__filament@d47632c",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/support/src/helpers.php",
+        "start_line": 184,
+        "end_line": 188,
+        "content": "[medium] There's a potential SQL correctness/safety concern: assembling `$column = \"json_extract({$field}{$path})\"` assumes `$path` already contains the comma and is properly quoted/escaped, and that the JSON extraction syntax fits the current connection settings (MySQL vs MariaDB variants, json type/collation, etc.). Since that string is subsequently interpolated into `lower({$column})`, any mismatch could break queries or let identifier wrapping be bypassed.\n\nSuggestion: use the grammar's JSON selector wrapping (or query builder expressions) end-to-end instead of concatenating raw SQL. If the transformation has to happen here, make sure the generated SQL places the required `,` between field and path and that both parts are wrapped/escaped by the grammar (e.g., `json_extract({$field}, {$path})`), and aim to handle nested selectors/edge cases consistently with the other drivers."
+      },
+      {
+        "path": "packages/support/src/helpers.php",
+        "start_line": 184,
+        "end_line": 184,
+        "content": "[low] Please add coverage showing how `json_extract()` behaves when the surrounding resource is unavailable."
+      },
+      {
+        "path": "packages/support/src/helpers.php",
+        "start_line": 184,
+        "end_line": 188,
+        "content": "[low] A regression test around `$column = \"json_extract({$field}{$path})\"` would help ensure this branch stays aligned with its neighboring path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "ccf4ac9362b0",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 83758,
+      "input_tokens": 76095,
+      "output_tokens": 7663,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 245868
+    }
+  }
+}

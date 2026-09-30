@@ -1,0 +1,49 @@
+{
+  "instance_id": "linera-io__linera-protocol@024925d",
+  "repo": "linera-io/linera-protocol",
+  "base_commit": "c4a8ac301274ccdfc8d0fc87871d557534a8405f",
+  "head_commit": "024925dfbeff5daaecdd2cd733cda2825eff1bb7",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:28:20.003401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "linera-io__linera-protocol@024925d",
+  "review": {
+    "comments": [
+      {
+        "path": "linera-core/src/node.rs",
+        "start_line": 205,
+        "end_line": 205,
+        "content": "[medium] Good fix changing 'Reponse' to 'Response' — there is one more typo, 'ceritifcates', that should be corrected to 'certificates'.\n\n```suggestion\n    #[error(\"Response doesn't contain requested certificates: {0:?}\")]\n```"
+      },
+      {
+        "path": "linera-core/src/updater.rs",
+        "start_line": 109,
+        "end_line": 109,
+        "content": "[low] Since this signature change ripples outward, a quick audit of existing call sites (and any downstream consumers of the crate) would confirm the migration is purely mechanical."
+      },
+      {
+        "path": "linera-core/src/updater.rs",
+        "start_line": 139,
+        "end_line": 139,
+        "content": "[low] A unit test feeding NaN and negative values through this path would verify the fallback behavior holds across Rust versions, since mul_f64's panic behavior may differ between releases."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "cc9420f1c16b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 7,
+      "total_tokens": 108812,
+      "input_tokens": 100562,
+      "output_tokens": 8250,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 214144
+    }
+  }
+}

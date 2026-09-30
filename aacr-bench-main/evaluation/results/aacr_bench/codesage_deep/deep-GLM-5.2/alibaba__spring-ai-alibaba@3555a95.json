@@ -1,0 +1,43 @@
+{
+  "instance_id": "alibaba__spring-ai-alibaba@3555a95",
+  "repo": "alibaba/spring-ai-alibaba",
+  "base_commit": "76c06b58a4d9e8ee3fe3c0269a046987ad0502e5",
+  "head_commit": "3555a95e7b888335d9f72e432eb4f9fb9640e8cd",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T08:59:15.206401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "alibaba__spring-ai-alibaba@3555a95",
+  "review": {
+    "comments": [
+      {
+        "path": "community/tool-calls/spring-ai-alibaba-starter-tool-calling-alitranslate/src/main/java/com/alibaba/cloud/ai/toolcalling/alitranslate/AliTranslateAutoConfiguration.java",
+        "start_line": 38,
+        "end_line": 38,
+        "content": "[medium] The name `aliTranslateFunction` is misleading: the method returns a service instance (AliTranslateService) rather than a functional component, so the 'Function' suffix should be dropped."
+      },
+      {
+        "path": "community/tool-calls/spring-ai-alibaba-starter-tool-calling-alitranslate/src/main/java/com/alibaba/cloud/ai/toolcalling/alitranslate/AliTranslateProperties.java",
+        "start_line": 34,
+        "end_line": 34,
+        "content": "[low] A short comment describing the intended invariant for `setPropertiesFromEnv` could prevent accidental drift."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "4d7cc915f580",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 8,
+      "total_tokens": 93851,
+      "input_tokens": 85620,
+      "output_tokens": 8231,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 232367
+    }
+  }
+}

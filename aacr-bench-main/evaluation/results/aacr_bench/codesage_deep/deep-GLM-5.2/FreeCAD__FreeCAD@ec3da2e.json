@@ -1,0 +1,43 @@
+{
+  "instance_id": "FreeCAD__FreeCAD@ec3da2e",
+  "repo": "FreeCAD/FreeCAD",
+  "base_commit": "79008331b30d098b2c32e59752e24e0705b350bc",
+  "head_commit": "ec3da2e93e3fd8f69f113ca14abf892dfb86c11b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:55:02.299401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "FreeCAD__FreeCAD@ec3da2e",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Mod/TechDraw/App/DrawViewPart.h",
+        "start_line": 242,
+        "end_line": 242,
+        "content": "[low] Nearby helper declarations may follow the same by-value string pattern; aligning them on const& in the same change would keep the header's calling convention consistent."
+      },
+      {
+        "path": "src/Mod/TechDraw/App/DrawViewPart.cpp",
+        "start_line": 1502,
+        "end_line": 1502,
+        "content": "[low] If callers might pass string literals frequently, std::string_view could avoid the temporary construction entirely, provided the project's C++ standard already permits it."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "08f6667a0f8e",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 95909,
+      "input_tokens": 89809,
+      "output_tokens": 6100,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 253889
+    }
+  }
+}

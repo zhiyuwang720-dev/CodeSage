@@ -1,0 +1,55 @@
+{
+  "instance_id": "vllm-project__vllm@134705b",
+  "repo": "vllm-project/vllm",
+  "base_commit": "d8037867313eef09779b265ea4bace76d2d118ba",
+  "head_commit": "134705b1474ddcfac234a0a01313874f7c8b59bc",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:16:25.167401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "vllm-project__vllm@134705b",
+  "review": {
+    "comments": [
+      {
+        "path": "vllm/logger.py",
+        "start_line": 55,
+        "end_line": 58,
+        "content": "[medium] This has a real logic problem: since @lru_cache keys on ALL arguments, including *args, the 'print once' guarantee doesn't actually hold. Logging the same format string with different values — e.g., logger.info_once('Value: %s', 1) followed by logger.info_once('Value: %s', 2) — creates two distinct cache entries, so both messages get printed. The cache key should be derived from the message format string alone, leaving the formatting arguments out. Either switch to a caching strategy keyed only on (logger, msg), or implement a custom cache that excludes *args when building the key."
+      },
+      {
+        "path": "vllm/model_executor/models/qwen2_moe.py",
+        "start_line": 465,
+        "end_line": 465,
+        "content": "[medium] Formatting problem: `noqa` is preceded by two spaces rather than one — it should read `# noqa:` instead of `#  noqa:`.\n\n**Suggested Fix:**\n```python\n\"Found kv_scale in the checkpoint (e.g. %s), but not found the expected name in the model (e.g. %s). kv_scale is not loaded.\",  # noqa: E501\n```"
+      },
+      {
+        "path": "vllm/logger.py",
+        "start_line": 55,
+        "end_line": 58,
+        "content": "[low] A brief note about the ownership of `*args` could help avoid conflicting updates."
+      },
+      {
+        "path": "vllm/multimodal/profiling.py",
+        "start_line": 243,
+        "end_line": 249,
+        "content": "[low] Add a test that exercises `%d` with an unexpected-but-well-formed value."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c810e3ff325f",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 5,
+      "model_calls": 11,
+      "total_tokens": 126168,
+      "input_tokens": 115162,
+      "output_tokens": 11006,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 328238
+    }
+  }
+}

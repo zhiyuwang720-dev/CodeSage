@@ -1,0 +1,43 @@
+{
+  "instance_id": "comfyanonymous__ComfyUI@0bb6023",
+  "repo": "comfyanonymous/ComfyUI",
+  "base_commit": "6c0377f43e7b6ed58d48ae05cff9bc45b52ef5e0",
+  "head_commit": "0bb60235132cc72daea81427107a40ba1ccb5ddf",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:24:17.592401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "comfyanonymous__ComfyUI@0bb6023",
+  "review": {
+    "comments": [
+      {
+        "path": "comfy/controlnet.py",
+        "start_line": 824,
+        "end_line": 824,
+        "content": "[medium] The format string contains a single `{}` placeholder, yet there's a trailing comma following `i` in the argument list — a syntax error. Either the trailing comma needs to go, or `j` was meant to be part of the format call. Given that `j` was already dropped from the format string, removing the trailing comma is the right fix.\n\n```suggestion\n            prefix_replace[\"adapter.body.{}.\".format(i)] = \"body.{}.\".format(i * 2)\n```"
+      },
+      {
+        "path": "api_server/routes/internal/internal_routes.py",
+        "start_line": 43,
+        "end_line": 43,
+        "content": "[low] In `internal_routes.py`, add a boundary test for `get_logs` with the smallest valid input."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "a9d8a88aeacf",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 3,
+      "model_calls": 6,
+      "total_tokens": 91498,
+      "input_tokens": 84286,
+      "output_tokens": 7212,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 234579
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "instance_id": "appwrite__appwrite@710b8bd",
+  "repo": "appwrite/appwrite",
+  "base_commit": "d205ac457960f73d781547540cde1732f69076ac",
+  "head_commit": "710b8bda565c411ecb23e8b670d0ba7f45d2b3f3",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T08:59:15.206401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "appwrite__appwrite@710b8bd",
+  "review": {
+    "comments": [
+      {
+        "path": "app/controllers/general.php",
+        "start_line": 812,
+        "end_line": 812,
+        "content": "[medium] Swapping `_APP_DOMAIN` for `_APP_CONSOLE_DOMAIN` (with a fallback) in `$mainDomain` could trigger router failures in execution paths that haven't been tested; recommendation is to revert, as the existing implementation is known to work reliably."
+      },
+      {
+        "path": "src/Appwrite/Platform/Modules/Functions/Workers/Builds.php",
+        "start_line": 597,
+        "end_line": 597,
+        "content": "[medium] It may be worth either providing a more meaningful default or explicitly handling the empty-hostname case, so endpoints aren't constructed in unexpected ways."
+      },
+      {
+        "path": "src/Appwrite/Platform/Modules/Proxy/Http/Rules/Redirect/Create.php",
+        "start_line": 87,
+        "end_line": 88,
+        "content": "[medium] If `_APP_CONSOLE_DOMAIN` is set, `_APP_DOMAIN` only acts as a fallback and never gets added to `$deniedDomains` on its own. Should `_APP_DOMAIN` differ from `_APP_CONSOLE_DOMAIN` (for instance, when API and Console live on separate domains), `_APP_DOMAIN` stays unprotected. Denying both domains would prevent the API domain from potentially being hijacked."
+      },
+      {
+        "path": "src/Executor/Executor.php",
+        "start_line": 202,
+        "end_line": 204,
+        "content": "[medium] When `_APP_CONSOLE_DOMAIN` is defined but set to an empty string, the Host header assignment breaks, producing invalid HTTP requests from the empty header value. Add an explicit non-empty check before assigning, rather than relying only on `getEnv` fallbacks."
+      },
+      {
+        "path": "src/Appwrite/Platform/Workers/Functions.php",
+        "start_line": 487,
+        "end_line": 488,
+        "content": "[low] Consider recording the relevant `Functions` value only when it is safe to expose in diagnostics."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "0a23ced6ba09",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 5,
+      "dimensions": 5,
+      "model_calls": 11,
+      "total_tokens": 133732,
+      "input_tokens": 122543,
+      "output_tokens": 11189,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 311166
+    }
+  }
+}

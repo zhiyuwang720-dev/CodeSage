@@ -1,0 +1,61 @@
+{
+  "instance_id": "immich-app__immich@d38f1f5",
+  "repo": "immich-app/immich",
+  "base_commit": "c664d99a348999d16cda45a8dd57db436b8f9fba",
+  "head_commit": "d38f1f55f42d600d05058e70d6ccee9679623591",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:12:34.009401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@d38f1f5",
+  "review": {
+    "comments": [
+      {
+        "path": "web/src/lib/components/asset-viewer/photo-viewer.svelte",
+        "start_line": 24,
+        "end_line": 24,
+        "content": "[medium] This component now pulls in `$lib/utils/sw-messaging`, which creates `new BroadcastChannel('immich')` at module top level with no feature or environment check. Wherever `BroadcastChannel` isn't available (older browsers, certain embedded webviews, or non-window runtimes), merely importing the component could throw and break rendering. Consider creating the channel lazily (inside functions) and guarding with `if (typeof BroadcastChannel === 'undefined') return;` (or falling back to a no-op)."
+      },
+      {
+        "path": "web/src/lib/components/assets/thumbnail/image-thumbnail.svelte",
+        "start_line": 69,
+        "end_line": 71,
+        "content": "[medium] `destroy` currently invokes `cancelImageUrl(url)` without any conditions. It may be worth guarding against `url` being undefined/empty (e.g. on initial render) and, if `cancelImageUrl` has side effects, against cancelling for data/blob URLs or images that have already loaded. A simple `if (url) cancelImageUrl(url)` (optionally adding `if (!loaded)`) would skip needless messaging during ordinary unmounts.\n\n```suggestion\n    return {\n      destroy: () => {\n        if (url /* && !loaded */) cancelImageUrl(url);\n      },\n    };\n```"
+      },
+      {
+        "path": "web/src/service-worker/index.ts",
+        "start_line": 7,
+        "end_line": 7,
+        "content": "[medium] useCache is currently fixed as a constant, so caching cannot be turned off without editing the source. It would be better to make this configurable or derive it from the environment."
+      },
+      {
+        "path": "web/src/service-worker/index.ts",
+        "start_line": 77,
+        "end_line": 77,
+        "content": "[medium] **Bug: event.origin is undefined on BroadcastChannel MessageEvent**\n\nA BroadcastChannel MessageEvent doesn't carry an `origin` property, so `event.origin` here evaluates to `undefined`, and the URL constructor will either throw or produce an invalid URL.\n\nSince BroadcastChannel messages only arrive from the same origin, `self.location.origin` (or a different URL construction approach) should be used instead.\n\n**Suggested fix:**\n```\nFix web/src/service-worker/index.ts:77: Replace event.origin with self.location.origin since BroadcastChannel messages are same-origin only\n```\n\nUpdate both occurrences (lines 77 and 86):\n- `const url = new URL(urlstring, event.origin);`\n+ `const url = new URL(urlstring, self.location.origin);`"
+      },
+      {
+        "path": "web/eslint.config.js",
+        "start_line": 61,
+        "end_line": 61,
+        "content": "[low] Please verify that a failure involving `service-worker` does not leave partially updated state behind."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "7746e3c83ce2",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 4,
+      "dimensions": 5,
+      "model_calls": 9,
+      "total_tokens": 135601,
+      "input_tokens": 123847,
+      "output_tokens": 11754,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 309886
+    }
+  }
+}

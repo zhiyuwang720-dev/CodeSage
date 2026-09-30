@@ -1,0 +1,43 @@
+{
+  "instance_id": "browser-use__browser-use@0b21e50",
+  "repo": "browser-use/browser-use",
+  "base_commit": "fa461585f1fc2d4a430e68e6c115a12f4936fe73",
+  "head_commit": "0b21e50ca640581ecd46990475c8b223eaa05045",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:06:00.890401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "browser-use__browser-use@0b21e50",
+  "review": {
+    "comments": [
+      {
+        "path": "browser_use/browser/browser.py",
+        "start_line": 290,
+        "end_line": 292,
+        "content": "[low] Consider separating the `self.config.chrome_remote_debugging_port` decision from this block if it is reused by another path."
+      },
+      {
+        "path": "browser_use/browser/browser.py",
+        "start_line": 82,
+        "end_line": 83,
+        "content": "[low] Please verify that a failure involving `browser` does not leave partially updated state behind."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2616e078c7f8",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 86296,
+      "input_tokens": 78857,
+      "output_tokens": 7439,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 192614
+    }
+  }
+}

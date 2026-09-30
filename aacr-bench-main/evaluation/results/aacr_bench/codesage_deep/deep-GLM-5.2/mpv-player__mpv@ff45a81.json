@@ -1,0 +1,49 @@
+{
+  "instance_id": "mpv-player__mpv@ff45a81",
+  "repo": "mpv-player/mpv",
+  "base_commit": "5ba7ee513751dd005379a06fb627303e6fe1b3dd",
+  "head_commit": "ff45a8103e3c5ec3e786b950b4852c2750de936f",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:47:17.200401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "mpv-player__mpv@ff45a81",
+  "review": {
+    "comments": [
+      {
+        "path": "filters/f_output_chain.c",
+        "start_line": 379,
+        "end_line": 379,
+        "content": "[medium] `p->stream_info.vflip` is a `bool` (see filters/filter.h), while the assigned value `vo->driver->caps & VO_CAP_VFLIP` is an integer bitmask. It will usually coerce fine, but normalizing with `!!(...)` is clearer and safer.\n\nMore importantly, `vo->driver` is dereferenced without a check. If `vo` can be non-NULL while `vo->driver` is NULL during init/teardown, this will crash. Guarding with `vo && vo->driver` (consistent with robust capability queries) would prevent that.\n\n```suggestion\n    p->stream_info.vflip = (vo && vo->driver) ? !!(vo->driver->caps & VO_CAP_VFLIP)\n                                             : false;\n```"
+      },
+      {
+        "path": "video/out/gpu/video.c",
+        "start_line": 3755,
+        "end_line": 3756,
+        "content": "[medium] Mutating a caller-owned `mpi` here is potentially unsafe: `mp_image_vflip(mpi)` changes the image in place, so if `mpi` is reused elsewhere (or shared via refcount), it can lead to surprising behavior or data races. On top of that, earlier in this function `layout.params.vflip` is already propagated into the per-plane `.flipped` flags, and flipping the image here may double-apply or conflict with that flag. Prefer keeping `mpi` immutable: either handle vflip purely via metadata/texture coords, or clone/copy the image before flipping (e.g., `mp_image_new_ref`/deep copy depending on semantics), and make sure only one vflip path is applied."
+      },
+      {
+        "path": "video/out/vo_gpu_next.c",
+        "start_line": 923,
+        "end_line": 923,
+        "content": "[low] Please confirm that `frame->current` is still correct after repeated updates to the surrounding state."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "a817f5f3cf21",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 4,
+      "model_calls": 8,
+      "total_tokens": 114101,
+      "input_tokens": 106352,
+      "output_tokens": 7749,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 235654
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "instance_id": "keycloak__keycloak@460f800",
+  "repo": "keycloak/keycloak",
+  "base_commit": "0f1bdc4e975c4810102d6ad125b3ed2369c90f0b",
+  "head_commit": "460f8008f86d3fa8f62da63e26d8bdc306af60b2",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:20:23.305401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "keycloak__keycloak@460f800",
+  "review": {
+    "comments": [
+      {
+        "path": "test-framework/core/src/main/java/org/keycloak/test/framework/injection/Registry.java",
+        "start_line": 106,
+        "end_line": 109,
+        "content": "[medium] `findSupplierByType()` may return `null` when no supplier matches (as happens via `.orElse(null)` at Extensions.java line 46), yet the code goes straight to calling `supplier.getAnnotationClass()` with no null guard, which leads to a NullPointerException. The previous version guarded against this with an `if (supplied.isPresent())` check. Please add a null check before using the supplier.\n\n```suggestion\n    private <T> T getUnConfiguredDependency(Class<T> typeClass, String ref, InstanceContext dependent) {\n        InstanceContext dependency;\n        Supplier<?, ?> supplier = extensions.findSupplierByType(typeClass);\n        if (supplier == null) {\n            return null;\n        }\n        Annotation defaultAnnotation = DefaultAnnotationProxy.proxy(supplier.getAnnotationClass());\n```"
+      },
+      {
+        "path": "test-framework/core/src/main/java/org/keycloak/test/framework/injection/Extensions.java",
+        "start_line": 41,
+        "end_line": 44,
+        "content": "[low] Please verify that `Extensions` does not silently discard information needed by the next stage."
+      },
+      {
+        "path": "test-framework/core/src/main/java/org/keycloak/test/framework/server/AbstractInterceptorHelper.java",
+        "start_line": 38,
+        "end_line": 38,
+        "content": "[low] Please verify that `AbstractInterceptorHelper` remains stable when this operation is invoked more than once."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "7f33199a797a",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 104862,
+      "input_tokens": 97056,
+      "output_tokens": 7806,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 223622
+    }
+  }
+}

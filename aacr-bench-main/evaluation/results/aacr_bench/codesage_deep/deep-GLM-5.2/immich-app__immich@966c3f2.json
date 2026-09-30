@@ -1,0 +1,49 @@
+{
+  "instance_id": "immich-app__immich@966c3f2",
+  "repo": "immich-app/immich",
+  "base_commit": "6ba94ac2f2f78c871f56874a7c2ff61b2ff4a06b",
+  "head_commit": "966c3f22d034c230a14bb21b02627ef6d00eec68",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:08:34.082401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@966c3f2",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 154,
+        "end_line": 157,
+        "content": "[medium] * The multi-line SQL template strings handling the `startDate` and `endDate` date conversions hurt readability; they'd be better condensed into single-line expressions.\n* The `sql` generic type for `startDate`/`endDate` should be `Date` rather than `any`, because the query returns JavaScript `Date` objects — as confirmed by runtime type checks."
+      },
+      {
+        "path": "server/src/repositories/album.repository.ts",
+        "start_line": 154,
+        "end_line": 157,
+        "content": "[low] A named constant for the `startDate` default may make later policy changes easier to audit."
+      },
+      {
+        "path": "server/src/services/album.service.ts",
+        "start_line": 64,
+        "end_line": 68,
+        "content": "[low] In `album.service.ts`, add a boundary test for `x ?? undefined` with the smallest valid input."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "fb364d127571",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 120789,
+      "input_tokens": 113752,
+      "output_tokens": 7037,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 263299
+    }
+  }
+}

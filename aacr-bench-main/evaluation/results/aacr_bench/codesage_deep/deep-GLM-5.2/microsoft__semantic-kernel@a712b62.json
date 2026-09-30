@@ -1,0 +1,49 @@
+{
+  "instance_id": "microsoft__semantic-kernel@a712b62",
+  "repo": "microsoft/semantic-kernel",
+  "base_commit": "fa96214dbc167080bec90a917c7d911a1f3539e4",
+  "head_commit": "a712b62f7804121730a95d34195cad365eb350b7",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:33:21.118401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__semantic-kernel@a712b62",
+  "review": {
+    "comments": [
+      {
+        "path": "dotnet/samples/Demos/ModelContextProtocolPlugin/Program.cs",
+        "start_line": 85,
+        "end_line": 86,
+        "content": "[medium] Setting up `ChatCompletionAgent` and `AgentThread` here looks like overhead: the demo makes just one `InvokePromptAsync` call and never reuses the agent across turns."
+      },
+      {
+        "path": "dotnet/samples/Demos/ModelContextProtocolPlugin/Program.cs",
+        "start_line": 86,
+        "end_line": 86,
+        "content": "[low] The behavior around `ChatHistoryAgentThread` would be clearer if its precondition were stated at the boundary."
+      },
+      {
+        "path": "dotnet/samples/Demos/ModelContextProtocolPlugin/Program.cs",
+        "start_line": 85,
+        "end_line": 86,
+        "content": "[low] A small test for the alternate `ChatCompletionAgent` branch would make this path less fragile."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "3ee2ae88a229",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 89746,
+      "input_tokens": 83497,
+      "output_tokens": 6249,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 242801
+    }
+  }
+}

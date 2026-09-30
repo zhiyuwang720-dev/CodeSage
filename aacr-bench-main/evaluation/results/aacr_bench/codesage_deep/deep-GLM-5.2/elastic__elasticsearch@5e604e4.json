@@ -1,0 +1,55 @@
+{
+  "instance_id": "elastic__elasticsearch@5e604e4",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "0a5a74c5e9dad3d62a8486e52422be2ae1295e03",
+  "head_commit": "5e604e492648a95f7adef067aeb2b9fc2ca4a206",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:37:16.138401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@5e604e4",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/main/java/org/elasticsearch/index/codec/tsdb/es819/ES819TSDBDocValuesProducer.java",
+        "start_line": 1504,
+        "end_line": 1504,
+        "content": "[medium] Prefer the '!' operator over '== false' for this boolean check, in line with standard Java conventions and for better readability.\n\n```suggestion\n                    if (!nullsFiltered) {\n```"
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/index/mapper/BlockDocValuesReader.java",
+        "start_line": 149,
+        "end_line": 149,
+        "content": "[medium] The assertion message contains a typo: it says 'nullFiltered' but the parameter is actually 'nullsFiltered'.\n\n```suggestion\n                        assert nullsFiltered == false : \"nullsFiltered is true, but doc [\" + doc + \"] has no value\";\n```"
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/index/codec/tsdb/es819/ES819TSDBDocValuesProducer.java",
+        "start_line": 1504,
+        "end_line": 1504,
+        "content": "[low] Consider avoiding an implicit assumption about `ES819TSDBDocValuesProducer` by validating it at entry."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/index/mapper/BlockDocValuesReader.java",
+        "start_line": 149,
+        "end_line": 149,
+        "content": "[low] Please keep the handling of `BlockDocValuesReader` consistent with the neighboring operation in `BlockDocValuesReader.java`."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "cceba8e3f326",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 10,
+      "total_tokens": 128040,
+      "input_tokens": 117597,
+      "output_tokens": 10443,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 321407
+    }
+  }
+}

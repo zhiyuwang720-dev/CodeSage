@@ -1,0 +1,55 @@
+{
+  "instance_id": "dotnet__aspnetcore@0ce67cd",
+  "repo": "dotnet/aspnetcore",
+  "base_commit": "f83c97fa0b91f83bd20511d1abf235dc48b596e2",
+  "head_commit": "0ce67cdee87e9fee014ba95c11e8e36b8913041c",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:29:57.674401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "dotnet__aspnetcore@0ce67cd",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Shared/HttpSys/NativeInterop/SocketAddress.cs",
+        "start_line": 15,
+        "end_line": 20,
+        "content": "[medium] `CopyOutAddress` dereferences `pSockaddr` with no null check. If any caller can pass in a null pointer (e.g., error paths coming back from native interop), this will AV. Either add a guard (`if (pSockaddr is null) return null;`) or document/enforce non-null at the call site."
+      },
+      {
+        "path": "src/Shared/HttpSys/RequestProcessing/NativeRequestContext.cs",
+        "start_line": 661,
+        "end_line": 662,
+        "content": "[medium] Casting `address` to `SOCKADDR*` weakens the type-safety assumptions here. Please verify that `source` is always aligned for `SOCKADDR` and that the underlying blob holds at least `sizeof(SOCKADDR)` (or the actual sockaddr length) at this offset; otherwise misaligned access or an AV is possible in this unsafe code. If `SocketAddress.CopyOutAddress` only needs an untyped pointer, consider keeping it as `byte*`/`void*` and letting `CopyOutAddress` do any required casting itself based on the actual `sa_family`/length."
+      },
+      {
+        "path": "src/Shared/HttpSys/NativeInterop/SocketAddress.cs",
+        "start_line": 15,
+        "end_line": 20,
+        "content": "[low] Consider making the ordering expectation for `CopyOutAddress` explicit in a test."
+      },
+      {
+        "path": "src/Shared/HttpSys/RequestProcessing/NativeRequestContext.cs",
+        "start_line": 661,
+        "end_line": 662,
+        "content": "[low] Please check whether `address` needs an explicit fallback when the optional value is absent."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "440523178a63",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 90086,
+      "input_tokens": 80949,
+      "output_tokens": 9137,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 202780
+    }
+  }
+}

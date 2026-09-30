@@ -1,0 +1,55 @@
+{
+  "instance_id": "libsdl-org__SDL@1526727",
+  "repo": "libsdl-org/SDL",
+  "base_commit": "71303b41bf89c4bb68dbe1bed12fd2ee1dc0dd41",
+  "head_commit": "15267271865f73c996719238425f1604fc2fa205",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:25:04.709401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "libsdl-org__SDL@1526727",
+  "review": {
+    "comments": [
+      {
+        "path": "src/joystick/SDL_joystick.c",
+        "start_line": 3180,
+        "end_line": 3182,
+        "content": "[medium] This OR chain is verbose, and the product ID constants don't follow a consistent casing convention (e.g., `SN30_Pro` versus the conventional `SN30_PRO`). Rewriting it as a switch statement would improve both maintainability and correctness."
+      },
+      {
+        "path": "src/joystick/usb_ids.h",
+        "start_line": 63,
+        "end_line": 67,
+        "content": "[medium] The newly added USB product definitions mix naming styles (e.g., `SN30_Pro` where `SN30_PRO` would be consistent) and the comments aren't formatted per convention (no space after `//`). Please update all new `#define` statements so product names use ALL_CAPS and comment spacing is standardized."
+      },
+      {
+        "path": "src/joystick/SDL_joystick.c",
+        "start_line": 3180,
+        "end_line": 3182,
+        "content": "[low] Consider testing `SN30_Pro` when the related collection contains no entries."
+      },
+      {
+        "path": "src/joystick/usb_ids.h",
+        "start_line": 63,
+        "end_line": 67,
+        "content": "[low] Please check whether `SN30_Pro` needs cleanup when the surrounding operation exits early."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5bcb304ccd07",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 10,
+      "total_tokens": 116930,
+      "input_tokens": 107902,
+      "output_tokens": 9028,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 300901
+    }
+  }
+}

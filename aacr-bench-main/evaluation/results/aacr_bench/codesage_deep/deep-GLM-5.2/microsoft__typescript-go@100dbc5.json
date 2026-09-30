@@ -1,0 +1,49 @@
+{
+  "instance_id": "microsoft__typescript-go@100dbc5",
+  "repo": "microsoft/typescript-go",
+  "base_commit": "3a3ff237cf7ad91bcdb604271f6135762aed9365",
+  "head_commit": "100dbc5127e723c4108efc02a179d9aec5fce32a",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:35:40.863401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__typescript-go@100dbc5",
+  "review": {
+    "comments": [
+      {
+        "path": "testdata/baselines/reference/tsc/commandLine/Parse-watch-interval-option.js",
+        "start_line": 86,
+        "end_line": 86,
+        "content": "[medium] Formatting inconsistency: the descriptive sentence here lacks a trailing period '.', while the other entries end with one."
+      },
+      {
+        "path": "testdata/baselines/reference/tsc/commandLine/help.js",
+        "start_line": 148,
+        "end_line": 148,
+        "content": "[low] A focused regression test for `--declaration, -d` would make this behavior safer to refactor."
+      },
+      {
+        "path": "testdata/baselines/reference/tsc/commandLine/Parse-watch-interval-option.js",
+        "start_line": 86,
+        "end_line": 86,
+        "content": "[low] Add a regression case for `Parse watch interval option` with a value at the documented limit."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "6d4c11a6153e",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 118653,
+      "input_tokens": 109318,
+      "output_tokens": 9335,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 329661
+    }
+  }
+}

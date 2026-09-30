@@ -1,0 +1,37 @@
+{
+  "instance_id": "filamentphp__filament@871ec75",
+  "repo": "filamentphp/filament",
+  "base_commit": "e4a7ecf0e65574522eb9fbe70b7339f41de0bbe2",
+  "head_commit": "871ec75815e1f92da141e9aef80f287f7779dfe7",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:45:57.204401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "filamentphp__filament@871ec75",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/tables/src/Commands/FileGenerators/Concerns/CanGenerateModelTables.php",
+        "start_line": 145,
+        "end_line": 150,
+        "content": "[low] A short assertion around `$columnData['sortable']` could make this invariant easier to diagnose during development."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "efb803e404ec",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 66344,
+      "input_tokens": 61660,
+      "output_tokens": 4684,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 185553
+    }
+  }
+}

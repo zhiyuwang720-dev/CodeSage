@@ -1,0 +1,49 @@
+{
+  "instance_id": "google-gemini__gemini-cli@d64b61e",
+  "repo": "google-gemini/gemini-cli",
+  "base_commit": "6e4236bf7681b2a2cba5630a8dd0a0d5a200a0df",
+  "head_commit": "d64b61ef89f01ecdc0e095a995d47522245a0065",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:02:20.976401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "google-gemini__gemini-cli@d64b61e",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/cli/src/commands/extensions/enable.ts",
+        "start_line": 22,
+        "end_line": 22,
+        "content": "[medium] The scope string parsing in `handleEnable` should be pulled out into a shared utility function to avoid duplication, since the same conversion pattern is needed in several places. Leaving the `'workspace'` check inline creates maintenance overhead and raises the risk of inconsistent handling across the codebase."
+      },
+      {
+        "path": "packages/cli/src/commands/extensions/enable.ts",
+        "start_line": 22,
+        "end_line": 22,
+        "content": "[low] Consider testing `handleEnable` across a transition from an old value to a new one."
+      },
+      {
+        "path": "packages/cli/src/commands/extensions/enable.ts",
+        "start_line": 22,
+        "end_line": 22,
+        "content": "[low] Please document the expected contract for `handleEnable` near this call site."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5a7dd089242f",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 83668,
+      "input_tokens": 76200,
+      "output_tokens": 7468,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 184157
+    }
+  }
+}

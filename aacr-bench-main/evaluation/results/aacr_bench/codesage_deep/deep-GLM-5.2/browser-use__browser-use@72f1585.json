@@ -1,0 +1,37 @@
+{
+  "instance_id": "browser-use__browser-use@72f1585",
+  "repo": "browser-use/browser-use",
+  "base_commit": "e85a547378b236c9788802d28e816f10940a7e53",
+  "head_commit": "72f1585f9add5b72e829eaee3b5bff684e0b08d3",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:08:51.942401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "browser-use__browser-use@72f1585",
+  "review": {
+    "comments": [
+      {
+        "path": "browser_use/llm/google/chat.py",
+        "start_line": 376,
+        "end_line": 376,
+        "content": "[low] Please document the expected contract for `for attempt in range(10)` near this call site."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "62ad4a5962ef",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 6,
+      "total_tokens": 68157,
+      "input_tokens": 61401,
+      "output_tokens": 6756,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 179652
+    }
+  }
+}

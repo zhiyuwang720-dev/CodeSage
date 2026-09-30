@@ -1,0 +1,55 @@
+{
+  "instance_id": "infiniflow__ragflow@f189316",
+  "repo": "infiniflow/ragflow",
+  "base_commit": "8362ab405c35d260dd2328dc207aefcf30778f66",
+  "head_commit": "f189316eae1c199a5891f7a8bc47d53bb1b5c818",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:16:22.380401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "infiniflow__ragflow@f189316",
+  "review": {
+    "comments": [
+      {
+        "path": "graphrag/utils.py",
+        "start_line": 417,
+        "end_line": 417,
+        "content": "[medium] 'if not res.total == 0:' behaves correctly, but the phrasing is easy to misread at a glance. 'if res.total != 0:' expresses the same condition more clearly."
+      },
+      {
+        "path": "rag/utils/infinity_conn.py",
+        "start_line": 83,
+        "end_line": 84,
+        "content": "[medium] This is a SQL injection vulnerability: single quotes in `v` are left unescaped here, unlike the list items on line 73. Should `v` contain a single quote, the SQL syntax will break. Apply the same escaping, `v.replace(\"'\", \"''\")`:\n\n```suggestion\n            else:\n                v = v.replace(\"'\", \"''\") if isinstance(v, str) else v\n                cond.append(f\"filter_fulltext('{k}', '{v}')\")\n```"
+      },
+      {
+        "path": "rag/utils/infinity_conn.py",
+        "start_line": 605,
+        "end_line": 607,
+        "content": "[medium] Potential syntax error: when `filter` is an empty string — which occurs whenever `condition` is empty — the assembled string begins with `\" AND ...\"`, which is most likely invalid syntax.\n\nSuggestion: handle the case where the filter is empty."
+      },
+      {
+        "path": "rag/utils/infinity_conn.py",
+        "start_line": 588,
+        "end_line": 602,
+        "content": "[low] Add a test that confirms `table_instance` does not change the behavior of unrelated inputs."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "186392f8827a",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 98986,
+      "input_tokens": 89858,
+      "output_tokens": 9128,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 207723
+    }
+  }
+}

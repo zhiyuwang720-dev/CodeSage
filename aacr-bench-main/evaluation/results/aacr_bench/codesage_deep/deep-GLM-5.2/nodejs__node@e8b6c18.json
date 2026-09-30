@@ -1,0 +1,43 @@
+{
+  "instance_id": "nodejs__node@e8b6c18",
+  "repo": "nodejs/node",
+  "base_commit": "18b9120435287eafb1865102c6c4dc6a7cff5ede",
+  "head_commit": "e8b6c183d46c41b2992c4f5cafceb7f9c6f8710d",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:52:31.191401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "nodejs__node@e8b6c18",
+  "review": {
+    "comments": [
+      {
+        "path": "test/parallel/test-repl-custom-eval.js",
+        "start_line": 112,
+        "end_line": 112,
+        "content": "[low] Please ensure that `getReplOutput` is not evaluated before the required state has been initialized."
+      },
+      {
+        "path": "test/parallel/test-repl-custom-eval.js",
+        "start_line": 10,
+        "end_line": 10,
+        "content": "[low] The contract for `concurrency: true` would be easier to preserve with a focused test at this boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "b757cd506c00",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 73158,
+      "input_tokens": 67267,
+      "output_tokens": 5891,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 236649
+    }
+  }
+}

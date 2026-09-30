@@ -1,0 +1,49 @@
+{
+  "instance_id": "ClickHouse__ClickHouse@f9987c8",
+  "repo": "ClickHouse/ClickHouse",
+  "base_commit": "25f2e13a8fc3ed6e6215ee7481677e1b8523ac4c",
+  "head_commit": "f9987c89a4cfaa95269385f24323dc6f44cda6e9",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:17:24.075401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ClickHouse__ClickHouse@f9987c8",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Storages/MergeTree/KeyCondition.cpp",
+        "start_line": 2924,
+        "end_line": 2929,
+        "content": "[medium] The first for-each loop walks every RPN element without any type filtering. Element kinds like FUNCTION_AND, FUNCTION_OR, FUNCTION_NOT, and ALWAYS_TRUE carry no monotonic_functions_chain, so skipping them early would avoid needless function calls and make the intent clearer. Consider adding a condition that rules out irrelevant element types before the monotonic chain check."
+      },
+      {
+        "path": "src/Storages/MergeTree/KeyCondition.cpp",
+        "start_line": 2929,
+        "end_line": 2929,
+        "content": "[low] Please document what callers should expect when `elem.set_index->size() != 1` is unavailable."
+      },
+      {
+        "path": "src/Storages/MergeTree/KeyCondition.cpp",
+        "start_line": 2929,
+        "end_line": 2929,
+        "content": "[low] Please make the error behavior for `elem.set_index->size() != 1` explicit instead of relying on the caller to infer it."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "da9e75a4bf0e",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 99905,
+      "input_tokens": 91111,
+      "output_tokens": 8794,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 291268
+    }
+  }
+}

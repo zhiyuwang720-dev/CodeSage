@@ -1,0 +1,43 @@
+{
+  "instance_id": "microsoft__typescript-go@45c0de9",
+  "repo": "microsoft/typescript-go",
+  "base_commit": "af2ba7365ad3e2f572ddb95a439b0220eccc06b1",
+  "head_commit": "45c0de96a08812aff07974b859bc2327e7fe25ed",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:40:52.104401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "microsoft__typescript-go@45c0de9",
+  "review": {
+    "comments": [
+      {
+        "path": "internal/ls/diagnostics.go",
+        "start_line": 44,
+        "end_line": 44,
+        "content": "[low] Consider testing `nil` when the related collection contains no entries."
+      },
+      {
+        "path": "internal/ls/diagnostics.go",
+        "start_line": 44,
+        "end_line": 44,
+        "content": "[low] Please check whether `nil` needs cleanup when the surrounding operation exits early."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2db1cfb33aa5",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 78580,
+      "input_tokens": 70340,
+      "output_tokens": 8240,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 219900
+    }
+  }
+}

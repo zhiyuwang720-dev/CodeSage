@@ -1,0 +1,61 @@
+{
+  "instance_id": "alibaba__spring-ai-alibaba@4bc7305",
+  "repo": "alibaba/spring-ai-alibaba",
+  "base_commit": "71e7eeb27dfe42c5a805da413ef6e9faf84fe9d0",
+  "head_commit": "4bc73055c7b33f53433d9725eab5010b85a59632",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T08:59:15.206401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "alibaba__spring-ai-alibaba@4bc7305",
+  "review": {
+    "comments": [
+      {
+        "path": "spring-ai-alibaba-jmanus/src/main/java/com/alibaba/cloud/ai/example/manus/dynamic/agent/entity/DynamicAgentEntity.java",
+        "start_line": 47,
+        "end_line": 47,
+        "content": "[medium] Using a space character as the default for the deprecated `systemPrompt` field is unclear and could lead to confusion — an empty string would be clearer, or at least add a comment explaining why the space is required."
+      },
+      {
+        "path": "spring-ai-alibaba-jmanus/src/main/java/com/alibaba/cloud/ai/example/manus/tool/browser/actions/MoveToAndClickAction.java",
+        "start_line": 46,
+        "end_line": 46,
+        "content": "[medium] There is a possible NPE here: getBrowserDebug() returns the wrapper type Boolean, which can be null when the configuration is unset, and auto-unboxing to a primitive boolean would then throw a NullPointerException. Safer to use Boolean.TRUE.equals() or supply a default value (e.g., Boolean.TRUE.equals(getBrowserUseTool().getManusProperties().getBrowserDebug()))."
+      },
+      {
+        "path": "spring-ai-alibaba-jmanus/src/main/java/com/alibaba/cloud/ai/example/manus/tool/browser/actions/NavigateAction.java",
+        "start_line": 41,
+        "end_line": 44,
+        "content": "[medium] The logic that auto-completes URL prefixes can get certain edge cases wrong:\n1. A protocol-relative URL (e.g., '//example.com') ends up as 'https:////example.com'\n2. A URL that already has another scheme (e.g., 'ftp://example.com') ends up as 'https://ftp://example.com'\n\nA more robust check would be better, for example:\n```java\nif (!url.matches(\"^[a-zA-Z][a-zA-Z0-9+.-]*://.*\")) {\n    url = \"https://\" + url;\n}\n```\nThe regex accepts any valid protocol scheme, rather than only http/https."
+      },
+      {
+        "path": "spring-ai-alibaba-jmanus/src/main/java/com/alibaba/cloud/ai/example/manus/tool/browser/actions/MoveToAndClickAction.java",
+        "start_line": 55,
+        "end_line": 66,
+        "content": "[low] The intent of `MoveToAndClickAction` is not obvious from this location; a concise explanation would help maintainers."
+      },
+      {
+        "path": "spring-ai-alibaba-jmanus/src/main/java/com/alibaba/cloud/ai/example/manus/tool/browser/actions/InputTextAction.java",
+        "start_line": 73,
+        "end_line": 73,
+        "content": "[low] Please clarify whether `fill(\"\")` is expected to be case-sensitive at this boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "e3162d90079b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 4,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 121815,
+      "input_tokens": 112639,
+      "output_tokens": 9176,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 280714
+    }
+  }
+}

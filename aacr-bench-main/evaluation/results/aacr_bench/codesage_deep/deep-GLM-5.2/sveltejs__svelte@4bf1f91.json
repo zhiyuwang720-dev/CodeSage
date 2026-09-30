@@ -1,0 +1,61 @@
+{
+  "instance_id": "sveltejs__svelte@4bf1f91",
+  "repo": "sveltejs/svelte",
+  "base_commit": "e4987d2a9f36b33f3934725723f9c4cc998ef278",
+  "head_commit": "4bf1f915d3374721f8a1655b1a151c1c423b1a3c",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:04:10.532401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "sveltejs__svelte@4bf1f91",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/svelte/src/compiler/phases/3-transform/client/visitors/IfBlock.js",
+        "start_line": 44,
+        "end_line": 44,
+        "content": "[medium] The third argument being passed to `$$render` for alternate branches doesn't match the runtime if_block contract: that function expects either a [number, number] tuple for elseif cases or no third argument at all for regular cases. `b.literal(false)` fits neither shape and could lead to problems at runtime."
+      },
+      {
+        "path": "packages/svelte/src/compiler/phases/3-transform/server/visitors/IfBlock.js",
+        "start_line": 34,
+        "end_line": 37,
+        "content": "[medium] Possible runtime/type failure here: the result of `context.visit(alt)` is assumed to be a `BlockStatement`, and `.body.unshift(...)` is invoked on it with no check. If `alt` ever visits to something that isn't a `BlockStatement`, this will throw. It would be safer to normalize the node into a block (`b.block([stmt])`) when it isn't already a `BlockStatement`, or to rely on an upstream guarantee that's made explicit via an assertion."
+      },
+      {
+        "path": "packages/svelte/src/internal/client/dom/blocks/if.js",
+        "start_line": 70,
+        "end_line": 70,
+        "content": "[medium] Checking `hydrate_index` with `isNaN` right after the `parseInt` call reads as a code smell; `hydrate_index !== hydrate_index` would be a more dependable way to detect NaN here."
+      },
+      {
+        "path": "packages/svelte/src/compiler/phases/3-transform/server/visitors/IfBlock.js",
+        "start_line": 34,
+        "end_line": 37,
+        "content": "[low] In `IfBlock.js`, add a boundary test for `context.visit(alt)` with the smallest valid input."
+      },
+      {
+        "path": "packages/svelte/src/internal/client/dom/blocks/if.js",
+        "start_line": 70,
+        "end_line": 70,
+        "content": "[low] Consider giving `isNaN` a named helper if future changes add another branch here."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "1303c64059a0",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 4,
+      "model_calls": 10,
+      "total_tokens": 125114,
+      "input_tokens": 117261,
+      "output_tokens": 7853,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 322112
+    }
+  }
+}

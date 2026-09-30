@@ -1,0 +1,55 @@
+{
+  "instance_id": "kestra-io__kestra@0ec45f0",
+  "repo": "kestra-io/kestra",
+  "base_commit": "bfcfb2ac16dd8f198a99fef43072cb178f9a1d8e",
+  "head_commit": "0ec45f028467c99d8d1efeee6c201210d9433e6d",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:17:43.895401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "kestra-io__kestra@0ec45f0",
+  "review": {
+    "comments": [
+      {
+        "path": "core/src/main/java/io/kestra/core/runners/pebble/Extension.java",
+        "start_line": 159,
+        "end_line": 162,
+        "content": "[medium] Both `fileExistsFunction` and `fileEmptyFunction` are registered without any null check. Even though they're `@Singleton`, this presumes the beans are always injected and that `Extension` is always created via DI. To stay consistent with `render*` and `errorLogs`, either fail fast with a clear message when injection somehow yields null (for example, `Objects.requireNonNull(fileExistsFunction, \"...\")`), or mark them `@Nullable` and register them only when present. Otherwise, a wiring or classpath change in some distributions turns into an NPE during template engine initialization that is hard to diagnose.\n\n```suggestion\n        functions.put(\"randomInt\", new RandomIntFunction());\n        functions.put(\"randomPort\", new RandomPortFunction());\n        functions.put(\"fileExists\", java.util.Objects.requireNonNull(fileExistsFunction, \"fileExistsFunction bean is missing\"));\n        functions.put(\"fileEmpty\", java.util.Objects.requireNonNull(fileEmptyFunction, \"fileEmptyFunction bean is missing\"));\n```"
+      },
+      {
+        "path": "core/src/main/java/io/kestra/core/runners/pebble/functions/FileEmptyFunction.java",
+        "start_line": 85,
+        "end_line": 85,
+        "content": "[medium] The exception type here is inconsistent: the other template functions signal failures with `PebbleException`, while this one throws `IllegalArgumentException`, which can sidestep Pebble's line/template reporting and make debugging harder. Better to throw `PebbleException` including lineNumber/self (passing them into this method) so error handling stays uniform.\n\n```suggestion\n                throw new PebbleException(null, \"Unable to read the file '\" + path + \"' as it doesn't belong to the current execution\", lineNumber, self.getName());\n```"
+      },
+      {
+        "path": "core/src/main/java/io/kestra/core/runners/pebble/functions/FileEmptyFunction.java",
+        "start_line": 71,
+        "end_line": 74,
+        "content": "[low] Consider checking the interaction between `isFileFromCurrentExecution` and a retry or repeated-call path."
+      },
+      {
+        "path": "core/src/main/java/io/kestra/core/runners/pebble/Extension.java",
+        "start_line": 159,
+        "end_line": 162,
+        "content": "[low] Consider testing `fileExistsFunction` when two callers reach this code with different configuration values."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "3ade44122f49",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 8,
+      "total_tokens": 88657,
+      "input_tokens": 81778,
+      "output_tokens": 6879,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 264624
+    }
+  }
+}

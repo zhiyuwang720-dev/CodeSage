@@ -1,0 +1,61 @@
+{
+  "instance_id": "ClickHouse__ClickHouse@5fb6ee3",
+  "repo": "ClickHouse/ClickHouse",
+  "base_commit": "e29021aed71bfebb76c0305f554375061adb8bf9",
+  "head_commit": "5fb6ee38d2d7d2fc6e1a67005b12d3b9aaac418f",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:12:21.565401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ClickHouse__ClickHouse@5fb6ee3",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Functions/array/arrayAggregation.cpp",
+        "start_line": 482,
+        "end_line": 482,
+        "content": "[medium] The `returned_value` text says 'minimum element', but this file implements arrayMax — the wording should describe the maximum element so the docs match what the function actually does.\n\n```suggestion\n    FunctionDocumentation::ReturnedValue returned_value_max = \"Returns the maximum element in the source array, or the maximum element of the lambda results if provided.\";\n```"
+      },
+      {
+        "path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "start_line": 157,
+        "end_line": 157,
+        "content": "[medium] The lambda examples in the arrayFirstIndex docs are invalid as written: multi-parameter lambdas are shown as `x, y -> x=y` without wrapping the parameters. They should read `(x, y) -> x=y`."
+      },
+      {
+        "path": "src/Functions/array/arraySplit.cpp",
+        "start_line": 133,
+        "end_line": 133,
+        "content": "[medium] The documentation variables are easy to confuse between the two split functions. Rename the ones belonging to `FunctionArraySplit` to a `*_split` naming scheme (e.g., `description_split`) and those belonging to `FunctionArrayReverseSplit` to a `*_reverse_split` scheme (e.g., `description_reverse_split`) so the two stay clearly distinct."
+      },
+      {
+        "path": "src/Functions/array/arrayFirstLastIndex.cpp",
+        "start_line": 157,
+        "end_line": 157,
+        "content": "[low] The `(x, y) -> x=y` path may benefit from a test that covers both the success and rejection cases."
+      },
+      {
+        "path": "src/Functions/array/arraySplit.cpp",
+        "start_line": 133,
+        "end_line": 133,
+        "content": "[low] Consider adding coverage for `FunctionArraySplit` when the relevant option is explicitly disabled."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "0e26d733cada",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 4,
+      "model_calls": 10,
+      "total_tokens": 120307,
+      "input_tokens": 109830,
+      "output_tokens": 10477,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 302510
+    }
+  }
+}

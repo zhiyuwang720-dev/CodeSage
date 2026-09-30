@@ -1,0 +1,55 @@
+{
+  "instance_id": "google-gemini__gemini-cli@c6e6248",
+  "repo": "google-gemini/gemini-cli",
+  "base_commit": "809b933d8150c29154062e4d596cd916258022fc",
+  "head_commit": "c6e624883852318b71baa2a060c933bb5de591ef",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:59:16.188401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "google-gemini__gemini-cli@c6e6248",
+  "review": {
+    "comments": [
+      {
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 309,
+        "end_line": 358,
+        "content": "[medium] `runCommand` re-implements the process execution and stream handling logic that already exists in the `run` method, which breaks DRY and adds maintenance overhead. Please factor the shared child process spawning, stream collection, and promise resolution into a private helper method that both functions use."
+      },
+      {
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 352,
+        "end_line": 352,
+        "content": "[medium] The rejection only carries stderr. Including both stdout and stderr in the error message would make debugging easier."
+      },
+      {
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 309,
+        "end_line": 312,
+        "content": "[low] A focused test that invokes both run and runCommand before setup() would document the expected failure mode and guard against regressions once the guard is added."
+      },
+      {
+        "path": "integration-tests/test-helper.ts",
+        "start_line": 342,
+        "end_line": 355,
+        "content": "[low] Consider adding a timeout to the returned promise so a child process that never exits doesn't leave the awaiting test hanging indefinitely."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c517fe5dd884",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 111934,
+      "input_tokens": 101738,
+      "output_tokens": 10196,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 277935
+    }
+  }
+}

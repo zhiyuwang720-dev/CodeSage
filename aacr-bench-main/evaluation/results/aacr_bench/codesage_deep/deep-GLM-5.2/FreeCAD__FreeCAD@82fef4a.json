@@ -1,0 +1,49 @@
+{
+  "instance_id": "FreeCAD__FreeCAD@82fef4a",
+  "repo": "FreeCAD/FreeCAD",
+  "base_commit": "ab225f5672cbe45404299437d1613c308b68900b",
+  "head_commit": "82fef4a22503dd3affdd39e7120b6f71e9423f86",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:49:02.757401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "FreeCAD__FreeCAD@82fef4a",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Base/Parameter.cpp",
+        "start_line": 1913,
+        "end_line": 1913,
+        "content": "[medium] Using `\\n` instead of `std::endl` in these error messages drops the implicit flush, which can postpone when the error actually shows up in the terminal. For error reporting, output needs to reach the terminal right away — please revert to `std::endl`."
+      },
+      {
+        "path": "src/Base/Parameter.cpp",
+        "start_line": 1913,
+        "end_line": 1913,
+        "content": "[low] Consider enriching this error message with the offending file or parameter path, so users can locate the source of the parse failure without extra debugging."
+      },
+      {
+        "path": "src/Base/Parameter.cpp",
+        "start_line": 1911,
+        "end_line": 1911,
+        "content": "[low] It might be useful to add a small regression test that feeds a malformed configuration file through the parser and asserts the expected error text is produced, locking in this path's behavior."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c14498795592",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 69133,
+      "input_tokens": 62565,
+      "output_tokens": 6568,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 168146
+    }
+  }
+}

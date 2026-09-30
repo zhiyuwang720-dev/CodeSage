@@ -1,0 +1,55 @@
+{
+  "instance_id": "mrdoob__three.js@b55b9e9",
+  "repo": "mrdoob/three.js",
+  "base_commit": "de413e2112ff1ae80599f145b101354a1476976c",
+  "head_commit": "b55b9e97f6d0f5829e4d8fc364949e72b0d9e98c",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:49:45.969401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "mrdoob__three.js@b55b9e9",
+  "review": {
+    "comments": [
+      {
+        "path": "src/renderers/common/Renderer.js",
+        "start_line": 2322,
+        "end_line": 2322,
+        "content": "[medium] When the call is forwarded to `computeAsync`, the `dispatchSize` argument gets dropped. `computeAsync` should take a `dispatchSize` parameter itself and forward it to `compute` once initialization completes."
+      },
+      {
+        "path": "src/renderers/webgpu/nodes/WGSLNodeBuilder.js",
+        "start_line": 1903,
+        "end_line": 1903,
+        "content": "[medium] Requiring `workgroupSize` to contain exactly 3 elements is stricter than the spec allows: WebGPU accepts 1, 2, or 3 elements, with any missing dimensions defaulting to 1. The implementation should therefore also accept arrays of length 1 or 2 and pad them accordingly."
+      },
+      {
+        "path": "src/renderers/webgpu/nodes/WGSLNodeBuilder.js",
+        "start_line": 2105,
+        "end_line": 2105,
+        "content": "[low] The contract for `WGSLNodeBuilder` would be easier to preserve with a focused test at this boundary."
+      },
+      {
+        "path": "src/renderers/common/Renderer.js",
+        "start_line": 2322,
+        "end_line": 2322,
+        "content": "[low] Consider including `dispatchSize` in the diagnostic context so failures are easier to trace."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5196de72b971",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 4,
+      "model_calls": 8,
+      "total_tokens": 110545,
+      "input_tokens": 102510,
+      "output_tokens": 8035,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 320919
+    }
+  }
+}

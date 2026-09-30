@@ -1,0 +1,43 @@
+{
+  "instance_id": "FreeCAD__FreeCAD@a440ff7",
+  "repo": "FreeCAD/FreeCAD",
+  "base_commit": "abb50a4daa43abee9e6b263dd82e5e876c978c6a",
+  "head_commit": "a440ff7e4138c20ed2ac66977a199ebbf295e493",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:51:50.903401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "FreeCAD__FreeCAD@a440ff7",
+  "review": {
+    "comments": [
+      {
+        "path": "src/Gui/DlgOnlineHelpImp.h",
+        "start_line": 35,
+        "end_line": 35,
+        "content": "[medium] Typo: \"an an\" appears to be a mistake for \"and an\"."
+      },
+      {
+        "path": "src/Gui/DlgOnlineHelpImp.h",
+        "start_line": 35,
+        "end_line": 35,
+        "content": "[low] Please keep the handling of `DlgOnlineHelpImp` consistent with the neighboring operation in `DlgOnlineHelpImp.h`."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "b2687bc6d603",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 77003,
+      "input_tokens": 70682,
+      "output_tokens": 6321,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 191396
+    }
+  }
+}

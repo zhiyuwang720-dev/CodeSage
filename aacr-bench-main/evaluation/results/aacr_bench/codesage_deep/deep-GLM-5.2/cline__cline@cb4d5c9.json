@@ -1,0 +1,43 @@
+{
+  "instance_id": "cline__cline@cb4d5c9",
+  "repo": "cline/cline",
+  "base_commit": "4d8bdf29458db722a2bce1dfacc50771959b32fa",
+  "head_commit": "cb4d5c90460885942cbbae0298b95f4ee5682086",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:21:02.540401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "cline__cline@cb4d5c9",
+  "review": {
+    "comments": [
+      {
+        "path": "src/api/providers/openai.ts",
+        "start_line": 39,
+        "end_line": 39,
+        "content": "[medium] Matching model IDs with substring `includes` risks false positives (e.g., user-defined model names that happen to contain these tokens). If the set of model IDs is known, an exact comparison — or a lookup set / anchored regex matching the expected patterns — would be safer. It would also help to normalize case in one place, since model IDs aren't always consistently cased.\n\n```suggestion\n\t\tconst normalizedModelId = modelId.toLowerCase()\n\t\tconst isDeepseekReasoner =\n\t\t\tnormalizedModelId === \"deepseek-reasoner\" || normalizedModelId === \"deepseek-r1\"\n```"
+      },
+      {
+        "path": "src/api/providers/openai.ts",
+        "start_line": 39,
+        "end_line": 39,
+        "content": "[low] Please document what callers should expect when `includes` is unavailable."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "abf3f4e925e6",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 66888,
+      "input_tokens": 61026,
+      "output_tokens": 5862,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 195052
+    }
+  }
+}

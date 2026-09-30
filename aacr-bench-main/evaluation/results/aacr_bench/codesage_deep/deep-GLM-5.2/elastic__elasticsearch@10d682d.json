@@ -1,0 +1,49 @@
+{
+  "instance_id": "elastic__elasticsearch@10d682d",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "47e352fda0567a682687fe926927cee3f631ea24",
+  "head_commit": "10d682d9aa4b1c2976e1db769ba04cb15256da9e",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:33:20.454401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@10d682d",
+  "review": {
+    "comments": [
+      {
+        "path": "x-pack/plugin/security/cli/src/main/java/org/elasticsearch/xpack/security/cli/CertificateTool.java",
+        "start_line": 283,
+        "end_line": 283,
+        "content": "[medium] The \"ca-keyusage\" command-line option should be renamed to \"keyusage\" — the \"ca-\" prefix adds nothing, since the option is only used in the `certutil ca` context."
+      },
+      {
+        "path": "x-pack/plugin/security/cli/src/main/java/org/elasticsearch/xpack/security/cli/CertGenUtils.java",
+        "start_line": 124,
+        "end_line": 143,
+        "content": "[low] Consider adding coverage for `KEY_USAGE_BITS` when the relevant option is explicitly disabled."
+      },
+      {
+        "path": "x-pack/plugin/security/cli/src/main/java/org/elasticsearch/xpack/security/cli/HttpCertificateCommand.java",
+        "start_line": 1042,
+        "end_line": 1065,
+        "content": "[low] Please confirm that `readKeyUsage` cannot cause duplicate work when this branch is revisited."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5735bb7f8d7b",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 102783,
+      "input_tokens": 94735,
+      "output_tokens": 8048,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 235684
+    }
+  }
+}

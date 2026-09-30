@@ -1,0 +1,49 @@
+{
+  "instance_id": "valkey-io__valkey@8b2137d",
+  "repo": "valkey-io/valkey",
+  "base_commit": "7fa784a27562940d2995fc6e3d6938940d81e4b6",
+  "head_commit": "8b2137d6cd7c8b898352b8bcb035402958d92707",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:15:21.110401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "valkey-io__valkey@8b2137d",
+  "review": {
+    "comments": [
+      {
+        "path": "src/io_threads.c",
+        "start_line": 348,
+        "end_line": 348,
+        "content": "[medium] Fold `READ_FLAGS_PRIMARY` into `read_flags` doesn't feel right conceptually: primary/replica is persistent client state, while the bits in this mask are transient per-read flags that vary from one operation to the next. Bundling them into the same bitmask conflates state that gets set once with flags tied to individual requests."
+      },
+      {
+        "path": "src/networking.c",
+        "start_line": 2062,
+        "end_line": 2064,
+        "content": "[medium] Possible buffer overflow here: if `bufpos < c->ref_block_pos`, the subtraction underflows because `size_t` is unsigned, yielding an enormous value that gets handed to `connWrite`. Consider guarding with `if (bufpos <= c->ref_block_pos) return;` ahead of the `connWrite` call."
+      },
+      {
+        "path": "src/io_threads.c",
+        "start_line": 348,
+        "end_line": 348,
+        "content": "[low] Please ensure that `READ_FLAGS_PRIMARY` is not evaluated before the required state has been initialized."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "29cee4568e93",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 99174,
+      "input_tokens": 90857,
+      "output_tokens": 8317,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 192323
+    }
+  }
+}

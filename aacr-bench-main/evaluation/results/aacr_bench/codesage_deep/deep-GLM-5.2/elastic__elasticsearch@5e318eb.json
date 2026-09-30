@@ -1,0 +1,43 @@
+{
+  "instance_id": "elastic__elasticsearch@5e318eb",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "fcf040857f04ef064a06d80191fca112d0ba8f04",
+  "head_commit": "5e318eba16c2327289af2e96b9c099ec7469acfa",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:35:50.362401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@5e318eb",
+  "review": {
+    "comments": [
+      {
+        "path": "test/framework/src/main/java/org/elasticsearch/entitlement/bootstrap/TestEntitlementsRule.java",
+        "start_line": 169,
+        "end_line": 169,
+        "content": "[medium] Could the `NodeGrant` record be renamed to `EntitledNodePaths`? That name fits the entitlements framework's terminology better and steers clear of leftover security manager vocabulary that reads as confusing."
+      },
+      {
+        "path": "test/framework/src/main/java/org/elasticsearch/entitlement/bootstrap/TestEntitlementsRule.java",
+        "start_line": 107,
+        "end_line": 107,
+        "content": "[low] Please make the error behavior for `compareAndSet` explicit instead of relying on the caller to infer it."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "4f00d66e0b10",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 91158,
+      "input_tokens": 82687,
+      "output_tokens": 8471,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 215091
+    }
+  }
+}

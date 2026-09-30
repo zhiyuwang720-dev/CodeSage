@@ -1,0 +1,43 @@
+{
+  "instance_id": "langflow-ai__langflow@6239290",
+  "repo": "langflow-ai/langflow",
+  "base_commit": "a8f6ee4af97fe594eb2c84b655abc549f6d7c741",
+  "head_commit": "623929065f9ae45792afce2eb3185dad353df78e",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:22:08.519401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "langflow-ai__langflow@6239290",
+  "review": {
+    "comments": [
+      {
+        "path": "src/backend/base/langflow/components/processing/parser.py",
+        "start_line": 129,
+        "end_line": 131,
+        "content": "[medium] Logic problem: when formatting a Data object, the template only receives `text=data.get_text()`, so the only usable placeholder is `{text}`. This diverges from the DataFrame path (line 126), where every column is exposed via `**row.to_dict()`. A Data object whose `data` dictionary holds several fields (e.g., `{\"name\": \"John\", \"age\": 30, \"text\": \"...\"}`) can't have `{name}` or `{age}` referenced in the template. Switching to `template.format(**data.data)` would expose all Data fields to the template, matching the DataFrame behavior."
+      },
+      {
+        "path": "src/backend/base/langflow/components/processing/__init__.py",
+        "start_line": 12,
+        "end_line": 12,
+        "content": "[low] Add a regression case for `from .parser import ParserComponent` with a value at the documented limit."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "5091c4ddba9f",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 91493,
+      "input_tokens": 84201,
+      "output_tokens": 7292,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 176190
+    }
+  }
+}

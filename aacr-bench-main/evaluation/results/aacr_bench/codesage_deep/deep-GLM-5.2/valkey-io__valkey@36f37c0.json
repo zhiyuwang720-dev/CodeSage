@@ -1,0 +1,43 @@
+{
+  "instance_id": "valkey-io__valkey@36f37c0",
+  "repo": "valkey-io/valkey",
+  "base_commit": "ea2e48a807e1d4a1a5a684a2a699eda1934a0c6f",
+  "head_commit": "36f37c0bafa72c091a9a3725b9a026a056130892",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:12:42.237401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "valkey-io__valkey@36f37c0",
+  "review": {
+    "comments": [
+      {
+        "path": "src/networking.c",
+        "start_line": 2776,
+        "end_line": 2776,
+        "content": "[low] A regression test around `server.hide_user_data_from_log` would help ensure this branch stays aligned with its neighboring path."
+      },
+      {
+        "path": "src/networking.c",
+        "start_line": 2773,
+        "end_line": 2773,
+        "content": "[low] The `server.hide_user_data_from_log` path may benefit from a test that covers both the success and rejection cases."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "be4276863cb6",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 69471,
+      "input_tokens": 61628,
+      "output_tokens": 7843,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 222930
+    }
+  }
+}

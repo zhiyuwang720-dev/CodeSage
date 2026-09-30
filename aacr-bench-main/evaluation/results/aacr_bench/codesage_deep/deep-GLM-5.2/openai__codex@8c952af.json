@@ -1,0 +1,55 @@
+{
+  "instance_id": "openai__codex@8c952af",
+  "repo": "openai/codex",
+  "base_commit": "d6182becbe155776b159270fe4a5e88d607f0c5e",
+  "head_commit": "8c952af20fe791cc0c5d0a59089d3329968b4373",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:56:27.840401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "openai__codex@8c952af",
+  "review": {
+    "comments": [
+      {
+        "path": "codex-rs/core/src/config.rs",
+        "start_line": 81,
+        "end_line": 81,
+        "content": "[medium] A `///` doc comment was turned into a regular `//` comment, which drops this field's docs from the generated documentation. It should remain a `///` doc comment describing the new behavior (or the historical comment could be removed entirely).\n\n```suggestion\n    /// Server-side response storage control removed; responses are never stored.\n```"
+      },
+      {
+        "path": "codex-rs/protocol/src/models.rs",
+        "start_line": 50,
+        "end_line": 52,
+        "content": "[medium] `Reasoning { id: String }` is no longer serialized anywhere, yet the field remains non-optional. Should this enum go through any non-request serialization path (e.g., transcript export, debug dumps), the data would be silently lost. If the intent is 'Reasoning.id is response-only', making it `Option<String>` would express that it can be absent in serialized forms; otherwise, a doc comment or test documenting the expected deserialize-only behavior would help."
+      },
+      {
+        "path": "codex-rs/core/src/config.rs",
+        "start_line": 81,
+        "end_line": 81,
+        "content": "[low] Please verify that a failure involving `disable_response_storage` does not leave partially updated state behind."
+      },
+      {
+        "path": "codex-rs/protocol/src/models.rs",
+        "start_line": 50,
+        "end_line": 52,
+        "content": "[low] Consider recording the relevant `Reasoning { id: String }` value only when it is safe to expose in diagnostics."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c42f575e4d3f",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 104773,
+      "input_tokens": 95437,
+      "output_tokens": 9336,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 197467
+    }
+  }
+}

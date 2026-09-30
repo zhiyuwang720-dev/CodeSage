@@ -1,0 +1,43 @@
+{
+  "instance_id": "ppy__osu@87697a7",
+  "repo": "ppy/osu",
+  "base_commit": "605979e790eb0aabdf5e8d6c8a182974697bc3a9",
+  "head_commit": "87697a72e333d1468a35d4a3fec388319cc16e2a",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:04:01.557401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ppy__osu@87697a7",
+  "review": {
+    "comments": [
+      {
+        "path": "osu.Game.Rulesets.Osu/Mods/OsuModSuddenDeath.cs",
+        "start_line": 27,
+        "end_line": 28,
+        "content": "[medium] Right now the implementation only triggers a failure on `HitResult.IgnoreMiss` for slider tails. It would be worth aligning with the existing OsuHealthProcessor logic, which treats any non-hit result (!result.IsHit) on slider tails as significant — this would keep the behavior consistent and avoid situations where some kinds of slider tail misses fail to trigger sudden death."
+      },
+      {
+        "path": "osu.Game.Rulesets.Osu/Mods/OsuModSuddenDeath.cs",
+        "start_line": 30,
+        "end_line": 30,
+        "content": "[low] The behavior around `FailCondition` would be clearer if its precondition were stated at the boundary."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "b4f5c1e29ea5",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 5,
+      "total_tokens": 81852,
+      "input_tokens": 75087,
+      "output_tokens": 6765,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 197289
+    }
+  }
+}

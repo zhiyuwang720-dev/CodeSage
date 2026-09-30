@@ -1,0 +1,37 @@
+{
+  "instance_id": "astral-sh__uv@61b521f",
+  "repo": "astral-sh/uv",
+  "base_commit": "041c7a5e63d5559ce5571a30e177c072b1b357b2",
+  "head_commit": "61b521f4e9a1e8bdba760394740814f25cc108c2",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:03:07.573401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "astral-sh__uv@61b521f",
+  "review": {
+    "comments": [
+      {
+        "path": "Cargo.lock",
+        "start_line": 4664,
+        "end_line": 4664,
+        "content": "[low] Consider testing `Cargo` across a transition from an old value to a new one."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "de3e3a02e89d",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 6,
+      "total_tokens": 75890,
+      "input_tokens": 70456,
+      "output_tokens": 5434,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 173317
+    }
+  }
+}

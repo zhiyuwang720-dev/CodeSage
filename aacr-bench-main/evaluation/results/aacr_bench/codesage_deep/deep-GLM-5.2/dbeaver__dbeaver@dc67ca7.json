@@ -1,0 +1,55 @@
+{
+  "instance_id": "dbeaver__dbeaver@dc67ca7",
+  "repo": "dbeaver/dbeaver",
+  "base_commit": "469e4265a58af95a6d5f4069515e029fc2891374",
+  "head_commit": "dc67ca7cf486ceaf45559318cdcbca193847188d",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:28:12.171401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "dbeaver__dbeaver@dc67ca7",
+  "review": {
+    "comments": [
+      {
+        "path": "plugins/org.jkiss.dbeaver.ext.hana/plugin.xml",
+        "start_line": 43,
+        "end_line": 44,
+        "content": "[medium] For the HANA partitions, the empty `<items>` element would be cleaner as a self-closing tag (`/>`) rather than a pair of separate opening and closing tags."
+      },
+      {
+        "path": "plugins/org.jkiss.dbeaver.ext.hana/src/org/jkiss/dbeaver/ext/hana/model/HANAPartition.java",
+        "start_line": 72,
+        "end_line": 79,
+        "content": "[medium] This chain of conditions can behave in surprising ways: if LEVEL_1_RANGE_MIN_VALUE is empty while LEVEL_2_RANGE_MIN_VALUE has a value, and LEVEL_3_RANGE_MIN_VALUE is also populated, the latter will overwrite the value just assigned from LEVEL_2_RANGE_MIN_VALUE. An else-if chain, or breaking out after the first assignment, would prevent that."
+      },
+      {
+        "path": "plugins/org.jkiss.dbeaver.ext.hana/src/org/jkiss/dbeaver/ext/hana/model/HANAPartition.java",
+        "start_line": 151,
+        "end_line": 154,
+        "content": "[low] Add a test that confirms `HANAPartition` does not change the behavior of unrelated inputs."
+      },
+      {
+        "path": "plugins/org.jkiss.dbeaver.ext.hana/plugin.xml",
+        "start_line": 43,
+        "end_line": 44,
+        "content": "[low] Please check that `<items>` remains understandable when the caller takes the early-return path."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "a6b2aac27726",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 101084,
+      "input_tokens": 94161,
+      "output_tokens": 6923,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 237924
+    }
+  }
+}

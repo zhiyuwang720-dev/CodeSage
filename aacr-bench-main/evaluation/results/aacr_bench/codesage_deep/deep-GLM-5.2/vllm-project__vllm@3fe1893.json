@@ -1,0 +1,49 @@
+{
+  "instance_id": "vllm-project__vllm@3fe1893",
+  "repo": "vllm-project/vllm",
+  "base_commit": "c3bf9bad11193ee684ed6083b6692d0b5bf2bac7",
+  "head_commit": "3fe18934d7f33b98812d7402463fe171c24efc77",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:17:33.871401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "vllm-project__vllm@3fe1893",
+  "review": {
+    "comments": [
+      {
+        "path": "vllm/multimodal/processing.py",
+        "start_line": 1104,
+        "end_line": 1104,
+        "content": "[medium] The docstring for `get_max_tokens_per_item` isn't precise enough about the scope of the token limits. It should mention \"per item\" so it's clear the method returns the maximum tokens for an individual item, not global limits for the modality."
+      },
+      {
+        "path": "vllm/model_executor/models/qwen2_vl.py",
+        "start_line": 822,
+        "end_line": 823,
+        "content": "[low] Please check whether `get_max_tokens_per_item()` needs an explicit fallback when the optional value is absent."
+      },
+      {
+        "path": "vllm/multimodal/processing.py",
+        "start_line": 1104,
+        "end_line": 1104,
+        "content": "[low] Please check that `get_max_tokens_per_item` behaves consistently when the caller supplies an empty value."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2d591b6a54c8",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 98023,
+      "input_tokens": 89767,
+      "output_tokens": 8256,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 178235
+    }
+  }
+}

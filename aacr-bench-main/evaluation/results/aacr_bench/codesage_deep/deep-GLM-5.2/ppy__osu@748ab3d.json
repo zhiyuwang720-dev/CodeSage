@@ -1,0 +1,55 @@
+{
+  "instance_id": "ppy__osu@748ab3d",
+  "repo": "ppy/osu",
+  "base_commit": "19e9bffc11f026ebff2dc2831668e606c701f71f",
+  "head_commit": "748ab3d4863f6ea4bf6a3fffccb50e5cd616937b",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:03:31.448401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "ppy__osu@748ab3d",
+  "review": {
+    "comments": [
+      {
+        "path": "osu.Game/Rulesets/Difficulty/Utils/DifficultyCalculationUtils.cs",
+        "start_line": 69,
+        "end_line": 75,
+        "content": "[medium] Docs need a pass: the summary repeats \"returns returns\" and uses \"reducing it's value\" where it should read \"reducing its value\". It would also help to state the expected output range. As written, inputs outside [mean-width, mean+width] feed a negative x into Smoothstep; that's only safe if Smoothstep clamps internally — otherwise the result can drop below 0. Either clamp x to [0,width] explicitly before calling Smoothstep, or document that correctness depends on Smoothstep's clamping."
+      },
+      {
+        "path": "osu.Game/Rulesets/Difficulty/Utils/DifficultyCalculationUtils.cs",
+        "start_line": 78,
+        "end_line": 79,
+        "content": "[medium] Both branches of the ternary evaluate to `width - Math.Abs(x)`, so the whole expression collapses to just `Math.Abs(x)`, which reads much more cleanly."
+      },
+      {
+        "path": "osu.Game/Rulesets/Difficulty/Utils/DifficultyCalculationUtils.cs",
+        "start_line": 78,
+        "end_line": 79,
+        "content": "[low] Consider naming the policy used by `Math.Abs(x)` so nearby call sites do not duplicate it differently."
+      },
+      {
+        "path": "osu.Game/Rulesets/Difficulty/Utils/DifficultyCalculationUtils.cs",
+        "start_line": 70,
+        "end_line": 70,
+        "content": "[low] Please add coverage showing how `DifficultyCalculationUtils` behaves when the surrounding resource is unavailable."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "abecc0314f9c",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 87824,
+      "input_tokens": 80101,
+      "output_tokens": 7723,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 228294
+    }
+  }
+}

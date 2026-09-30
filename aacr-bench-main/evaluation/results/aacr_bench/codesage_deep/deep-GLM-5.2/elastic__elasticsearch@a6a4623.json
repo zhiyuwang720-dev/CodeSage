@@ -1,0 +1,49 @@
+{
+  "instance_id": "elastic__elasticsearch@a6a4623",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "cc0e53e883ee7e0b136e58a0105103c1a7ffddf9",
+  "head_commit": "a6a4623f4a0216b515a8cb323110305504431459",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:39:25.453401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@a6a4623",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/main/java/org/elasticsearch/search/fetch/subphase/highlight/AbstractHighlighterBuilder.java",
+        "start_line": 568,
+        "end_line": 568,
+        "content": "[medium] The validation for `maxAnalyzedOffset` currently lets 0 through, but 0 isn't a valid value — highlighting zero characters makes no sense and can lead to undefined behavior. The condition should reject 0 while still accepting -1 (the special default) and positive integers."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/lucene/search/uhighlight/QueryMaxAnalyzedOffset.java",
+        "start_line": 15,
+        "end_line": 18,
+        "content": "[low] Consider adding unit tests for the factory path that cover the parameter being absent, set to a typical value, and set at the edges of the accepted range, so the wrapper's contract stays pinned down as the code evolves."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/lucene/search/uhighlight/QueryMaxAnalyzedOffset.java",
+        "start_line": 15,
+        "end_line": 18,
+        "content": "[low] It could help to document in the class or method contract what the offset represents (for instance, whether it counts characters) and what callers should pass when highlighting limits are disabled, reducing ambiguity at call sites."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "fb3ccad29ecb",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 2,
+      "dimensions": 2,
+      "model_calls": 6,
+      "total_tokens": 89261,
+      "input_tokens": 80151,
+      "output_tokens": 9110,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 222593
+    }
+  }
+}

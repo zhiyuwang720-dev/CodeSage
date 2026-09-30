@@ -1,0 +1,55 @@
+{
+  "instance_id": "elastic__elasticsearch@2adcb2d",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "3594ade2a9ce3dac2abda77add51cc88990ce43a",
+  "head_commit": "2adcb2d510ac8667f771842572c4b2c8bcaf2992",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:35:27.373401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@2adcb2d",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/main/java/org/elasticsearch/cluster/ClusterChangedEvent.java",
+        "start_line": 350,
+        "end_line": 350,
+        "content": "[medium] The default-project fast path makes 4 collection checks—2 `size()` calls and 2 `hasProject()` calls. Cache the project maps once and use `containsKey` for the default-only check to avoid repeating lookups. The suggested implementation is:\n```java\nprivate static ProjectsDelta calculateProjectDelta(Metadata previousMetadata, Metadata currentMetadata) {\n    final var prevProjects = previousMetadata.projects();\n    final var currProjects = currentMetadata.projects();\n    \n    // Fast path: both have only default project\n    if (prevProjects.size() == 1 && currProjects.size() == 1 \n        && prevProjects.containsKey(ProjectId.DEFAULT) && currProjects.containsKey(ProjectId.DEFAULT)) {\n        return EMPTY_PROJECT_DELTA;\n    }\n    \n    return new ProjectsDelta(\n        Set.copyOf(Sets.difference(currProjects.keySet(), prevProjects.keySet())),\n        Set.copyOf(Sets.difference(prevProjects.keySet(), currProjects.keySet()))\n    );\n}\n```"
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/cluster/ClusterChangedEvent.java",
+        "start_line": 366,
+        "end_line": 366,
+        "content": "[medium] **Placement**: The static constant `EMPTY_PROJECT_DELTA` is declared below `calculateProjectDelta`, the method that references it. Java permits this ordering, but the common convention is to list constants ahead of the code that uses them, which reads better. Would you mind moving the declaration to line 365, just before `calculateProjectDelta`?"
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/cluster/ClusterChangedEvent.java",
+        "start_line": 245,
+        "end_line": 250,
+        "content": "[low] Please keep the handling of `projectDelta()` consistent with the neighboring operation in `ClusterChangedEvent.java`."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/cluster/ClusterChangedEvent.java",
+        "start_line": 366,
+        "end_line": 366,
+        "content": "[low] The `EMPTY_PROJECT_DELTA` branch could use a test for a value that is valid syntactically but unusual in practice."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "18b66a5a39fb",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 105454,
+      "input_tokens": 95527,
+      "output_tokens": 9927,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 289381
+    }
+  }
+}

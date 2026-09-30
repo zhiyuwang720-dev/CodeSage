@@ -1,0 +1,49 @@
+{
+  "instance_id": "opencv__opencv@e3e45c8",
+  "repo": "opencv/opencv",
+  "base_commit": "459bb12466abdade062607ae54f3267adaef8063",
+  "head_commit": "e3e45c86baa3c51def49961f5d77201ee97e4385",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:59:39.726401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "opencv__opencv@e3e45c8",
+  "review": {
+    "comments": [
+      {
+        "path": "samples/cpp/tutorial_code/ImgTrans/HoughLines_Demo.cpp",
+        "start_line": 75,
+        "end_line": 75,
+        "content": "[medium] Nice improvement replacing `sprintf` with `snprintf` to guard against buffer overflows. Two follow-ups worth considering:\n1) Portability: `snprintf` is C99; older MSVC versions may need `_snprintf` or feature macros instead. Please confirm the build toolchain guarantees `snprintf` is available.\n2) If you're willing to touch more code, it would be safer and clearer to avoid raw C buffers altogether (e.g., `std::array<char, 50>` or `std::string`).\nIt's also worth verifying that the correct header (`<cstdio>` / `<stdio.h>`) is included in this file, whether directly or transitively."
+      },
+      {
+        "path": "samples/cpp/tutorial_code/objectDetection/aruco_samples_utility.hpp",
+        "start_line": 35,
+        "end_line": 38,
+        "content": "[low] Please document the expected contract for `aruco samples utility` near this call site."
+      },
+      {
+        "path": "samples/opengl/opengl_interop.cpp",
+        "start_line": 242,
+        "end_line": 242,
+        "content": "[low] Please confirm that `snprintf` is still correct after repeated updates to the surrounding state."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "c6e8bcdd748a",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 4,
+      "model_calls": 9,
+      "total_tokens": 123495,
+      "input_tokens": 115799,
+      "output_tokens": 7696,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 231722
+    }
+  }
+}

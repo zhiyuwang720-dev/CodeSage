@@ -1,0 +1,49 @@
+{
+  "instance_id": "immich-app__immich@7e2009f",
+  "repo": "immich-app/immich",
+  "base_commit": "4d6d5537b713ca80bb2a670fdc7be66882b12d5c",
+  "head_commit": "7e2009f038cbf3f26403af6582af3cf8ba91672f",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:03:54.123401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "immich-app__immich@7e2009f",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/services/metadata.service.ts",
+        "start_line": 577,
+        "end_line": 577,
+        "content": "[medium] A non-strict equality comparison is used here. Per the code quality checklist, strict equality operators (=== and !==) must be used instead of == and !=.\n\n```suggestion\n    if (timeZone === null && dateTime?.rawValue?.endsWith('+00:00')) {\n```"
+      },
+      {
+        "path": "server/src/services/metadata.service.ts",
+        "start_line": 601,
+        "end_line": 603,
+        "content": "[medium] Possible null/undefined gap: this branch assumes both `asset.fileModifiedAt` and `asset.fileCreatedAt` are non-null `Date`s. If either can be null/undefined (or not a Date), the comparison here and the later `toISOString()` call can throw. Adding a guard would help (e.g., use whichever timestamp is available, falling back to `asset.createdAt` or `new Date(0)` as a last resort), and `localDateTime` should be confirmed to be a valid `Date` before logging.\n\n```suggestion\n      const created = asset.fileCreatedAt;\n      const modified = asset.fileModifiedAt;\n      const earliestDate = created && modified ? (modified < created ? modified : created) : (modified ?? created ?? asset.createdAt);\n      if (!earliestDate) {\n        this.logger.warn(`Asset ${asset.id} has no file timestamps; falling back to current time`);\n        dateTimeOriginal = new Date();\n        localDateTime = dateTimeOriginal;\n      } else {\n        dateTimeOriginal = earliestDate;\n        localDateTime = earliestDate;\n      }\n```"
+      },
+      {
+        "path": "server/src/services/metadata.service.ts",
+        "start_line": 597,
+        "end_line": 597,
+        "content": "[low] A targeted test for `metadata.service` with a malformed value would help define the rejection behavior."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "09405d001bf9",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 5,
+      "total_tokens": 92299,
+      "input_tokens": 85200,
+      "output_tokens": 7099,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 173364
+    }
+  }
+}

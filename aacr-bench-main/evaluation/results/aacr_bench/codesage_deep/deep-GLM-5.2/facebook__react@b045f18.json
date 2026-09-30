@@ -1,0 +1,67 @@
+{
+  "instance_id": "facebook__react@b045f18",
+  "repo": "facebook/react",
+  "base_commit": "99563e91736e9de473c4865d5cb6fd9eb1a26bcb",
+  "head_commit": "b045f18e378341876ee69e729fc855cab501c3cd",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:45:15.248401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "facebook__react@b045f18",
+  "review": {
+    "comments": [
+      {
+        "path": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+        "start_line": 1491,
+        "end_line": 1491,
+        "content": "[medium] Putting ActivityComponent on the hidden components list is wrong: it stands for user-rendered content, not an internal implementation detail, so it needs to remain visible in React DevTools."
+      },
+      {
+        "path": "packages/react-reconciler/src/ReactFiberBeginWork.js",
+        "start_line": 871,
+        "end_line": 883,
+        "content": "[medium] This function largely repeats the Offscreen/LegacyHidden mounting and updating pattern (creating/updating an Offscreen fiber, wiring `ref`, `child`, and `return`). Pulling that into a shared helper — or reusing `updateOffscreenComponent`/`updateLegacyHiddenComponent` if the semantics line up — would reduce the risk of divergence when Offscreen behavior changes (e.g. flags, lanes, ref handling). If the semantics are intentionally different, a short comment explaining why Activity needs its own fork would be helpful."
+      },
+      {
+        "path": "packages/react-reconciler/src/getComponentNameFromFiber.js",
+        "start_line": 90,
+        "end_line": 90,
+        "content": "[medium] It may be worth checking whether 'Activity' as the component name matches the naming conventions used elsewhere in the codebase. If a constant or shared definition for this name already exists, reusing it would likely be better than hardcoding the string here."
+      },
+      {
+        "path": "packages/shared/ReactSymbols.js",
+        "start_line": 37,
+        "end_line": 37,
+        "content": "[medium] Placing `REACT_ACTIVITY_TYPE` ahead of `REACT_OFFSCREEN_TYPE` would keep the definitions alphabetical, which appears to be the ordering pattern elsewhere in this file (lazy, memo, offscreen, scope, etc.) and would make the symbol definitions easier to maintain."
+      },
+      {
+        "path": "packages/react-reconciler/src/getComponentNameFromFiber.js",
+        "start_line": 90,
+        "end_line": 90,
+        "content": "[low] A targeted test for `getComponentNameFromFiber` with a malformed value would help define the rejection behavior."
+      },
+      {
+        "path": "packages/shared/isValidElementType.js",
+        "start_line": 54,
+        "end_line": 54,
+        "content": "[low] Please verify that `isValidElementType` does not silently discard information needed by the next stage."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "d5ef433d0b78",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 5,
+      "dimensions": 5,
+      "model_calls": 9,
+      "total_tokens": 152759,
+      "input_tokens": 140733,
+      "output_tokens": 12026,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 335334
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "instance_id": "timescale__timescaledb@7148e5c",
+  "repo": "timescale/timescaledb",
+  "base_commit": "d0fe7370082dbc57d391d5168705909809bd880f",
+  "head_commit": "7148e5c7d90c9da819a8ca77b79664fac300ca60",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T11:09:32.644401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "timescale__timescaledb@7148e5c",
+  "review": {
+    "comments": [
+      {
+        "path": "sql/updates/latest-dev.sql",
+        "start_line": 2,
+        "end_line": 13,
+        "content": "[medium] This rollback can fail when the old function signature is absent—for example, on a fresh install, an already-upgraded database, or a partial upgrade. Use `DROP FUNCTION IF EXISTS ...` here and in the reverse migration so both directions remain idempotent across those states.\n\n```suggestion\nDROP FUNCTION IF EXISTS @extschema@.add_continuous_aggregate_policy(\n    continuous_aggregate REGCLASS,\n    start_offset \"any\",\n    end_offset \"any\",\n    schedule_interval INTERVAL,\n    if_not_exists BOOL,\n    initial_start TIMESTAMPTZ,\n    timezone TEXT,\n    include_tiered_data BOOL,\n    buckets_per_batch INTEGER,\n    max_batches_per_execution INTEGER\n);\n```"
+      },
+      {
+        "path": "tsl/src/bgw_policy/job.c",
+        "start_line": 508,
+        "end_line": 509,
+        "content": "[medium] The `refresh_newest_first` assignment should happen inside the following `if (policy_data)` block instead of before it — that's the only place the value is consumed, and moving it avoids pointlessly running the call when `policy_data` is undefined."
+      },
+      {
+        "path": "sql/updates/latest-dev.sql",
+        "start_line": 2,
+        "end_line": 13,
+        "content": "[low] A short assertion around `DROP FUNCTION` could make this invariant easier to diagnose during development."
+      },
+      {
+        "path": "tsl/src/continuous_aggs/refresh.c",
+        "start_line": 1145,
+        "end_line": 1145,
+        "content": "[low] Consider testing `psprintf()` across a transition from an old value to a new one."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "86fe873d1e89",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 3,
+      "dimensions": 3,
+      "model_calls": 7,
+      "total_tokens": 109101,
+      "input_tokens": 99894,
+      "output_tokens": 9207,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 248222
+    }
+  }
+}

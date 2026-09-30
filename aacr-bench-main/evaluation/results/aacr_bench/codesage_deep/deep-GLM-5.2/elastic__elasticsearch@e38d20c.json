@@ -1,0 +1,55 @@
+{
+  "instance_id": "elastic__elasticsearch@e38d20c",
+  "repo": "elastic/elasticsearch",
+  "base_commit": "078f7ff9f7134a9c3011106e7b742a9fd8f04d56",
+  "head_commit": "e38d20c726cffb1ef9563d3146951a5356596464",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:43:08.046401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "elastic__elasticsearch@e38d20c",
+  "review": {
+    "comments": [
+      {
+        "path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "start_line": 549,
+        "end_line": 549,
+        "content": "[medium] `maybeWrapListenerForStackTrace` pulls in heavier dependencies than needed: it requires `ClusterService` and the full `ShardSearchRequest`, even though only the local node ID and the shard ID are actually used."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "start_line": 558,
+        "end_line": 558,
+        "content": "[medium] The log format appears to put the closing bracket in the wrong place: `[%s]%s Clearing stack trace` differs from `[%s][%s] Clearing stack trace`, which is supposed to match the `[nodeId][indexName][shard]` pattern in the PR description. However, `request.shardId()` already renders `[indexName][shard]`, so `[%s]%s` is actually correct as written. The remaining concern is that the resulting `[nodeId][indexName][shard] Clearing stack trace` line conflicts with the description's claimed prefix."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "start_line": 556,
+        "end_line": 556,
+        "content": "[low] The `logger.debug()` path would be easier to review if the exceptional case were handled next to the normal case."
+      },
+      {
+        "path": "server/src/main/java/org/elasticsearch/search/SearchService.java",
+        "start_line": 556,
+        "end_line": 556,
+        "content": "[low] Consider making the ordering expectation for `logger.debug()` explicit in a test."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "83bcc46c0d7d",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 8,
+      "total_tokens": 83541,
+      "input_tokens": 74318,
+      "output_tokens": 9223,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 298696
+    }
+  }
+}

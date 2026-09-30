@@ -1,0 +1,43 @@
+{
+  "instance_id": "dotnet__aspnetcore@2f372e8",
+  "repo": "dotnet/aspnetcore",
+  "base_commit": "e7d49f52363753a4faa2a22538eace7a923382ce",
+  "head_commit": "2f372e8ff137aa24114269576fc1912f12ff5402",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T09:32:10.095401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "dotnet__aspnetcore@2f372e8",
+  "review": {
+    "comments": [
+      {
+        "path": "src/SignalR/server/StackExchangeRedis/test/Docker.cs",
+        "start_line": 113,
+        "end_line": 113,
+        "content": "[medium] The comment still mentions the previous container name `'redisTestContainer'`, but the container is actually named `'redisTestContainer74'` now (set on line 20). The comment should be corrected to match the current name.\n\n```suggestion\n            // use static name 'redisTestContainer74' so if the container doesn't get removed we don't keep adding more\n```"
+      },
+      {
+        "path": "src/SignalR/server/StackExchangeRedis/test/Docker.cs",
+        "start_line": 116,
+        "end_line": 116,
+        "content": "[low] Please add coverage showing how `pull` behaves when the surrounding resource is unavailable."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "2766a5d4c456",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 1,
+      "model_calls": 4,
+      "total_tokens": 81448,
+      "input_tokens": 76178,
+      "output_tokens": 5270,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 220267
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "instance_id": "linera-io__linera-protocol@8fb32bb",
+  "repo": "linera-io/linera-protocol",
+  "base_commit": "ad508025a9d05552a1c8ac1ba4e71a0062ebb556",
+  "head_commit": "8fb32bb8a463a3b19e291426f83833027739f868",
+  "reviewer": "codesage_deep",
+  "started_at": "2026-09-28T10:29:57.368401+00:00",
+  "codesage_deep_exit_code": null,
+  "source_instance_id": "linera-io__linera-protocol@8fb32bb",
+  "review": {
+    "comments": [
+      {
+        "path": "linera-base/src/prometheus_util.rs",
+        "start_line": 25,
+        "end_line": 25,
+        "content": "[medium] The doc comment spells \"prometheus\" and \"linera\" in lowercase. Since both are names of specific projects, they should be capitalized as proper nouns."
+      },
+      {
+        "path": "linera-base/src/prometheus_util.rs",
+        "start_line": 25,
+        "end_line": 25,
+        "content": "[low] Consider testing `prometheus util` when two callers reach this code with different configuration values."
+      }
+    ]
+  },
+  "stderr": "",
+  "deep_review": {
+    "run_id": "e76cc6d041ba",
+    "status": "completed",
+    "metrics": {
+      "reviewed_files": 1,
+      "dimensions": 2,
+      "model_calls": 7,
+      "total_tokens": 92288,
+      "input_tokens": 86701,
+      "output_tokens": 5587,
+      "cost_usd": null,
+      "usage_complete": false,
+      "cost_available": false,
+      "duration_ms": 177199
+    }
+  }
+}
