@@ -125,6 +125,45 @@ async def test_ap02_openai_compatible_extra_body_reaches_provider_request(model_
 
 
 @pytest.mark.asyncio
+async def test_ap02_stream_keeps_forced_choice_with_investigation_tools(model_harness) -> None:
+    model_harness.server.set_default(
+        CHAT_PATH,
+        PlannedResponse(
+            sse_chunks=openai_stream_chunks(content="ok", model="glm-5.3-flash"),
+            content_type="text/event-stream",
+        ),
+    )
+    service = model_harness.service(
+        provider="openai", model="glm-5.3-flash", protocol="openai_chat",
+        base_url=model_harness.server.base_url,
+    )
+    tools = [
+        {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+        for name in ("file_read", "FinalizeReview")
+    ]
+
+    async for _ in service.chat_completion_stream(
+        messages=[{"role": "user", "content": "finalize"}],
+        tools=tools,
+        tool_choice={"type": "function", "function": {"name": "FinalizeReview"}},
+        parallel_tool_calls=False,
+        retry_enabled=False,
+    ):
+        pass
+
+    records = model_harness.server.requests(CHAT_PATH)
+    assert len(records) == 1
+    assert records[0].body["tool_choice"] == {
+        "type": "function", "function": {"name": "FinalizeReview"},
+    }
+    assert [tool["function"]["name"] for tool in records[0].body["tools"]] == [
+        "file_read", "FinalizeReview",
+    ]
+    assert records[0].body["parallel_tool_calls"] is False
+    assert "thinking" not in records[0].body
+
+
+@pytest.mark.asyncio
 async def test_ap02_openai_compatible_stream_matches_non_stream_semantics(model_harness) -> None:
     model_harness.server.set_default(
         CHAT_PATH,

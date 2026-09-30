@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from app.execution_plane.models import client as client_module
-from app.execution_plane.models.errors import ModelRateLimitError
+from app.execution_plane.models.errors import ModelConnectionError, ModelRateLimitError
 from app.execution_plane.models.service import LLMService
 
 
@@ -128,26 +129,27 @@ async def test_llm_service_harness_owner_issues_single_attempt(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_service_passes_forced_tool_choice(monkeypatch):
+async def test_llm_service_passes_forced_tool_choice(monkeypatch, caplog):
     captured: list = []
     _install_fake_sdk(monkeypatch, recorder=captured)
     service = _service()
 
-    result = await service.chat_completion(
-        messages=[{"role": "user", "content": "use tools"}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_many_files",
-                    "description": "Read multiple files",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ],
-        tool_choice={"type": "function", "function": {"name": "read_many_files"}},
-        parallel_tool_calls=False,
-    )
+    with caplog.at_level(logging.INFO, logger="app.execution_plane.models.client"):
+        result = await service.chat_completion(
+            messages=[{"role": "user", "content": "use tools"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_many_files",
+                        "description": "Read multiple files",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "read_many_files"}},
+            parallel_tool_calls=False,
+        )
 
     assert result["content"] == "recovered"
     assert captured[0]["tools"][0]["function"]["name"] == "read_many_files"
@@ -156,6 +158,38 @@ async def test_llm_service_passes_forced_tool_choice(monkeypatch):
         "type": "function", "function": {"name": "read_many_files"},
     }
     assert captured[0]["num_retries"] == 0
+    assert "model.forced_tool_request" in caplog.text
+    assert "tool_choice=read_many_files" in caplog.text
+    assert "endpoint_host=example.invalid" in caplog.text
+    assert "test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_retry_diagnostics_record_status_and_cause_type_without_error_text(monkeypatch, caplog):
+    attempts = 0
+
+    async def fake_acompletion(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ModelConnectionError(
+                "sensitive-error-text", status_code=503,
+                cause=ConnectionResetError("sensitive-cause-text"),
+            )
+        return _payload("recovered")
+
+    monkeypatch.setattr(client_module.litellm, "acompletion", fake_acompletion)
+    with caplog.at_level(logging.WARNING, logger="app.execution_plane.models.client"):
+        result = await _service().chat_completion(messages=[{"role": "user", "content": "retry me"}])
+
+    assert result["content"] == "recovered"
+    assert attempts == 2
+    assert "status_code=503" in caplog.text
+    assert "sdk_error=ConnectionResetError" in caplog.text
+    assert "retrying=True" in caplog.text
+    assert "sensitive-error-text" not in caplog.text
+    assert "sensitive-cause-text" not in caplog.text
+    assert "test-key" not in caplog.text
 
 
 @pytest.mark.asyncio

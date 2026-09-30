@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import litellm
 from opentelemetry import context as otel_context
@@ -402,6 +403,33 @@ class SDKModelClient:
         """唯一 SDK 发送点；请求期间不得修改任何 litellm 全局配置。"""
 
         kwargs = self._build_kwargs(config, request)
+        if request.tool_choice is not None:
+            choice = kwargs["tool_choice"]
+            function = choice.get("function") if isinstance(choice, dict) else None
+            target = function.get("name") if isinstance(function, dict) else choice
+            extra_body = kwargs.get("extra_body") or {}
+            thinking = extra_body.get("thinking") if isinstance(extra_body, dict) else None
+            try:
+                endpoint_host = urlsplit(config.base_url or "").hostname or ""
+            except ValueError:
+                endpoint_host = "<invalid>"
+            logger.info(
+                "model.forced_tool_request provider=%s model=%s endpoint_host=%s "
+                "stream=%s tool_choice=%s advertised_tools=%s parallel_tool_calls=%s "
+                "thinking_disabled=%s",
+                config.provider.value,
+                config.model,
+                endpoint_host,
+                stream,
+                target,
+                [
+                    tool["function"].get("name")
+                    for tool in kwargs.get("tools", [])
+                    if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+                ],
+                kwargs.get("parallel_tool_calls"),
+                isinstance(thinking, dict) and thinking.get("type") == "disabled",
+            )
         if stream:
             kwargs["stream"] = True
             if config.stream_options_include_usage:
@@ -448,6 +476,7 @@ class SDKModelClient:
             # 供应商返回的 request id 仍由 SDK 写在 gen_ai.response.id 上。
             provider_request_id = uuid.uuid4().hex[:16]
             provider_token = None
+            started_at = time.monotonic()
             try:
                 provider_token = bind_observability_context(provider_request_id=provider_request_id)
                 trace.get_current_span().set_attribute(
@@ -462,14 +491,27 @@ class SDKModelClient:
                 if isinstance(mapped, asyncio.CancelledError):
                     raise
                 last_error = mapped
-                if attempt >= budget or not is_retryable(mapped):
-                    raise mapped
+                retrying = attempt < budget and is_retryable(mapped)
+                source = getattr(mapped, "cause", None) or exc
+                root_cause = getattr(source, "__cause__", None)
                 logger.warning(
-                    "model request attempt %s/%s failed (%s); retrying",
+                    "model request attempt %s/%s failed (%s); retrying=%s "
+                    "status_code=%s sdk_error=%s root_cause=%s elapsed_ms=%s "
+                    "provider_request_id=%s provider=%s model=%s",
                     attempt,
                     budget,
                     mapped.__class__.__name__,
+                    retrying,
+                    getattr(mapped, "status_code", None),
+                    type(source).__name__,
+                    type(root_cause).__name__ if root_cause is not None else None,
+                    round((time.monotonic() - started_at) * 1000),
+                    provider_request_id,
+                    scoped.provider.value,
+                    scoped.model,
                 )
+                if not retrying:
+                    raise mapped
                 record_model_retry(layer="sdk", error_kind=mapped.__class__.__name__)
                 backoff_seconds = self._retry_delay(attempt)
                 with get_tracer().start_as_current_span(

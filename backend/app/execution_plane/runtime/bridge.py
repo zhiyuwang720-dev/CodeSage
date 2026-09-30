@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
@@ -40,6 +41,8 @@ from app.execution_plane.models.runtime_ai import (
     HarnessResult,
 )
 from app.tool_gateway.schema_finalize_review import SchemaFinalizeReviewTool
+
+logger = logging.getLogger(__name__)
 
 READ_SAFE_RUNTIME_TOOLS = {"Read", "Glob", "Grep", "Skill"}
 INTERNAL_TOOL_NAMES = {"think", "reflect", "load_skill_body", "skill_resource_lookup"}
@@ -119,6 +122,13 @@ class RuntimeLLMModelClient:
         self._preserve_prompt_prefix = preserve_prompt_prefix
         self._max_forced_requests = max_forced_requests
         self._forced_requests = 0
+        self._last_advertised_tools: tuple[str, ...] = ()
+
+    @staticmethod
+    def _diagnostic_tool_name(value: Any) -> str:
+        """Keep model supplied tool names useful in logs without recording arbitrary text."""
+
+        return re.sub(r"[^A-Za-z0-9_.:-]", "?", str(value or ""))[:96] or "<empty>"
 
     def _request_tool_options(self, tool_definitions: list[dict[str, Any]]) -> dict[str, Any]:
         if self._forced_tool_choice is None:
@@ -130,10 +140,22 @@ class RuntimeLLMModelClient:
             )
         self._forced_requests += 1
         target = self._forced_tool_choice["function"]["name"]
+        self._last_advertised_tools = tuple(
+            self._diagnostic_tool_name(tool.get("name")) for tool in tool_definitions
+        )
         if any(tool.get("name") == target for tool in tool_definitions):
             options = {"tool_choice": self._forced_tool_choice, "parallel_tool_calls": False}
             if self._forced_tool_choice_extra_body:
                 options["extra_body"] = dict(self._forced_tool_choice_extra_body)
+            logger.info(
+                "runtime.finalizer_request attempt=%s/%s tool_choice=%s advertised_tools=%s "
+                "parallel_tool_calls=false thinking_disabled=%s",
+                self._forced_requests,
+                self._max_forced_requests,
+                self._diagnostic_tool_name(target),
+                list(self._last_advertised_tools[:32]),
+                bool(self._forced_tool_choice_extra_body),
+            )
             return options
         if tool_definitions:
             raise NonRetryableModelCallError(
@@ -143,14 +165,37 @@ class RuntimeLLMModelClient:
         # A compaction request has no tools; it still consumes this phase's request budget.
         return {"parallel_tool_calls": False}
 
-    def _validate_forced_tool_calls(self, calls: list[dict[str, Any]]) -> None:
+    def _validate_forced_tool_calls(
+        self, calls: list[dict[str, Any]], *, response_complete: bool = False,
+    ) -> None:
         if self._forced_tool_choice is None:
             return
         target = self._forced_tool_choice["function"]["name"]
+        actual = [self._diagnostic_tool_name(call.get("name")) for call in calls[:8]]
+        if len(calls) > 8:
+            actual.append(f"<+{len(calls) - 8}>")
         if any(call.get("name") != target for call in calls):
+            logger.warning(
+                "runtime.finalizer_wrong_tool attempt=%s/%s expected=%s actual=%s",
+                self._forced_requests,
+                self._max_forced_requests,
+                self._diagnostic_tool_name(target),
+                actual,
+            )
             raise NonRetryableModelCallError(
-                "Forced finalization returned a non-terminal tool call",
+                "Forced finalization returned a non-terminal tool call: "
+                f"expected={self._diagnostic_tool_name(target)} actual={actual} "
+                f"advertised={list(self._last_advertised_tools[:32])} "
+                f"request={self._forced_requests}/{self._max_forced_requests}",
                 error_kind="finalization_wrong_tool",
+            )
+        if response_complete:
+            logger.info(
+                "runtime.finalizer_response attempt=%s/%s expected=%s actual=%s",
+                self._forced_requests,
+                self._max_forced_requests,
+                self._diagnostic_tool_name(target),
+                actual,
             )
 
     def _effective_system_prompt(self, system_prompt: str | None) -> str | None:
@@ -244,7 +289,7 @@ class RuntimeLLMModelClient:
             max_tokens=max_output_tokens_override,
         )
         normalized_calls = [self._normalize_tool_call(item) for item in response.get("tool_calls") or []]
-        self._validate_forced_tool_calls(normalized_calls)
+        self._validate_forced_tool_calls(normalized_calls, response_complete=True)
         return RuntimeModelResponse(
             content=response.get("content", "") or "",
             reasoning_content=str(response.get("reasoning_content") or ""),
@@ -320,7 +365,7 @@ class RuntimeLLMModelClient:
 
         final_event = final_event or {}
         normalized_calls = [self._normalize_tool_call(item) for item in final_event.get("tool_calls") or []]
-        self._validate_forced_tool_calls(normalized_calls)
+        self._validate_forced_tool_calls(normalized_calls, response_complete=True)
         return RuntimeModelResponse(
             content=str(final_event.get("content") or ""),
             reasoning_content=str(final_event.get("reasoning_content") or ""),
@@ -413,7 +458,9 @@ class RuntimeLLMModelClient:
                 if normalized.get("type") == "tool_call":
                     self._validate_forced_tool_calls([normalized["tool_call"]])
                 elif normalized.get("type") == "done":
-                    self._validate_forced_tool_calls(normalized.get("tool_calls") or [])
+                    self._validate_forced_tool_calls(
+                        normalized.get("tool_calls") or [], response_complete=True,
+                    )
                 if normalized.get("type") == "content_delta":
                     accumulated = normalized.get("accumulated") or accumulated
                 yield normalized
@@ -958,8 +1005,10 @@ class RuntimeBridge:
                 raise HarnessIncompleteError("Invalid finalizer capability override")
             return override, "model_config"
         host = urlsplit(str(getattr(config, "base_url", None) or "")).hostname or ""
-        is_deepseek = host.lower() == "api.deepseek.com"
-        if is_deepseek:
+        # These known endpoints reject or mishandle thinking + forced tool
+        # finalization. Keep the compatibility decision endpoint-scoped rather
+        # than inferring it from LiteLLM's generic provider name (often "openai").
+        if host.lower() in {"api.deepseek.com", "open.bigmodel.cn"}:
             return "forced_tool_only_with_thinking_disabled", "known_endpoint"
         # Provider-wide tool metadata does not establish whether this model/endpoint
         # accepts forced tool choice while thinking. Require an explicit override.

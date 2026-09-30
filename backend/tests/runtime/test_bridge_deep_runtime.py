@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import types
 from pathlib import Path
@@ -439,14 +440,21 @@ def test_forced_finalizer_keeps_tool_evidence_but_drops_old_tool_calls() -> None
     assert "file_read" not in rendered
 
 
-def test_deepseek_thinking_is_disabled_only_for_forced_finalizer_request() -> None:
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.deepseek.com",
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+    ],
+)
+def test_known_endpoint_thinking_is_disabled_only_for_forced_finalizer_request(base_url: str) -> None:
     llm = HarnessFakeLLMService([
         [done_event("investigation complete")],
         [tool_call_event("FinalizeReview", strict_payload(), call_id="forced-final"), done_event("done")],
     ])
     llm.get_config_for = lambda _agent_type: types.SimpleNamespace(
         provider=LLMProvider.OPENAI,
-        base_url="https://api.deepseek.com",
+        base_url=base_url,
     )
     bridge = RuntimeBridge(llm_service=llm, tools=[], session_factory=build_session_factory())
 
@@ -461,12 +469,14 @@ def test_deepseek_thinking_is_disabled_only_for_forced_finalizer_request() -> No
     assert llm.calls[1]["extra_body"] == {"thinking": {"type": "disabled"}}
     assert len(llm.calls[1]["tools"]) == 1
     assert llm.calls[1]["tools"][0]["function"]["name"] == "FinalizeReview"
+    assert result.result["finalization"]["capability"] == "forced_tool_only_with_thinking_disabled"
+    assert result.result["finalization"]["capability_source"] == "known_endpoint"
     finalizer_messages = json.dumps(llm.calls[1]["messages"], ensure_ascii=False)
     assert "autonomous deep review agent" not in finalizer_messages
     assert "file_read" not in finalizer_messages
 
 
-def test_explicit_model_capability_preserves_full_tool_prefix_and_rejects_wrong_tool() -> None:
+def test_explicit_model_capability_preserves_full_tool_prefix_and_rejects_wrong_tool(caplog) -> None:
     executed: list[str] = []
 
     async def read_tool(_parsed, _context):
@@ -501,14 +511,27 @@ def test_explicit_model_capability_preserves_full_tool_prefix_and_rejects_wrong_
     ])
     bad_llm.get_config_for = llm.get_config_for
     bad_bridge = RuntimeBridge(llm_service=bad_llm, tools=[], session_factory=build_session_factory())
-    with pytest.raises(HarnessIncompleteError):
-        asyncio.run(bad_bridge.harness(
-            "review", schema=StrictReviewResult, tools=[file_tool],
-            tool_allowlist={"file_read"}, max_turns=1,
-        ))
+    with caplog.at_level(logging.INFO, logger="app.execution_plane.runtime.bridge"):
+        with pytest.raises(HarnessIncompleteError) as failure:
+            asyncio.run(bad_bridge.harness(
+                "review", schema=StrictReviewResult, tools=[file_tool],
+                tool_allowlist={"file_read"}, max_turns=1,
+            ))
     assert executed == []
     # A terminal nudge may spend one more bounded request; it must never run file_read.
     assert len(bad_llm.calls) <= 3
+    assert "tool_choice=FinalizeReview" in caplog.text
+    assert "advertised_tools=['file_read', 'FinalizeReview']" in caplog.text
+    assert "runtime.finalizer_wrong_tool" in caplog.text
+    snapshot = bad_bridge._session_store.load_session_snapshot(failure.value.session_id)
+    wrong_tool_attempts = [
+        item.state_payload for item in snapshot.checkpoints
+        if item.state_payload.get("error_kind") == "finalization_wrong_tool"
+    ]
+    assert wrong_tool_attempts
+    assert "expected=FinalizeReview" in wrong_tool_attempts[0]["error"]
+    assert "actual=['file_read']" in wrong_tool_attempts[0]["error"]
+    assert "advertised=['file_read', 'FinalizeReview']" in wrong_tool_attempts[0]["error"]
 
 
 def test_harness_invalid_tool_call_then_retry_succeeds() -> None:
