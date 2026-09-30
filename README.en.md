@@ -23,21 +23,48 @@ Agents can read complete files, inspect other changes, search the repository, an
 
 CodeSage aims to balance review quality, speed, and cost. Deterministic code handles filtering, evidence extraction, and result assembly; models handle interpretation and reasoning. Configure a model endpoint to get started. Alongside the final findings, stage outputs and tool-call records show how each conclusion was reached.
 
-Deep Review currently runs independently through the CLI; integration with the web product's Workers remains in progress. The video and chart below show one CodeSage Deep GLM-5.2 evaluation on AACR-Bench.
+## Benchmarks
 
-## Quick start
+In this **100-instance** [AACR-Bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) evaluation, CodeSage Deep with **GLM-5.2** reports **52.8% precision, 23.4% recall, and 32.4% F1**. It produced 356 comments, of which 188 matched reference comments. The charts below show the current snapshot; aggregate metrics and per-instance outputs are public.
 
-Use Docker Desktop in Linux-container mode. Workers mount the Docker socket for sandbox tools. From the repository root:
+![CodeSage Deep GLM-5.2: precision 52.8%, recall 23.4%, F1 32.4%](assets/media/benchmark-en.png)
 
-```powershell
-Copy-Item .env.example .env
-# Set secure POSTGRES_PASSWORD and SECRET_KEY values in .env; real model reviews also need LLM_*
-docker compose up -d --build --wait
+The original OCR benchmark chart is also included for reference:
+
+![Open Code Review official AACR-Bench chart](assets/media/ocr-benchmark-en.png)
+
+Image source: [Open Code Review](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png). This CodeSage summary covers 100 instances and 802 reference comments; the OCR chart covers 200 PRs and 1,505 reference comments. Their sample sets differ.
+
+Evaluation files: [raw metrics](aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json) · [100 per-instance results and input snapshot](aacr-bench-main/evaluation/results/aacr_bench/codesage_deep/deep-GLM-5.2/) · [evaluation entry points](aacr-bench-main/evaluation/). Missing-instance counts differ between the summary and run metadata; see the [architecture guide](architecture/README.en.md#reports-and-execution-history).
+
+## Design strengths
+
+| Design | What it provides |
+| --- | --- |
+| Deterministic preparation | Fixed Git snapshots, file filtering, change statistics, and Python import impact analysis provide concrete investigation entry points. |
+| Repairable review plans | The Planner assigns investigations; code merges contained dimensions, preserves their questions, fills file-coverage gaps, and maintains cross-dimension relationships. |
+| Controlled parallel Reviewers | A shared concurrency limit, file-count-based turn budgets, and independent sessions keep investigations bounded. Evidence tracing and comment worthiness share the same review pass. |
+| One Cross verification session | All candidates and deduplicated local evidence support verification, adversarial challenge, consistency checks, duplicate decisions, and compound-risk analysis. |
+| Deterministic final assembly | Location validation, accepted decisions, exact deduplication, severity filtering, and stable ordering produce final and process reports. |
+| Product task governance | ARQ delivery, database row locks, leases, heartbeat renewal, and a result-acceptance gate constrain execution ownership. Lifecycle services coordinate cancellation and resume. |
+
+Follow a review from task delivery through planning, parallel investigation, and evidence verification in the [English architecture guide](architecture/README.en.md) / [中文架构说明](architecture/README.md).
+
+## Using CodeSage
+
+### Local Deep Review
+
+Install Python 3.11+ and Git. Configure the model endpoint in `backend/.env`:
+
+```dotenv
+LLM_PROVIDER=openai
+LLM_BASE_URL=https://your-model-endpoint/v1
+LLM_MODEL=your-model-name
+LLM_API_KEY=your-api-key
+LLM_FINALIZER_CAPABILITY=auto
 ```
 
-Open the [web UI](http://127.0.0.1:3000), [API](http://127.0.0.1:8000), or [Phoenix](http://127.0.0.1:6006). Run `docker compose ps` to inspect health and `docker compose down` to stop while preserving volumes. The optional `eval` profile has separate PostgreSQL, Redis, and Workers; see [docker-compose.yml](docker-compose.yml) for service configuration.
-
-To inspect Deep Review's deterministic preparation without a model call:
+From the repository root, enter the backend and run a full review:
 
 ```powershell
 Set-Location backend
@@ -45,27 +72,21 @@ python -m pip install -e .
 $repo = (Resolve-Path ..).Path
 $base = (git -C $repo rev-parse HEAD~1).Trim()
 $head = (git -C $repo rev-parse HEAD).Trim()
-python -m app.domains.deep_review --repo $repo --base $base --head $head --through anatomy --output ../.codesage/anatomy.json --store-dir ../.codesage/deep-review
+python -m app.domains.deep_review --repo $repo --base $base --head $head --through final --allow-model-calls --output ../.codesage/deep-review/result.json --store-dir ../.codesage/deep-review
 ```
 
-For a full review, configure `LLM_*` in `backend/.env` or the process environment and replace `--through anatomy` above with `--through final --allow-model-calls`. This incurs model costs. Each run writes `result.json`, a stage-by-stage `process_report.json`, and `events.jsonl` under `<store-dir>/<run_id>/`; Harness sessions are stored in `sessions.sqlite3` beside the requested output. Run `python -m app.domains.deep_review --help` for CLI options.
+Replace `$base` and `$head` with the Git refs to inspect. For deterministic preparation only, use `--through anatomy` and remove `--allow-model-calls`. The `planning`, `review`, `cross`, and `final` stages invoke real models.
 
-## AACR-Bench: current evaluation
+Each run creates `<store-dir>/<run_id>/` with `result.json`, a stage-by-stage `process_report.json`, and `events.jsonl`. The full command above also writes `sessions.sqlite3` and `summary.json` beside the requested output. `--output` selects a report copy. Run `python -m app.domains.deep_review --help` for filtering, concurrency, and configuration options.
 
-![CodeSage Deep GLM-5.2 AACR-Bench evaluation: precision 52.8%, recall 23.4%, F1 32.4%](assets/media/benchmark-en.png)
+### Web product and Workers
 
-The **GLM-5.2** CodeSage Deep run reports **52.8% semantic precision**, **23.4% semantic recall**, and **32.4% semantic F1**, across 100 evaluated instances and 802 expected notes. The OCR GLM-5.2 figures in the chart cover a different sample, so they provide context but do not support a same-sample ranking or performance-gain claim.
+Use Docker Desktop in Linux-container mode. From the repository root:
 
-The OCR reference figures come from its [published chart](https://github.com/alibaba/open-code-review/blob/main/imgs/benchmark-en.png). The raw CodeSage metrics are in the [result JSON](aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json), with 100 per-instance outputs in the [result directory](aacr-bench-main/evaluation/results/aacr_bench/codesage_deep/deep-GLM-5.2/). The metrics summary reports 100 evaluated instances and none missing, while `ex_info.missing_instance_ids` lists seven; the coverage accounting still needs reconciliation. The [AACR-Bench dataset](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) provides benchmark background.
+```powershell
+Copy-Item .env.example .env
+# Set POSTGRES_PASSWORD, SECRET_KEY, and LLM_* configuration
+docker compose up -d --build --wait
+```
 
-## Repository map
-
-| Entry | Purpose |
-| --- | --- |
-| [docker-compose.yml](docker-compose.yml) | Container services and isolated evaluation stack. |
-| [Media and motion project](assets/media/codesage-showreel/README.md) | Showreel, charts, and editable source. |
-| [`backend/app/domains/deep_review/`](backend/app/domains/deep_review/) | Standalone deep review implementation. |
-| [`frontend/`](frontend/) | Web frontend. |
-| [`aacr-bench-main/evaluation/`](aacr-bench-main/evaluation/) | AACR data, runner, and evaluation output. |
-
-An interrupted Deep Review prototype run keeps diagnostic records. Starting again creates a new run; stage resume is not supported yet. Normal CI does not automatically invoke paid model reviews or the judge.
+Open the [web UI](http://127.0.0.1:3000), [API](http://127.0.0.1:8000), and [Phoenix](http://127.0.0.1:6006). Workers use the Docker socket for sandbox tools. `docker compose ps` checks service status; `docker compose down` stops services while preserving volumes. The isolated evaluation services use the `eval` profile; see [docker-compose.yml](docker-compose.yml).

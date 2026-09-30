@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" viewBox="0 0 1440 800" role="img" aria-labelledby="title desc">
+  <title id="title">CodeSage unified architecture</title>
+  <desc id="desc">Unified design: Web requests pass through API, ARQ and leased Workers to Deep Review. CLI calls the engine directly. Preparation, planning, parallel review, evidence and Cross produce final and process reports, with execution history and telemetry alongside them.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#091323"/><stop offset="1" stop-color="#14243b"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#4adecf"/><stop offset="1" stop-color="#729cff"/></linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#87a5c9"/></marker>
+    <style>
+      text {font-family:Arial,Helvetica,sans-serif;}
+      .card {fill:#17283e;stroke:#34516d;stroke-width:1.5;}
+      .name {fill:#f3f7ff;font-size:24px;font-weight:700;}
+      .body {fill:#bdcfe5;font-size:17px;}
+      .tag {fill:#65e3ce;font-size:12px;font-weight:700;letter-spacing:1.6px;}
+      .edge {fill:none;stroke:#87a5c9;stroke-width:2;marker-end:url(#arrow);}
+    </style>
+  </defs>
+  <rect width="1440" height="800" rx="24" fill="url(#bg)"/>
+  <rect x="56" y="44" width="58" height="5" rx="2.5" fill="url(#accent)"/>
+  <text x="56" y="94" fill="#f5f8ff" font-size="36" font-weight="700">One review engine. Reliable execution.</text>
+  <text x="56" y="128" fill="#9db2ce" font-size="18">CodeSage · unified architecture design</text>
+  <g class="edge">
+    <path d="M294 233H350"/><path d="M638 233H694"/><path d="M918 233H974"/>
+    <path d="M1186 298V358"/><path d="M294 438H350"/>
+    <path d="M610 518V570"/><path d="M1080 518V570"/>
+  </g>
+  <g transform="translate(56 170)">
+    <rect width="238" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">PRODUCT ENTRY</text><text x="22" y="66" class="name">Web</text>
+    <text x="22" y="99" class="body">Projects · tasks · results</text>
+  </g>
+  <g transform="translate(362 170)">
+    <rect width="276" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">TASK GOVERNANCE</text><text x="22" y="66" class="name">API + lifecycle</text>
+    <text x="22" y="99" class="body">Durable task state · PostgreSQL</text>
+  </g>
+  <g transform="translate(706 170)">
+    <rect width="212" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">DELIVERY</text><text x="22" y="66" class="name">ARQ / Redis</text>
+    <text x="22" y="99" class="body">Task delivery identifiers</text>
+  </g>
+  <g transform="translate(986 170)">
+    <rect width="398" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">EXECUTION AUTHORITY</text><text x="22" y="66" class="name">Workers</text>
+    <text x="22" y="99" class="body">Lease · heartbeat · fenced result acceptance</text>
+  </g>
+  <g transform="translate(56 370)">
+    <rect width="238" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">LOCAL ENTRY</text><text x="22" y="66" class="name">CLI / benchmark</text>
+    <text x="22" y="99" class="body">Direct engine invocation</text>
+  </g>
+  <g transform="translate(362 370)">
+    <rect width="1022" height="148" rx="16" fill="#183039" stroke="#4b8e96" stroke-width="1.5"/>
+    <text x="24" y="30" class="tag">REVIEW ENGINE</text><text x="24" y="67" class="name">Deep Review</text>
+    <text x="24" y="102" class="body">Prepare → Semantic → Planner + repair → Parallel Reviewers → Evidence → Cross → Merge</text>
+    <text x="24" y="128" fill="#9dbbcf" font-size="16">Fixed Git snapshot · read-only tools · structured finalization · bounded concurrency</text>
+  </g>
+  <g transform="translate(362 582)">
+    <rect width="458" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">REVIEW OUTPUT</text><text x="22" y="66" class="name">Final + process reports</text>
+    <text x="22" y="99" class="body">Actionable comments · evidence · stage outputs</text>
+  </g>
+  <g transform="translate(866 582)">
+    <rect width="518" height="128" rx="16" class="card"/>
+    <text x="22" y="29" class="tag">EXECUTION HISTORY</text><text x="22" y="66" class="name">Sessions + events + traces</text>
+    <text x="22" y="99" class="body">Model / tool history · JSONL · SQLite · Phoenix</text>
+  </g>
+  <text x="56" y="760" fill="#9cb4cf" font-size="17">The platform governs execution. Deep Review investigates code. Both preserve the evidence behind the result.</text>
+</svg>

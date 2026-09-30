@@ -1,8 +1,8 @@
 """Render exact, bilingual SVG benchmark figures from a committed data snapshot.
 
-The full local AACR result is ignored by Git. When present, its SHA and summary
-are checked against benchmark-data.json before rendering; in a clean checkout,
-the pinned, reviewable snapshot is sufficient to reproduce the graphics.
+The published AACR result is checked against benchmark-data.json when present.
+Its SHA and summary must match before rendering; the pinned, reviewable snapshot
+also allows reproduction without the full evaluation artifacts.
 """
 
 from __future__ import annotations

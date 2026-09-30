@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="520" viewBox="0 0 1440 520" role="img" aria-labelledby="title desc">
+  <title id="title">CodeSage product execution — queue delivery is not execution authority</title>
+  <desc id="desc">API and ARQ deliver a task to Worker. Database row locks grant a lease and epoch, heartbeat renews conditionally, and a commit gate rejects stale owners. Offline Deep Review is currently separate.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#091323"/><stop offset="1" stop-color="#14243b"/></linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#87a5c9"/></marker>
+    <style>text { font-family:Arial,Helvetica,sans-serif; } .card {fill:#17283e;stroke:#34516d;} .name {fill:#f4f7ff;font-size:23px;font-weight:700;} .body {fill:#becfe5;font-size:16px;} .tag {fill:#65e3ce;font-size:12px;font-weight:700;letter-spacing:1.5px;} .edge {fill:none;stroke:#87a5c9;stroke-width:2;marker-end:url(#arrow);}</style>
+  </defs>
+  <rect width="1440" height="520" rx="24" fill="url(#bg)"/>
+  <text x="56" y="74" fill="#f5f8ff" font-size="32" font-weight="700">Execution authority, not just queue delivery</text>
+  <text x="56" y="111" fill="#9db2ce" font-size="18">Lease acquisition, renewal, and result acceptance</text>
+  <g class="edge"><path d="M272 244H298"/><path d="M550 244H576"/><path d="M828 244H854"/><path d="M1106 244H1132"/></g>
+  <g transform="translate(56 170)"><rect width="216" height="148" rx="16" class="card"/><text x="20" y="30" class="tag">01 · REQUEST</text><text x="20" y="66" class="name">API + lifecycle</text><text x="20" y="103" class="body">Create / cancel / resume</text><text x="20" y="128" class="body">Consistent lock order</text></g>
+  <g transform="translate(308 170)"><rect width="242" height="148" rx="16" class="card"/><text x="20" y="30" class="tag">02 · DELIVERY</text><text x="20" y="66" class="name">ARQ → Worker</text><text x="20" y="103" class="body">Task ID + delivery ID</text><text x="20" y="128" class="body">Message ≠ permission</text></g>
+  <g transform="translate(586 170)"><rect width="242" height="148" rx="16" class="card"/><text x="20" y="30" class="tag">03 · CLAIM</text><text x="20" y="66" class="name">Lease + epoch</text><text x="20" y="103" class="body">Lock row · reject conflicts</text><text x="20" y="128" class="body">Increment fencing epoch</text></g>
+  <g transform="translate(864 170)"><rect width="242" height="148" rx="16" class="card"/><text x="20" y="30" class="tag">04 · RENEW</text><text x="20" y="66" class="name">Heartbeat</text><text x="20" y="103" class="body">Owner + epoch + expiry</text><text x="20" y="128" class="body">Lease lost → local cancel</text></g>
+  <g transform="translate(1142 170)"><rect width="242" height="148" rx="16" fill="#153a38" stroke="#49b9a8"/><text x="20" y="30" class="tag">05 · ACCEPT</text><text x="20" y="66" class="name">Commit gate</text><text x="20" y="103" class="body">Recheck current owner</text><text x="20" y="128" class="body">Atomic result + task state</text></g>
+  <path d="M707 319V357M985 319V357M1263 319V357" fill="none" stroke="#456d92" stroke-width="2"/>
+  <rect x="586" y="357" width="798" height="68" rx="12" fill="#0f2033" stroke="#375776"/>
+  <text x="608" y="384" fill="#c8dcf2" font-size="17" font-weight="700">PostgreSQL · execution ownership + transactional results</text><text x="608" y="407" fill="#9cb4cf" font-size="15">Stale owner cannot overwrite an accepted result · cancellation invalidates authority</text>
+  <text x="56" y="480" fill="#9cb4cf" font-size="16">Guarantee: fenced result acceptance. Not a guarantee of exactly-once LLM requests.</text>
+</svg>

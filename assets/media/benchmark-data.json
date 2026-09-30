@@ -14,7 +14,7 @@
     "avg_duration_seconds": 258.85,
     "avg_tokens": 105715.16,
     "source_path": "aacr-bench-main/evaluation/metrics/aacr_bench/codesage_deep/deep-GLM-5.2/metrics_codesage_deep_20260928_085915.json",
-    "source_sha256": "27c30be8305d2cffe1c78d3a2406b31c78841ae5a58b2ffee85aa9edc9100d14",
+    "source_sha256": "72410080d4a6026bfa858f40febcbabab56f26c04042c5b06cd93593dea83ed6",
     "source_coverage_note": "The source summary reports 100 evaluated instances and zero missing, while ex_info.missing_instance_ids lists seven IDs; completion coverage has not been independently reconciled."
   },
   "ocr_reference": {
