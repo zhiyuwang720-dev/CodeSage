@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.pipeline import Anatomy, ReviewPlan, SemanticBrief
-from app.domains.deep_review.services.blast_radius import BlastResult
-from app.domains.deep_review.services.head_tree import HeadTreeIndex, validate_head_context_paths
+from app.domains.deep_review.services.directory_filter import DirectoryFilter, normalize_path, FilterError
+from app.domains.deep_review.services.git_runner import run_git_output_bounded
 from app.domains.deep_review.services.input_builder import ReviewSnapshot
 from app.domains.deep_review.services.plan_repair import repair_plan
 from app.domains.deep_review.services.prompt_loader import load_prompt, render_prompt
@@ -17,6 +17,32 @@ from app.domains.deep_review.services.runtime import AgentCallResult
 
 
 BoundedText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+async def _head_context_paths(snapshot: ReviewSnapshot, config: DeepReviewConfig) -> set[str]:
+    result = await run_git_output_bounded(
+        snapshot.input.repo_path,
+        ["ls-tree", "-r", "-z", snapshot.head_commit],
+        max_bytes=config.max_import_tree_bytes,
+        timeout_seconds=config.tool_timeout_seconds,
+    )
+    if result.returncode != 0 or result.truncated:
+        raise RuntimeError("head tree listing unavailable or exceeds max_import_tree_bytes")
+    secret_filter = DirectoryFilter(config)
+    paths: set[str] = set()
+    for entry in result.stdout.split("\0"):
+        if not entry:
+            continue
+        header, separator, value = entry.partition("\t")
+        if not separator or not header.startswith("100"):
+            continue
+        try:
+            path = normalize_path(value)
+        except FilterError:
+            continue
+        if not secret_filter.is_secret_path(path):
+            paths.add(path)
+    return paths
 
 
 class ReviewDimensionDraft(BaseModel):
@@ -106,7 +132,6 @@ def build_planner_prompt(
     anatomy: Anatomy,
     semantic: SemanticBrief,
     config: DeepReviewConfig,
-    blast_result: BlastResult | None = None,
 ) -> str:
     constraints = {
         "base_commit": snapshot.base_commit,
@@ -135,8 +160,8 @@ def build_planner_prompt(
         "anatomy": {
             "stats": anatomy.stats.model_dump(),
             "clusters": [item.model_dump() for item in anatomy.clusters],
+            "related_paths": anatomy.related_paths,
         },
-        "blast_radius": (blast_result or BlastResult()).prompt_projection(),
         "hints": config.hints,
     }
     return render_prompt(
@@ -154,18 +179,16 @@ async def run_planner_agent(
     semantic: SemanticBrief,
     config: DeepReviewConfig,
     tools: list,
-    blast_result: BlastResult | None = None,
-    head_tree: HeadTreeIndex | None = None,
 ) -> AgentCallResult[ReviewPlan]:
     harness_result = None
     try:
+        legal_context = await _head_context_paths(snapshot, config)
         harness_result = await runtime.harness(
             build_planner_prompt(
                 snapshot=snapshot,
                 anatomy=anatomy,
                 semantic=semantic,
                 config=config,
-                blast_result=blast_result,
             ),
             schema=ReviewPlanDraft,
             cwd=snapshot.input.repo_path,
@@ -175,21 +198,10 @@ async def run_planner_agent(
             tools=tools,
         )
         draft = ReviewPlanDraft.model_validate(harness_result.parsed)
-        requested_context = {
-            path for dimension in draft.dimensions for path in dimension.context_files
-        }
-        legal_context = await validate_head_context_paths(
-            snapshot.input.repo_path, snapshot.head_commit, requested_context, config,
-            head_tree=head_tree,
-        )
         plan = repair_plan(
             draft.model_dump(mode="json"), snapshot, config,
             legal_context_paths=legal_context,
         )
-        if len(requested_context) > 512:
-            plan.repair_actions.append(
-                f"context_validation_budget_limited:{len(requested_context)}->512"
-            )
         return AgentCallResult(
             value=plan,
             session_id=harness_result.session_id,

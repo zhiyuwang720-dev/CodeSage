@@ -96,6 +96,7 @@ def _compact_diff_summary(anatomy: Anatomy, config: DeepReviewConfig) -> dict:
         "stats": anatomy.stats.model_dump(),
         "directories": anatomy.directories,
         "clusters": [{"name": item.name, "files": item.files} for item in anatomy.clusters],
+        "related_paths": anatomy.related_paths,
         "files": files,
     }
 

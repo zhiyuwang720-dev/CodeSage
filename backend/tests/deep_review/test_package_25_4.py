@@ -303,28 +303,6 @@ async def test_planning_run_observations_and_fixed_head_context(
 
 
 @pytest.mark.asyncio
-async def test_planner_verifies_draft_context_after_harness_when_tree_is_too_large(
-    review_repo: tuple[Path, str, str],
-) -> None:
-    snapshot = snapshot_for(review_repo)
-    anatomy = build_anatomy(snapshot.changes)
-    runtime = FakeRuntime(plan_payload={
-        "dimensions": [dimension("values", ["a.py", "b.py", "c.py"], ["unchanged.py", ".env", "missing.py"])],
-    })
-    call = await run_planner_agent(
-        runtime,
-        snapshot=snapshot,
-        anatomy=anatomy,
-        semantic=SemanticBrief(narrative="Values changed", source="fallback"),
-        config=DeepReviewConfig(max_import_tree_bytes=1),
-        tools=[],
-    )
-    assert call.value is not None
-    assert call.value.dimensions[0].context_files == ["unchanged.py"]
-    assert len(runtime.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_semantic_invalid_response_falls_back_without_losing_usage(
     review_repo: tuple[Path, str, str],
 ) -> None:

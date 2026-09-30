@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class DeepReviewConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_duration_seconds: int = Field(default=1800, ge=1)
+    max_duration_seconds: int = Field(default=2700, ge=1)
     max_concurrent_reviewers: int = Field(default=4, ge=1)
     max_planner_dimensions: int = Field(default=8, ge=1)
     max_final_dimensions: int = Field(default=9, ge=1)
@@ -21,10 +21,6 @@ class DeepReviewConfig(BaseModel):
     max_import_tree_bytes: int = Field(default=16_000_000, ge=1)
     max_import_graph_files: int = Field(default=2_000, ge=1)
     max_import_scan_bytes: int = Field(default=32_000_000, ge=1)
-    max_blast_source_file_bytes: int = Field(default=4_000_000, ge=1)
-    max_blast_tree_entries: int = Field(default=20_000, ge=1)
-    max_blast_index_path_bytes: int = Field(default=4_000_000, ge=1)
-    max_blast_seconds: int = Field(default=10, ge=1)
     max_search_results: int = Field(default=100, ge=1)
     tool_timeout_seconds: int = Field(default=10, ge=1)
     max_cross_context_bytes: int | None = Field(default=48_000, ge=1)

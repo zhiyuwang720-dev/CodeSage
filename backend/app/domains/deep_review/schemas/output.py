@@ -44,17 +44,6 @@ class AgentObservation(BaseModel):
     error: str | None = Field(default=None, max_length=500)
 
 
-class BlastObservation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    coverage_by_language: dict[str, Literal["analyzed", "unsupported", "degraded"]] = Field(default_factory=dict)
-    observed_hint_count: int = Field(default=0, ge=0)
-    displayed_path_count: int = Field(default=0, ge=0)
-    scanned_file_count: int = Field(default=0, ge=0)
-    scanned_bytes: int = Field(default=0, ge=0)
-    truncated: bool = False
-    diagnostics: list[str] = Field(default_factory=list)
-
-
 class ReviewerDimensionReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dimension_name: str
@@ -84,7 +73,6 @@ class PreparationReport(BaseModel):
     stats: DiffStats
     clusters: list[ChangeCluster] = Field(default_factory=list)
     related_paths: list[str] = Field(default_factory=list)
-    blast_radius: BlastObservation = Field(default_factory=BlastObservation)
     diagnostics: list[str] = Field(default_factory=list)
     semantic: SemanticBrief | None = None
     plan: ReviewPlan | None = None
