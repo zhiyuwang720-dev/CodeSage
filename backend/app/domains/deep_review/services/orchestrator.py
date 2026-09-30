@@ -13,7 +13,6 @@ from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.schemas.input import ReviewInput
 from app.domains.deep_review.schemas.output import (
     AgentObservation,
-    BlastObservation,
     DeepReviewResult,
     PreparationReport,
     ProcessReport,
@@ -33,8 +32,7 @@ from app.domains.deep_review.agents.cross_analysis import run_cross_agent
 from app.domains.deep_review.agents.planner import run_planner_agent
 from app.domains.deep_review.agents.reviewer import ReviewerAgentOutcome, run_reviewer_agent
 from app.domains.deep_review.agents.semantic import run_semantic_agent
-from app.domains.deep_review.services.blast_radius import BlastResult, analyze_blast_radius
-from app.domains.deep_review.services.head_tree import HeadTreeIndex
+from app.domains.deep_review.services.blast_radius import BlastRadiusError, compute_blast_radius
 from app.domains.deep_review.services.diff_engine import build_anatomy
 from app.domains.deep_review.services.evidence import build_evidence_packages
 from app.domains.deep_review.services.input_builder import ReviewSnapshot, build_review_snapshot
@@ -57,8 +55,6 @@ class DeepReviewRunContext:
     run_id: str
     snapshot: ReviewSnapshot
     blast_radius: list[str] = field(default_factory=list)
-    blast_result: BlastResult = field(default_factory=BlastResult)
-    head_tree: HeadTreeIndex | None = None
     diagnostics: list[str] = field(default_factory=list)
     anatomy: Anatomy | None = None
 
@@ -85,18 +81,6 @@ def _safe_error(exc: BaseException) -> str:
                 if password and len(password) >= 4:
                     message = message.replace(password, "[REDACTED]")
     return message[:500]
-
-
-def _blast_observation(result: BlastResult) -> BlastObservation:
-    return BlastObservation(
-        coverage_by_language=result.coverage_by_language,
-        observed_hint_count=result.observed_hint_count,
-        displayed_path_count=len(result.displayed_paths),
-        scanned_file_count=result.scanned_file_count,
-        scanned_bytes=result.scanned_bytes,
-        truncated=result.truncated,
-        diagnostics=list(result.diagnostics),
-    )
 
 
 class PreparationOrchestrator:
@@ -185,7 +169,6 @@ class PreparationOrchestrator:
             stats=anatomy.stats,
             clusters=anatomy.clusters,
             related_paths=context.blast_radius,
-            blast_radius=_blast_observation(context.blast_result),
             diagnostics=context.diagnostics,
             semantic=semantic,
             plan=plan,
@@ -541,7 +524,6 @@ class PreparationOrchestrator:
                 stats=context.anatomy.stats,
                 clusters=context.anatomy.clusters,
                 related_paths=context.blast_radius,
-                blast_radius=_blast_observation(context.blast_result),
                 diagnostics=diagnostics,
                 semantic=semantic,
                 plan=plan,
@@ -685,8 +667,6 @@ class PreparationOrchestrator:
                 anatomy=context.anatomy,
                 semantic=semantic,
                 config=self.config,
-                blast_result=context.blast_result,
-                head_tree=context.head_tree,
                 tools=build_review_tools(
                     repo_path=context.snapshot.input.repo_path,
                     head_commit=context.snapshot.head_commit,
@@ -758,29 +738,26 @@ class PreparationOrchestrator:
         self._stage_started(run_id, "blast_radius")
         started = time.monotonic()
         try:
-            result, head_tree = await analyze_blast_radius(
+            related_paths = await compute_blast_radius(
                 context.snapshot.review_paths,
                 context.snapshot.input.repo_path,
                 context.snapshot.head_commit,
                 self.config,
-                changes=context.snapshot.changes,
+                diagnostics=context.diagnostics,
             )
+        except BlastRadiusError as exc:
+            context.diagnostics.append(f"blast_radius_degraded: {_safe_error(exc)}")
+            context.blast_radius = []
+            self._stage_completed(run_id, "blast_radius", started, degraded=True, related_count=0)
+            return
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
-            context.diagnostics.append(f"blast_radius_degraded: {_safe_error(exc)}")
-            result = BlastResult(coverage_by_language={"internal": "degraded"}, truncated=True,
-                                 diagnostics=(f"dispatcher_failed:{type(exc).__name__}",))
-            head_tree = None
-        context.blast_result = result
-        context.head_tree = head_tree
-        context.blast_radius = result.displayed_paths
-        self._stage_completed(
-            run_id, "blast_radius", started,
-            related_count=len(context.blast_radius), observed_hint_count=result.observed_hint_count,
-            coverage_by_language=result.coverage_by_language, truncated=result.truncated,
-            scanned_file_count=result.scanned_file_count, scanned_bytes=result.scanned_bytes,
-        )
+            self._stage_failed(run_id, "blast_radius", exc, started)
+            raise PreparationError(f"blast radius analysis failed: {_safe_error(exc)}") from exc
+
+        context.blast_radius = related_paths
+        self._stage_completed(run_id, "blast_radius", started, related_count=len(related_paths))
 
     async def _run_anatomy_stage(self, run_id: str, context: DeepReviewRunContext) -> Any:
         self._stage_started(run_id, "anatomy")

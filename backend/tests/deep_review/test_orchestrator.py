@@ -450,12 +450,6 @@ async def test_preparation_reaches_anatomy_without_model_runtime(
     assert report.context_paths == ["old.py"]
     assert report.excluded_count == 1
     assert report.related_paths == ["caller.py"]
-    assert report.blast_radius.coverage_by_language == {"python": "analyzed"}
-    assert report.blast_radius.displayed_path_count == 1
-    assert report.blast_radius.observed_hint_count >= 1
-    historical_payload = report.model_dump(mode="json")
-    historical_payload.pop("blast_radius")
-    assert PreparationReport.model_validate(historical_payload).blast_radius.coverage_by_language == {}
     assert ".env" not in report.model_dump_json()
     assert [record_type for _run, record_type, _payload in store.events][0] == "run_started"
 
@@ -551,9 +545,9 @@ async def test_known_blast_radius_error_degrades_to_empty_related_paths(
     base, head = prepared_head
 
     async def known_failure(*args: object, **kwargs: object) -> list[str]:
-        raise RuntimeError("injected known failure")
+        raise orchestrator_module.BlastRadiusError("injected known failure")
 
-    monkeypatch.setattr(orchestrator_module, "analyze_blast_radius", known_failure)
+    monkeypatch.setattr(orchestrator_module, "compute_blast_radius", known_failure)
     report = await make_service(MemoryStore()).run(
         ReviewInput(repo_path=str(preparation_repo), base_ref=base, head_ref=head)
     )

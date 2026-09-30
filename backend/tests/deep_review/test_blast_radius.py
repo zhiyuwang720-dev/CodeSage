@@ -5,7 +5,9 @@ import pytest
 
 from app.domains.deep_review.schemas.config import DeepReviewConfig
 from app.domains.deep_review.services.blast_radius import (
-    analyze_blast_radius,
+    BlastRadiusError,
+    build_import_graph,
+    compute_blast_radius,
 )
 
 
@@ -29,9 +31,9 @@ async def test_import_graph_and_blast_radius(tmp_path: Path) -> None:
     head = git(repo, "rev-parse", "HEAD")
     config = DeepReviewConfig()
 
-    result, _ = await analyze_blast_radius(["pkg/changed.py"], str(repo), head, config)
-    assert result.displayed_paths == ["caller.py"]
-    assert result.coverage_by_language == {"python": "analyzed"}
+    graph = await build_import_graph(str(repo), head, config)
+    assert graph["caller.py"] == ["pkg/changed.py"]
+    assert await compute_blast_radius(["pkg/changed.py"], str(repo), head, config, import_graph=graph) == ["caller.py"]
 
 
 async def test_relative_and_from_module_imports(tmp_path: Path) -> None:
@@ -48,8 +50,9 @@ async def test_relative_and_from_module_imports(tmp_path: Path) -> None:
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
 
-    result, _ = await analyze_blast_radius(["pkg/changed.py"], str(repo), head, DeepReviewConfig())
-    assert set(result.displayed_paths) == {"pkg/relative_caller.py", "from_caller.py"}
+    graph = await build_import_graph(str(repo), head, DeepReviewConfig())
+    assert graph["pkg/relative_caller.py"] == ["pkg/changed.py"]
+    assert "pkg/changed.py" in graph["from_caller.py"]
 
 
 async def test_batch_reader_matches_unique_path_suffix_alias(tmp_path: Path) -> None:
@@ -66,9 +69,15 @@ async def test_batch_reader_matches_unique_path_suffix_alias(tmp_path: Path) -> 
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
     config = DeepReviewConfig()
-    result, _ = await analyze_blast_radius(["backend/app/foo.py"], str(repo), head, config)
-    assert result.displayed_paths == ["backend/app/caller.py"]
-    assert result.diagnostics == ()
+    diagnostics: list[str] = []
+
+    graph = await build_import_graph(str(repo), head, config, diagnostics=diagnostics)
+
+    assert graph["backend/app/caller.py"] == ["backend/app/foo.py"]
+    assert await compute_blast_radius(
+        ["backend/app/foo.py"], str(repo), head, config, diagnostics=diagnostics
+    ) == ["backend/app/caller.py"]
+    assert diagnostics == []
 
 
 async def test_file_limit_degrades_blast_radius(tmp_path: Path) -> None:
@@ -83,31 +92,31 @@ async def test_file_limit_degrades_blast_radius(tmp_path: Path) -> None:
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
 
-    result, _ = await analyze_blast_radius(
-        ["b.py"], str(repo), head, DeepReviewConfig(max_import_graph_files=1)
-    )
-    assert result.coverage_by_language == {"python": "degraded"}
-    assert "python_file_count_limited" in result.diagnostics
+    with pytest.raises(BlastRadiusError, match="file limit exceeded"):
+        await compute_blast_radius(
+            ["b.py"], str(repo), head, DeepReviewConfig(max_import_graph_files=1)
+        )
 
 
 async def test_non_python_changes_skip_python_import_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     async def unexpected_scan(*_args, **_kwargs):
-        raise AssertionError("No source scan is needed for unsupported suffixes")
+        raise AssertionError("Python import graph should not be built for a Go-only diff")
 
     monkeypatch.setattr(
-        "app.domains.deep_review.services.blast_radius.load_head_tree_index",
+        "app.domains.deep_review.services.blast_radius.build_import_graph",
         unexpected_scan,
     )
-    result, index = await analyze_blast_radius(
-        ["src/main.rs", "assets/logo.xyz"],
+    diagnostics: list[str] = []
+    related = await compute_blast_radius(
+        ["cmd/server/main.go", "internal/config/config.ts"],
         "unused",
         "unused",
         DeepReviewConfig(),
+        diagnostics=diagnostics,
     )
 
-    assert result.displayed_paths == []
-    assert index is None
-    assert result.coverage_by_language == {"rust": "unsupported", "unsupported:.xyz": "unsupported"}
+    assert related == []
+    assert diagnostics == ["blast_radius_skipped_no_changed_python_files"]
 
 
 async def test_total_blob_limit_degrades_blast_radius(tmp_path: Path) -> None:
@@ -122,11 +131,13 @@ async def test_total_blob_limit_degrades_blast_radius(tmp_path: Path) -> None:
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
 
-    result, _ = await analyze_blast_radius(
-        ["b.py"], str(repo), head, DeepReviewConfig(max_import_scan_bytes=10),
-    )
-    assert result.coverage_by_language == {"python": "degraded"}
-    assert "python_scan_bytes_limited" in result.diagnostics
+    with pytest.raises(BlastRadiusError, match="import graph scan limit exceeded"):
+        await compute_blast_radius(
+            ["b.py"],
+            str(repo),
+            head,
+            DeepReviewConfig(max_import_scan_bytes=10),
+        )
 
 
 async def test_ambiguous_suffix_alias_creates_no_edge(tmp_path: Path) -> None:
@@ -143,9 +154,12 @@ async def test_ambiguous_suffix_alias_creates_no_edge(tmp_path: Path) -> None:
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
 
-    result, _ = await analyze_blast_radius(["one/foo.py"], str(repo), head, DeepReviewConfig())
-    assert result.displayed_paths == []
-    assert result.coverage_by_language == {"python": "analyzed"}
+    graph = await build_import_graph(str(repo), head, DeepReviewConfig())
+
+    assert graph == {}
+    assert await compute_blast_radius(
+        ["one/foo.py"], str(repo), head, DeepReviewConfig(), import_graph=graph
+    ) == []
 async def test_oversized_file_is_skipped_with_diagnostic(tmp_path: Path) -> None:
     repo = tmp_path / "oversized-repo"
     (repo / "pkg").mkdir(parents=True)
@@ -158,10 +172,15 @@ async def test_oversized_file_is_skipped_with_diagnostic(tmp_path: Path) -> None
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
     head = git(repo, "rev-parse", "HEAD")
-    result, _ = await analyze_blast_radius(
-        ["pkg/changed.py"], str(repo), head,
-        DeepReviewConfig(max_blast_source_file_bytes=64),
+    diagnostics: list[str] = []
+
+    graph = await build_import_graph(
+        str(repo),
+        head,
+        DeepReviewConfig(max_file_bytes=32),
+        diagnostics=diagnostics,
     )
-    assert result.displayed_paths == ["caller.py"]
-    assert result.coverage_by_language == {"python": "degraded"}
-    assert "python_source_too_large" in result.diagnostics
+
+    assert "large.py" not in graph
+    assert graph["caller.py"] == ["pkg/changed.py"]
+    assert diagnostics == ["import_graph_oversized_files_skipped: 1"]

@@ -36,7 +36,7 @@ def normalize_path(value: str) -> str:
     return path.as_posix()
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=1)
 def _resource(name: str) -> tuple[str, ...]:
     payload = json.loads(files("app.domains.deep_review.resources").joinpath(name).read_text("utf-8"))
     return tuple(str(item).lower() for item in payload)
@@ -111,31 +111,6 @@ class DirectoryFilter:
             return True
         return self._matches(lowered, list(_resource("default_secret_patterns.json")))
 
-    def _user_rule(self, path: str) -> bool | None:
-        result: bool | None = None
-        rules = [(pattern.strip(), False) for pattern in self.config.exclude_paths if pattern.strip()]
-        rules.extend((pattern.strip(), True) for pattern in self.config.include_paths if pattern.strip())
-        for raw_pattern, desired in rules:
-            pattern = raw_pattern[1:] if raw_pattern.startswith("!") else raw_pattern
-            if pattern and self._matches(path, [pattern]):
-                result = not desired if raw_pattern.startswith("!") else desired
-        return result
-
-    def is_related_path_allowed(self, path: str) -> bool:
-        """Apply the existing path policy to unchanged head files without a diff."""
-        try:
-            normalized = normalize_path(path)
-        except FilterError:
-            return False
-        if self.is_secret_path(normalized):
-            return False
-        user_rule = self._user_rule(normalized)
-        if user_rule is False:
-            return False
-        if user_rule is True:
-            return True
-        return not self._matches(normalized, list(_resource("default_exclude_patterns.json")))
-
     def filter(self, changes: list[FileChange]) -> FilterResult:
         decisions: list[FilterDecision] = []
         for change in changes:
@@ -152,7 +127,15 @@ class DirectoryFilter:
                 decisions.append(FilterDecision(path=path, action=FilterAction.EXCLUDE, reason="binary_file"))
                 continue
 
-            user_rule = self._user_rule(path)
+            user_rule: bool | None = None
+            user_rules: list[tuple[str, bool]] = [
+                (pattern.strip(), False) for pattern in self.config.exclude_paths if pattern.strip()
+            ]
+            user_rules.extend((pattern.strip(), True) for pattern in self.config.include_paths if pattern.strip())
+            for raw_pattern, desired in user_rules:
+                pattern = raw_pattern[1:] if raw_pattern.startswith("!") else raw_pattern
+                if pattern and self._matches(path, [pattern]):
+                    user_rule = not desired if raw_pattern.startswith("!") else desired
             if user_rule is False:
                 decisions.append(FilterDecision(path=path, action=FilterAction.EXCLUDE, reason="user_exclude"))
                 continue
