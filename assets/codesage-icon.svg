@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">CodeSage code icon</title>
+  <rect x="2" y="2" width="124" height="124" rx="30" fill="#101511"/>
+  <rect x="2" y="2" width="124" height="124" rx="30" fill="none" stroke="#35442a" stroke-width="2"/>
+  <path d="M44 37 20 64l24 27M84 37l24 27-24 27M75 40 53 88" fill="none" stroke="#d3f86a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
