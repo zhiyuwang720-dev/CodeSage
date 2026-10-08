@@ -29,6 +29,8 @@ claude-code-main
 pi
 # Local development records are not published.
 /docs/
+# Retired evaluation experiments stay local.
+/code-review-benchmark/
 Kode-CLI/
 .omc/
 .omo/
