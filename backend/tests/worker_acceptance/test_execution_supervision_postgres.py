@@ -250,13 +250,11 @@ async def test_old_owner_cannot_write_stage_or_findings_after_takeover():
         async with async_session_factory() as db:
             with pytest.raises(StaleExecutionOwnerError):
                 await audit_stage_store.start(db, task_id, "review:security")
-        async with async_session_factory() as db:
-            task = await db.get(AgentTask, task_id)
-            with pytest.raises(StaleExecutionOwnerError):
-                await review_result_service.commit_success(
-                    db, task, old_lease, [_review_finding()],
-                    pr_meta={}, artifact_root=str(root),
-                )
+        with pytest.raises(StaleExecutionOwnerError):
+            await review_result_service.accept_success(
+                async_session_factory, task_id, old_lease, [_review_finding()],
+                pr_meta={}, artifact_root=str(root),
+            )
     finally:
         current_execution_context.reset(context_token)
         current_execution_lease.reset(lease_token)
@@ -297,12 +295,13 @@ async def test_report_stage_failure_rolls_back_findings_and_completed(monkeypatc
 
         monkeypatch.setattr(audit_stage_store, "complete", fail_report)
         async with async_session_factory() as db:
-            task = await db.get(AgentTask, task_id)
-            with pytest.raises(RuntimeError, match="injected report failure"):
-                await review_result_service.commit_success(
-                    db, task, lease, [_review_finding("test_gap")],
-                    pr_meta={}, artifact_root=str(root),
-                )
+            for perspective in ("security", "architecture", "quality"):
+                await original_complete(db, task_id, f"review:{perspective}")
+        with pytest.raises(RuntimeError, match="injected report failure"):
+            await review_result_service.accept_success(
+                async_session_factory, task_id, lease, [_review_finding("test_gap")],
+                pr_meta={}, artifact_root=str(root),
+            )
     finally:
         current_execution_context.reset(context_token)
         current_execution_lease.reset(lease_token)

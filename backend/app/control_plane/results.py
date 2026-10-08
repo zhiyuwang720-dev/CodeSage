@@ -19,6 +19,7 @@ from app.control_plane.execution_ownership import (
     review_execution_ownership,
 )
 from app.infrastructure.persistence.stage_store import audit_stage_store
+from app.infrastructure.persistence.unit_of_work import SessionFactory, SqlAlchemyUnitOfWork
 from opentelemetry import trace
 
 from app.infrastructure.observability.tracing import (
@@ -143,6 +144,37 @@ class ReviewResultService:
         return row
 
     @get_tracer().start_as_current_span("result.commit")
+    async def accept_success(
+        self,
+        session_factory: SessionFactory,
+        task_id: str,
+        lease: ExecutionLease,
+        findings: Iterable[ReviewFinding],
+        *,
+        pr_meta: dict,
+        artifact_root: str,
+        empty_reason: str | None = None,
+    ) -> int:
+        """Accept a result in a fresh short transaction, never the LLM session."""
+        if task_id != lease.task_id:
+            raise ValueError("Result task_id does not match lease")
+        async with SqlAlchemyUnitOfWork(session_factory) as uow:
+            db = uow.session
+            # Lock execution before loading task, matching cancel/resume order.
+            await review_execution_ownership.assert_current_owner(db, lease)
+            task = await db.get(AgentTask, task_id)
+            if task is None:
+                raise RuntimeError("任务不存在")
+            await self.require_completion_gate(db, task_id, empty_reason=empty_reason)
+            count = await self._apply_success(
+                db, task, lease, findings, pr_meta=pr_meta, artifact_root=artifact_root
+            )
+            await uow.commit()
+        trace.get_current_span().set_attribute("codesage.status", "terminal_committed")
+        mark_span_ok(trace.get_current_span())
+        return count
+
+    @get_tracer().start_as_current_span("result.commit")
     async def commit_success(
         self,
         db,
@@ -153,7 +185,28 @@ class ReviewResultService:
         pr_meta: dict,
         artifact_root: str,
     ) -> int:
-        """原子提交 Findings、report StageResult 与 COMPLETED 终态。"""
+        """Compatibility: adopt the caller transaction for atomic acceptance."""
+        try:
+            async with SqlAlchemyUnitOfWork.from_session(db) as uow:
+                count = await self._apply_success(
+                    uow.session, task, lease, findings,
+                    pr_meta=pr_meta, artifact_root=artifact_root,
+                )
+                await uow.commit()
+        except BaseException:
+            mark_span_error(trace.get_current_span(), "commit_failed")
+            raise
+        trace.get_current_span().set_attribute("codesage.status", "terminal_committed")
+        mark_span_ok(trace.get_current_span())
+        return count
+
+    async def _apply_success(
+        self, db, task: AgentTask, lease: ExecutionLease,
+        findings: Iterable[ReviewFinding], *, pr_meta: dict, artifact_root: str,
+    ) -> int:
+        """Mutate only: the surrounding UoW owns commit and rollback."""
+        if str(task.id) != lease.task_id:
+            raise ValueError("Result task_id does not match lease")
 
         normalized = list(findings)
         await review_execution_ownership.assert_current_owner(db, lease)
@@ -176,59 +229,50 @@ class ReviewResultService:
             ).encode("utf-8"),
             media_type="application/json",
         )
-        try:
-            # report complete 使用 caller 事务；任何校验/flush 失败都会回滚 findings 和终态。
-            await audit_stage_store.complete(
-                db,
-                str(task.id),
-                "report",
-                findings=[item.model_dump(mode="json") for item in normalized],
-                payload={
-                    "findings_count": len(normalized),
-                    "pr_meta": pr_meta,
-                    "artifact_refs": [artifact.model_dump(mode="json")],
-                },
-                commit=False,
-            )
-            existing = {
-                row.fingerprint: row
-                for row in (
-                    await db.execute(
-                        select(AgentFinding).where(AgentFinding.task_id == str(task.id))
-                    )
-                ).scalars()
-                if row.fingerprint
-            }
-            for finding in normalized:
-                row = self._finding_row(str(task.id), finding)
-                if row.fingerprint in existing:
-                    current = existing[row.fingerprint]
-                    current.category = row.category
-                    current.severity = row.severity
-                    current.title = row.title
-                    current.description = row.description
-                    current.line_end = row.line_end
-                    current.finding_metadata = row.finding_metadata
-                else:
-                    db.add(row)
-                    existing[row.fingerprint] = row
-            config = dict(task.agent_config or {})
-            config["pr_meta"] = pr_meta
-            config.pop("resume_from_checkpoint", None)
-            task.agent_config = config
-            task.status = AgentTaskStatus.COMPLETED
-            task.current_phase = AgentTaskPhase.REPORTING
-            task.completed_at = datetime.now(timezone.utc)
-            task.findings_count = len(normalized)
-            task.error_message = None
-            await db.commit()
-        except BaseException:
-            await db.rollback()
-            mark_span_error(trace.get_current_span(), "commit_failed")
-            raise
-        commit_span = trace.get_current_span()
-        commit_span.set_attribute("codesage.status", "terminal_committed")
-        mark_span_ok(commit_span)
+        # report complete 使用 caller 事务；任何校验/flush 失败都会回滚 findings 和终态。
+        await audit_stage_store.complete(
+            db,
+            str(task.id),
+            "report",
+            findings=[item.model_dump(mode="json") for item in normalized],
+            payload={
+                "findings_count": len(normalized),
+                "pr_meta": pr_meta,
+                "artifact_refs": [artifact.model_dump(mode="json")],
+            },
+            commit=False,
+        )
+        existing = {
+            row.fingerprint: row
+            for row in (
+                await db.execute(
+                    select(AgentFinding).where(AgentFinding.task_id == str(task.id))
+                )
+            ).scalars()
+            if row.fingerprint
+        }
+        for finding in normalized:
+            row = self._finding_row(str(task.id), finding)
+            if row.fingerprint in existing:
+                current = existing[row.fingerprint]
+                current.category = row.category
+                current.severity = row.severity
+                current.title = row.title
+                current.description = row.description
+                current.line_end = row.line_end
+                current.finding_metadata = row.finding_metadata
+            else:
+                db.add(row)
+                existing[row.fingerprint] = row
+        config = dict(task.agent_config or {})
+        config["pr_meta"] = pr_meta
+        config.pop("resume_from_checkpoint", None)
+        task.agent_config = config
+        task.status = AgentTaskStatus.COMPLETED
+        task.current_phase = AgentTaskPhase.REPORTING
+        task.completed_at = datetime.now(timezone.utc)
+        task.findings_count = len(normalized)
+        task.error_message = None
         return len(normalized)
 
     @get_tracer().start_as_current_span("result.commit")
@@ -241,21 +285,25 @@ class ReviewResultService:
         lease: ExecutionLease | None = None,
     ) -> None:
         await db.rollback()
-        if lease is not None:
-            try:
-                await review_execution_ownership.assert_current_owner(db, lease)
-            except (StaleExecutionOwnerError, CancelRequestedError):
-                # 旧 owner 和已取消 attempt 均不得写失败收尾。
-                await db.rollback()
+        async with SqlAlchemyUnitOfWork.from_session(db) as uow:
+            if lease is not None:
+                if task_id != lease.task_id:
+                    raise ValueError("Failure task_id does not match lease")
+                try:
+                    await review_execution_ownership.assert_current_owner(uow.session, lease)
+                except (StaleExecutionOwnerError, CancelRequestedError):
+                    # 旧 owner 和已取消 attempt 均不得写失败收尾。
+                    return
+            task = await uow.session.get(AgentTask, task_id)
+            if task is None or task.status in (
+                AgentTaskStatus.CANCELLED, AgentTaskStatus.COMPLETED,
+            ):
                 return
-        task = await db.get(AgentTask, task_id)
-        if task is None or task.status == AgentTaskStatus.CANCELLED:
-            return
-        task.status = AgentTaskStatus.FAILED
-        task.current_phase = AgentTaskPhase.REPORTING
-        task.completed_at = datetime.now(timezone.utc)
-        task.error_message = str(error)
-        await db.commit()
+            task.status = AgentTaskStatus.FAILED
+            task.current_phase = AgentTaskPhase.REPORTING
+            task.completed_at = datetime.now(timezone.utc)
+            task.error_message = str(error)
+            await uow.commit()
         failed_span = trace.get_current_span()
         failed_span.set_attribute("codesage.status", "failed_committed")
         failed_span.set_attribute("codesage.error_kind", type(error).__name__ if not isinstance(error, str) else "error")

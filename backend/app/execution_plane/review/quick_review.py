@@ -180,9 +180,6 @@ async def execute_review_use_case(
                 },
                 event_sink=sink,
             )
-            await review_result_service.require_completion_gate(
-                db, task_id, empty_reason=(result.meta or {}).get("empty_reason")
-            )
             pr_meta = {
                 "pr_url": ((task.audit_scope or {}).get("pr_review") or {}).get("pr_url"),
                 "pr_number": context.identity.pr_number,
@@ -190,13 +187,16 @@ async def execute_review_use_case(
                 "head_sha": context.identity.head_sha,
                 "branch": task.branch_name,
             }
-            await review_result_service.commit_success(
-                db,
-                task,
+            # End any read transaction before the short result-acceptance UoW.
+            await db.rollback()
+            await review_result_service.accept_success(
+                deps.async_session_factory,
+                task_id,
                 lease,
                 result.findings,
                 pr_meta=pr_meta,
                 artifact_root=artifact_root,
+                empty_reason=(result.meta or {}).get("empty_reason"),
             )
     except (asyncio.CancelledError, CancelRequestedError):
         raise
