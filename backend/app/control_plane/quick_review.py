@@ -1,4 +1,3 @@
-"""快速 PR 审查用例协调器；不拥有 lease，也不直接提交 ORM 事务。"""
 from __future__ import annotations
 
 import asyncio
