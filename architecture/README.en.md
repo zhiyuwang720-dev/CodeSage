@@ -2,6 +2,8 @@
 
 [简体中文](README.md) · [Back to the project](../README.en.md)
 
+In depth: [Priority-Aware Cohesive Investigation Preservation](cohesive-investigation-repair.en.md)
+
 CodeSage brings together two parts of code review: a platform that executes work reliably, and Deep Review, which investigates the change. The Web application provides project and task entry points. A queue delivers work to Workers. The review engine reads code, develops findings, checks the evidence, and returns the results.
 
 This article follows that unified architecture. Connecting Deep Review to the Web / Worker execution path is in progress; the integrated view below describes how the components fit together.

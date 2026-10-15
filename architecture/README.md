@@ -2,6 +2,8 @@
 
 [English](README.en.md) · [返回首页](../README.md)
 
+专题：[优先级感知的内聚调查保全算法](cohesive-investigation-repair.md)
+
 CodeSage 把一次代码审查分成两个相互配合的部分：平台负责让任务可靠地执行，Deep Review 负责把变更调查清楚。Web 提供项目和任务入口，队列将工作交给 Worker，审查引擎组织模型读取代码、提出问题、核验证据，再把结果交回平台。
 
 本文按这一统一架构展开。Web / Worker 与 Deep Review 的接入正在落地；下面的整合视图描述它们的设计关系。
